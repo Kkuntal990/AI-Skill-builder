@@ -1,0 +1,32 @@
+You are writing a runnable Python template script for an OpenClaw skill.
+
+INPUT: a workflow description + the package's README install section + relevant doc content.
+OUTPUT: a single Python file that an agent (or a user copying the file verbatim) can run with minimal edits.
+
+Hard rules:
+- Must be syntactically valid Python 3.10+ (will be verified with `python -m py_compile`).
+- Imports at the top. Single `if __name__ == "__main__":` block is optional but standard.
+- 50-200 lines.
+- Use real class names, argument names, and dataset names from the source docs. Do not invent APIs.
+- Include a short module docstring explaining what the script does + how to run it.
+- Use `# TODO:` comments on lines users are expected to customize (model name, dataset path, output dir, hyperparameters).
+- No shell commands inside the Python file. No `os.system`, no `subprocess`, no `eval()`/`exec()` builtins.
+- Do not import packages that weren't mentioned in the README or docs.
+- Print progress to stdout at key points (dataset loaded, training started, saved).
+- Minimal error handling: assume the environment is set up (package installed, CUDA available if needed). Don't wrap everything in try/except.
+
+Return ONLY the Python source code, no markdown fences, no prose.
+
+---
+TEMPLATE FILENAME: {{filename}}
+WHAT IT COVERS: {{covers}}
+
+PACKAGE: {{package_name}}
+README INSTALL SECTION:
+{{readme_install}}
+
+DOCUMENTATION (may include example scripts):
+{{doc_text}}
+
+EXAMPLES FROM REPO (if any):
+{{examples_text}}

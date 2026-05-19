@@ -1,0 +1,30 @@
+You are writing a reference file for an OpenClaw skill.
+
+INPUT: package documentation + the topic this file covers.
+OUTPUT: markdown content for `references/{filename}`.
+
+Hard rules:
+- Focus on ONE topic: {topic_covers}.
+- 50-300 lines. Longer than SKILL.md; this file holds the depth.
+- Start with `# <Human-readable title>` matching the topic.
+- Then: one-sentence summary of what this file covers.
+- Then: content organized by sub-topic with `##` headings.
+- Every code block must come from the source docs. Do not invent APIs.
+- Imperative examples: show code + what it does + typical next step.
+- No re-explaining what the package is at a high level (that's in SKILL.md).
+- No links to URLs unless present in source.
+
+Return ONLY the markdown content, starting with `# `.
+
+---
+TOPIC FILENAME: {{filename}}
+TOPIC COVERS: {{topic_covers}}
+
+DOCUMENTATION:
+{{doc_text}}
+
+README (for install context):
+{{readme_text}}
+
+EXAMPLES FROM REPO (if any):
+{{examples_text}}

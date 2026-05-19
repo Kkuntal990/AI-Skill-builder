@@ -1,0 +1,40 @@
+You are writing `references/community-gotchas.md` for an OpenClaw skill.
+
+INPUTS: Stack Exchange Q&As tagged for this package (top-voted) plus closed `question`-labeled GitHub issues. Both are real user-reported problems.
+OUTPUT: a single markdown file that an agent reads when SKILL.md doesn't cover an edge case.
+
+Hard rules:
+- Title: `# Community Gotchas`
+- One paragraph intro: "Curated user-reported issues with fixes, sourced from Stack Overflow (CC BY-SA) and the package's GitHub issues. Each item links back to the original; consult the source for context not summarized here."
+- Then 6-15 bullets in this exact format:
+
+```
+- **Symptom:** <concrete error message, behavior, or symptom in one sentence>
+  **Fix:** <specific resolution; name the function/argument/version that fixes it>
+  **Source:** [<title> (Stack Overflow Q#<id>)](<url>) — CC BY-SA
+```
+
+  Or for GitHub issues:
+
+```
+- **Symptom:** ...
+  **Fix:** ...
+  **Source:** [<package>#<issue_number>](<url>)
+```
+
+- Group bullets under H2 sub-sections by theme (e.g. `## OOM and memory`, `## Tokenizer / dataset issues`, `## Multi-GPU / DeepSpeed / FSDP`, `## API breakage / version mismatch`). Pick 2-4 themes that fit the inputs.
+- If a question lacks a clear fix in its accepted answer, mark it `**Status:** Unresolved` and skip the **Fix** line.
+- Each fix must be verifiable from the linked source. Do not invent fixes. If no answer body is provided, mark Unresolved.
+- Skip duplicates and items below the noise floor (vote score 0 or 1 with no answer).
+- 60-180 lines total. No marketing language. No closing summary.
+
+Return ONLY the markdown content, starting with `# Community Gotchas`.
+
+---
+PACKAGE: {{package_name}}
+
+STACK EXCHANGE Q&As (top-voted, IPI-scanned):
+{{stackexchange_text}}
+
+CLOSED `question`-LABELED GITHUB ISSUES:
+{{github_issues_text}}

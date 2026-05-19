@@ -1,0 +1,32 @@
+You are improving an OpenClaw skill description to make it trigger more reliably.
+
+The current description FAILED to trigger on these user messages (an LLM judge
+picked a different skill or "none"). Rewrite the description so the right
+messages trigger it, without becoming so broad it triggers on unrelated ones.
+
+Rules:
+- Keep it ONE paragraph (3-5 sentences).
+- Start with an action verb ("Train...", "Apply...", "Generate...").
+- Include at least one "Use when..." OR "Invoke when..." clause with concrete
+  scenarios from the failing messages.
+- Name specific capabilities (class names, algorithm names) — not generic terms.
+- Don't list keywords separated by commas ("lora, qlora, sft"). Write prose.
+- Don't claim capabilities the skill doesn't have — stay within what the body describes.
+
+Return ONLY the new description as a single plain text paragraph. No quotes,
+no markdown, no prose before/after.
+
+---
+SKILL NAME: {{skill_name}}
+
+CURRENT SKILL.md BODY (for capability reference):
+{{skill_body}}
+
+CURRENT DESCRIPTION:
+{{current_description}}
+
+FAILING USER MESSAGES (these SHOULD have triggered the skill):
+{{failing_prompts}}
+
+JUDGE'S REASONING (why other skills won):
+{{judge_reasons}}

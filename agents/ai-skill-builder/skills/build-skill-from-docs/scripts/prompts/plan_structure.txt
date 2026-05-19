@@ -1,0 +1,69 @@
+You are planning the structure for an OpenClaw SKILL.md package for a Python library.
+
+INPUT: the package's documentation index (table of contents and a sample section).
+OUTPUT: JSON that lists reference files, common workflows, runnable templates, and a few boolean signals.
+
+Rules:
+- SKILL.md stays short (30-150 lines). Heavy content goes to `references/*.md` and runnable templates go to `templates/*.py`.
+- `references`: 2-5 files. Group domain variants by class (e.g. 12 trainer types → 3-4 files), not one file per variant.
+- `workflows`: 2-4 multi-step procedures an agent would actually execute end-to-end. Each gets a copy-paste checklist in SKILL.md. If the package has no natural workflows (e.g. it's a pure reference library), return an empty list.
+- `templates`: 0-3 runnable Python scripts that demonstrate the most common workflows. Only include when the package has concrete end-to-end Python usage worth a script (not for pure-CLI libraries). If `with_templates` flag is false, return an empty list.
+- `include_hardware_section`: true if the docs mention VRAM/GPU memory/compute requirements worth surfacing.
+- `include_when_to_use_section`: usually true; false only for utility libraries with no obvious competitors.
+- `include_evals`: true if `with_evals` flag is true.
+- `include_pitfalls`: true if `with_pitfalls` flag is true.
+
+Return ONLY JSON matching this schema, no prose:
+
+{
+  "skill_name": "<kebab-case>",
+  "one_line_purpose": "<what this skill lets an agent do>",
+  "references": [
+    {"filename": "<name>.md", "covers": "<topics in one sentence>"}
+  ],
+  "workflows": [
+    {"title": "<short title>", "checklist": ["<step 1>", "<step 2>", "<step 3>", "<step 4>"]}
+  ],
+  "templates": [
+    {"filename": "<name>.py", "covers": "<what this script demonstrates end-to-end>"}
+  ],
+  "include_hardware_section": true|false,
+  "include_when_to_use_section": true|false,
+  "include_evals": true|false,
+  "include_pitfalls": true|false
+}
+
+Example good output for TRL:
+{
+  "skill_name": "trl-training",
+  "one_line_purpose": "Train and fine-tune transformers with reinforcement learning using TRL",
+  "references": [
+    {"filename": "offline-methods.md", "covers": "SFT, DPO, KTO, ORPO, BCO, CPO trainers"},
+    {"filename": "online-methods.md", "covers": "GRPO, RLOO, PPO, OnlineDPO, NashMD trainers"},
+    {"filename": "reward-modeling.md", "covers": "RewardTrainer and PRMTrainer"},
+    {"filename": "integrations.md", "covers": "DeepSpeed, Liger Kernel, PEFT integrations"}
+  ],
+  "workflows": [
+    {"title": "Full RLHF pipeline", "checklist": ["Supervised fine-tuning (SFT)", "Train reward model", "PPO reinforcement learning", "Evaluate aligned model"]},
+    {"title": "Simple preference alignment with DPO", "checklist": ["Prepare preference dataset", "Configure DPOConfig", "Train with DPOTrainer", "Evaluate alignment"]},
+    {"title": "Memory-efficient online RL with GRPO", "checklist": ["Define reward function", "Configure GRPOConfig", "Train with GRPOTrainer"]}
+  ],
+  "templates": [
+    {"filename": "basic_sft_training.py", "covers": "Load model, load dataset, configure SFTConfig, train and save"},
+    {"filename": "dpo_alignment.py", "covers": "DPOTrainer with Qwen on ultrafeedback"},
+    {"filename": "grpo_with_reward_function.py", "covers": "GRPOTrainer with a custom Python reward function"}
+  ],
+  "include_hardware_section": true,
+  "include_when_to_use_section": true,
+  "include_evals": true,
+  "include_pitfalls": false
+}
+
+---
+DOCUMENTATION:
+{{doc_text}}
+
+FLAGS:
+with_pitfalls={{with_pitfalls}}
+with_evals={{with_evals}}
+with_templates={{with_templates}}

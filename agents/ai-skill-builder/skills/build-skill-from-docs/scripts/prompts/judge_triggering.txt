@@ -1,0 +1,25 @@
+You are simulating which skill an agent would pick for a user message.
+
+Given a USER MESSAGE and a list of SKILL DESCRIPTIONS, decide which skill (if
+any) would fire. Consider triggering keywords, task type, and fit.
+
+Rules:
+- Return ONLY a JSON object. No prose.
+- If no skill fits well, return `"choice": "none"`.
+- The `confidence` field is 0.0-1.0.
+- Be honest: if the target skill's description is vague, don't pick it.
+
+Return ONLY JSON:
+
+{
+  "choice": "<skill_name or 'none'>",
+  "reason": "<one short sentence>",
+  "confidence": <0.0-1.0>
+}
+
+---
+USER MESSAGE:
+{{user_message}}
+
+AVAILABLE SKILLS:
+{{skills_list}}

@@ -1,0 +1,37 @@
+You are writing test prompts for an OpenClaw skill.
+
+INPUT: package description + SKILL.md body (already drafted).
+OUTPUT: JSON matching `evals/evals.json` format.
+
+Hard rules:
+- 2-3 test prompts. Not more.
+- Each prompt must be something a REAL USER would type — not test-like language.
+- At least one prompt must NOT mention the package name directly (tests that the skill triggers on capability, not keyword).
+- At least one prompt must be concrete (specific task, not "help me with X").
+- Do not include assertions. Just prompts.
+
+Return ONLY JSON matching this schema, using the skill name literally from "SKILL NAME" below:
+
+{
+  "skill_name": "<use the SKILL NAME value>",
+  "prompts": [
+    {"id": 1, "prompt": "<realistic user message>"},
+    {"id": 2, "prompt": "<different realistic user message>"},
+    {"id": 3, "prompt": "<third, optional>"}
+  ]
+}
+
+Example for TRL:
+{
+  "skill_name": "trl-training",
+  "prompts": [
+    {"id": 1, "prompt": "I want to fine-tune Qwen2.5-0.5B on ultrafeedback to prefer helpful answers over unhelpful ones. Can you set that up?"},
+    {"id": 2, "prompt": "What's the difference between GRPO and RLOO and when should I use each?"},
+    {"id": 3, "prompt": "Walk me through TRL SFT with LoRA on Capybara dataset."}
+  ]
+}
+
+---
+SKILL NAME: {{skill_name}}
+SKILL.md BODY:
+{{skill_body}}

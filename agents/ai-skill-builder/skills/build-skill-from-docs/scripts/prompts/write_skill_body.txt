@@ -1,0 +1,113 @@
+You are writing the body of an OpenClaw SKILL.md file.
+
+INPUT: package documentation + README install section + list of reference files + workflows + templates + hardware hints.
+OUTPUT: markdown body (NO frontmatter — that is added separately).
+
+Hard rules:
+- Target 60-150 lines. Hard cap 300.
+- First section: `# <Skill Name>` + the description as the opening paragraph (see rules below).
+- Then sections in this order (include only those with content):
+  1. `## Installation` — canonical install command from README
+  2. `## Quick Start` — fastest zero-to-working example from the docs
+  3. `## Common Workflows` — each workflow as `### <title>`, one-sentence intro, a copy-paste checklist, and a pointer to the detailed reference file
+  4. `## When to Use` — when to use this skill + named alternative tools + "NOT for" cases (only if include_when_to_use_section is true)
+  5. `## Hardware Requirements` — concrete VRAM/GPU requirements from docs (only if include_hardware_section is true AND hardware hints are provided)
+  6. `## Templates` — list the runnable Python scripts in `templates/` with a one-line description each (only if templates are provided)
+  7. `## References` — short pointers to each reference file
+  8. `## Looking things up live (MCP fallback)` — runtime tail-coverage instructions; ALWAYS emit this section
+- Imperative tone: "Run X", "Use Y" (not "X runs...", "Y is used for...").
+- Every shell/code block must come from the provided sources. Do not invent commands.
+- No marketing language. No trailing summary section.
+
+Description (opening paragraph) must:
+- Start with an action verb ("Train...", "Process...", "Convert...")
+- Include at least one concrete "Use when..." or "Invoke when..." clause
+- Name the specific capabilities (class names, algorithm names) — not generic terms.
+
+Checklist format (inside `## Common Workflows`):
+```
+### Full RLHF pipeline
+
+Complete pipeline from base model to human-aligned model. For detailed per-step code, see `references/offline-methods.md` and `references/online-methods.md`.
+
+Copy this checklist:
+
+- [ ] Step 1: Supervised fine-tuning (SFT)
+- [ ] Step 2: Train reward model
+- [ ] Step 3: PPO reinforcement learning
+- [ ] Step 4: Evaluate aligned model
+```
+
+When-to-Use format:
+```
+## When to Use
+
+Invoke this skill when the user mentions <concrete triggers>.
+
+**Use this skill when:**
+- <specific case 1>
+- <specific case 2>
+
+**NOT for (use alternatives instead):**
+- Basic fine-tuning without RL — use `transformers.Trainer`
+- YAML-based training configuration — use Axolotl
+- Fast LoRA training — use Unsloth
+```
+
+Hardware format (only if hardware hints provided):
+```
+## Hardware Requirements
+
+- **GPU**: <type>
+- **VRAM**: <concrete numbers per method if available, e.g. "SFT 7B: 16GB with LoRA">
+- **Multi-GPU**: <supported / via what>
+- **Mixed precision**: <BF16 recommended on A100/H100 / etc.>
+```
+
+Looking-things-up format (ALWAYS include — copy verbatim with `<package>` substituted):
+```
+## Looking things up live (MCP fallback)
+
+This skill ships pre-distilled `references/`. If a question is **not** answered by the bundled references, fall back to live docs via MCP. The frontmatter lists preferred MCPs under `metadata.openclaw.mcps`.
+
+Use this routing:
+
+1. First, search the bundled `references/` (including `community-gotchas.md` and `troubleshooting.md` if present).
+2. If still missing, call Context7 via the OpenClaw `mcporter` CLI:
+   ```bash
+   mcporter call context7.resolve-library-id query="<question>" libraryName=<package>
+   # then, with the returned /org/project ID:
+   mcporter call context7.query-docs libraryId="/<org>/<project>" query="<topic>"
+   ```
+   (If you're unsure of a tool name, run `mcporter list-tools context7` to discover.)
+3. For HF-hosted packages, prefer `hf-mcp/doc_search` if it's registered (`openclaw mcp list`).
+4. Cite the MCP source in your answer. Do not invent function names — if Context7 doesn't return the answer, say so.
+
+Skip MCP entirely if the question IS covered by `references/`. Loading MCP tool definitions is expensive; the references are zero-cost progressive disclosure.
+```
+
+Return ONLY the markdown body, starting with `# `.
+
+---
+SKILL NAME: {{skill_name}}
+
+REFERENCE FILES (will exist alongside SKILL.md):
+{{references_list}}
+
+WORKFLOWS (emit copy-paste checklists):
+{{workflows_list}}
+
+TEMPLATES (Python files in templates/):
+{{templates_list}}
+
+HARDWARE HINTS (raw sentences extracted from docs/README):
+{{hardware_hints}}
+
+INCLUDE WHEN-TO-USE SECTION: {{include_when_to_use}}
+INCLUDE HARDWARE SECTION: {{include_hardware}}
+
+README INSTALL SECTION:
+{{readme_install}}
+
+DOCUMENTATION:
+{{doc_text}}

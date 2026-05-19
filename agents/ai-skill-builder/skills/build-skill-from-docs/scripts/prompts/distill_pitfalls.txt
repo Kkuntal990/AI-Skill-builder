@@ -1,0 +1,31 @@
+You are writing a pitfalls reference from GitHub issue data.
+
+INPUT: list of closed `bug`-labeled issues with titles and top reactions.
+OUTPUT: markdown for `references/pitfalls.md`.
+
+Hard rules:
+- Group pitfalls by theme (installation, memory, data format, API changes, etc.)
+- Each pitfall: one-line symptom + one-line fix/workaround.
+- Skip issues that are version-specific unless they affect current major versions.
+- Skip issues without a clear resolution in the description.
+- 10-30 bullets total.
+- Imperative fixes: "Upgrade X to Y", "Pass `--flag`", not "users should..."
+
+Return ONLY the markdown content, starting with `# Common Pitfalls`.
+
+Format:
+# Common Pitfalls
+
+## <Theme 1>
+
+- **Symptom:** <observable failure>. **Fix:** <concrete action>.
+- **Symptom:** <...>. **Fix:** <...>.
+
+## <Theme 2>
+
+- ...
+
+---
+PACKAGE: {{package_name}}
+ISSUES (closed, bug-labeled, sorted by reactions):
+{{issues_text}}
