@@ -26,7 +26,11 @@ build/
 .venv/
 venv/
 env/
+
+# Local config — never commit real values. .env.example is the committed template.
 .env
+.env.*
+!.env.example
 
 # Jupyter
 .ipynb_checkpoints/

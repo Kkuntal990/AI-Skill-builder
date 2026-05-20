@@ -1,0 +1,19 @@
+# Persistent storage for trajectory outputs. One PVC per A/B sweep; sized
+# generously for now (50Gi) — each trajectory writes <100MB (submission +
+# JSON logs + per-stage code), and we'll clean up old runs offline.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mleval-results
+  labels:
+    app: mleval
+spec:
+  accessModes:
+    - ReadWriteMany   # multiple pods write in parallel during an A/B sweep
+  resources:
+    requests:
+      storage: 50Gi
+  # Nautilus default storageClass is CephFS-backed RWX. Override if your
+  # namespace uses a different class.
+  # storageClassName: rook-cephfs

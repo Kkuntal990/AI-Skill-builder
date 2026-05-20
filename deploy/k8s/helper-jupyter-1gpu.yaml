@@ -1,0 +1,108 @@
+# Interactive Jupyter pod for testing harness code against a real Nautilus
+# GPU node. Mirrors ~/svcl-projects/vlm-self-reflection/k8s/jupyter-1gpu-test.yaml
+# but reduces to a single RTX A6000 and uses the mleval-agent image.
+#
+# Apply only when you want a live dev environment; tear down with
+# `kubectl delete pod mleval-jupyter-1gpu` when done.
+#
+# Access: `kubectl port-forward pod/mleval-jupyter-1gpu 8888:8888`
+# Token:  `mleval-dev` (matches the --NotebookApp.token below).
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mleval-jupyter-1gpu
+  labels:
+    app: mleval
+    task: dev-helper
+spec:
+  restartPolicy: Never
+  containers:
+    - name: jupyter
+      # Image, registry, tag, and GPU type are filled in by envsubst from .env
+      # at apply time (see `make k8s-apply-helper`).
+      image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+      imagePullPolicy: Always
+      command:
+        - jupyter
+        - lab
+        - --ip=0.0.0.0
+        - --no-browser
+        - --allow-root
+        - --NotebookApp.token=mleval-dev
+
+      resources:
+        limits:
+          ${GPU_TYPE}: "1"
+          memory: "32Gi"
+          cpu: "4"
+        requests:
+          ${GPU_TYPE}: "1"
+          memory: "32Gi"
+          cpu: "4"
+
+      volumeMounts:
+        - name: cache-volume
+          mountPath: /cache
+        - name: workspace
+          mountPath: /workspace
+        - name: dev-shm
+          mountPath: /dev/shm
+
+      env:
+        # Cache locations (keep heavy HF/Torch artifacts off the rootfs).
+        - name: HF_HOME
+          value: "/cache/hf"
+        - name: TRANSFORMERS_CACHE
+          value: "/cache/hf/transformers"
+        - name: HF_DATASETS_CACHE
+          value: "/cache/hf/datasets"
+        - name: TORCH_HOME
+          value: "/cache/torch"
+        - name: PIP_CACHE_DIR
+          value: "/cache/pip"
+
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "expandable_segments:True"
+
+        # Optional secrets — created via `kubectl apply -f secret.template.yaml`
+        # after substituting real values. Marked optional so the pod still
+        # starts when the secret hasn't been provisioned yet.
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mleval-secrets
+              key: hf-token
+              optional: true
+        - name: OPENROUTER_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mleval-secrets
+              key: openrouter-api-key
+              optional: true
+
+  tolerations:
+    - key: nautilus.io/reservation
+      operator: Exists
+      effect: NoSchedule
+    - key: nautilus.io/hardware
+      operator: Equal
+      value: large-gpu
+      effect: NoSchedule
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: PreferNoSchedule
+
+  volumes:
+    - name: cache-volume
+      emptyDir:
+        sizeLimit: 100Gi
+    - name: workspace
+      emptyDir:
+        sizeLimit: 20Gi
+    - name: dev-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi

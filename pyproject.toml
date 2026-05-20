@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mleval"
+version = "0.1.0.dev0"
+description = "Stage-2 skill evaluation harness for MLE agents on Kubernetes."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Kuntal Kokate", email = "kukokate@ucsd.edu" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+# Runtime deps are intentionally minimal at MVP stage. The agent container
+# image (docker/agent.Dockerfile) installs MLEvolve and its heavy ML deps;
+# the harness package only needs what the local orchestrator / analyzer use.
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pre-commit>=3.7",
+    "types-PyYAML",
+]
+
+[project.scripts]
+mleval = "mleval._cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# Ruff: lint + format. Replaces black + isort + flake8 entirely.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "D",        # pydocstyle (Google style — see convention below)
+    "SIM",      # flake8-simplify
+    "UP",       # pyupgrade
+    "PLE",      # pylint errors
+    "RUF",      # ruff-specific
+]
+ignore = [
+    "D100",     # missing module docstring — acceptable for small modules
+    "D104",     # missing __init__ docstring
+    "D203",     # one-blank-line-before-class (conflicts with D211)
+    "D213",     # multi-line-summary-second-line (conflicts with D212)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]              # tests don't need docstrings
+
+# ---------------------------------------------------------------------------
+# Mypy: strict on our code, lenient on third-party imports
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-rA --strict-markers --tb=short"
+markers = [
+    "slow: tests that take more than a few seconds",
+    "k8s: tests that require kubectl + a live cluster",
+]
