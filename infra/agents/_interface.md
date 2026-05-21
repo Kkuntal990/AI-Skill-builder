@@ -39,11 +39,11 @@ Set by the orchestrator (`scripts/run_ab.py`) per trajectory. All required unles
 | `MLEVAL_SKILL_PATH` | `/workspace/skill/SKILL.md` | Path to skill file. Empty/unset in `without_skill` cell |
 | `MLEVAL_SKILL_REFERENCES_DIR` | `/workspace/skill/references` | Optional. Path agent can read for deep-dive content |
 | `MLEVAL_SKILL_SHA256` | `4b6af703...` | Pinned skill version; recorded in `manifest.json` |
-| `MLEVAL_TASK_INSTRUCTION_PATH` | `/workspace/task/instruction.md` | Task description (the equivalent of `--instruction` for MLEvolve) |
+| `MLEVAL_TASK_INSTRUCTION_PATH` | `/workspace/task/instruction.md` | Task description (e.g., AIDE's `goal` field reads from this) |
 | `MLEVAL_TASK_DATA_DIR` | `/workspace/task/data` | Task data; read-only mount |
 | `MLEVAL_PLAYGROUND_DIR` | `/workspace/playground` | Where the agent writes scratch code & checkpoints |
 | `MLEVAL_LLM_API_KEY` | (secret) | API key for whatever LLM the agent uses |
-| `MLEVAL_LLM_MODEL` | `deepseek/deepseek-v4-pro` | Optional override |
+| `MLEVAL_LLM_MODEL` | `deepseek/deepseek-v4-flash` | Optional override |
 
 The contract: **if `MLEVAL_SKILL_PATH` is set and the file exists, the agent must inject the skill content into its prompt(s); otherwise it must run as if no skill exists.** How that wiring happens is `inject_skill.{patch|py}`'s job.
 
@@ -87,7 +87,7 @@ JSON Lines: one JSON object per operator call. Order is execution order (chronol
   "trajectory_id": "jigsaw-cell1-seed42",
 
   "agent": {
-    "name": "mlevolve",
+    "name": "aide",
     "version": "git-sha-abc123",
     "operator_native": "improve"
   },
@@ -164,7 +164,7 @@ JSON Lines: one JSON object per operator call. Order is execution order (chronol
 ### Field semantics
 
 - **`record_id`** — `op_NNN` where NNN is zero-padded sequence within trajectory. Used as filename in `code/op_NNN.py`.
-- **`agent.operator_native`** — the agent's own term for this operation. MLEvolve: one of `root|improve|debug|draft|fusion_draft|evolution|fusion`. AIDE: `draft|debug|improve`. The adapter does not normalize this; downstream analysis treats it as opaque metadata.
+- **`agent.operator_native`** — the agent's own term for this operation. AIDE: one of `draft|debug|improve`. Each plugin defines its own vocabulary; the adapter does not normalize, downstream analysis treats it as opaque metadata.
 - **`stage.top_level`** — one of `1|2|3|4|5|6` (the 6 top-level stages from the taxonomy).
 - **`stage.sub_stage`** — one of `1a|1b|2a|2b|2c|3a|3b|3c|4a|4b|4c|5a|5b|6a|6b|6c` (the 16 sub-stages).
 - **`stage.classifier_source`** — `agent_native` (mapped directly from `operator_native`), `ast_choice_extractor` (inferred from emitted code by PyCG-Extended + AST rules), `manual` (human-labeled during debugging), or `unknown`.
@@ -205,10 +205,10 @@ One per trajectory. Captures run-level metadata so each trajectory is self-descr
   },
 
   "agent": {
-    "name": "mlevolve",
+    "name": "aide",
     "version": "git-sha-abc123",
-    "container_image": "gitlab-registry.nrp-nautilus.io/.../mleval-mlevolve:v0.2.0",
-    "llm_model": "deepseek/deepseek-v4-pro"
+    "container_image": "ghcr.io/kkuntal990/mleval-agent:dev",
+    "llm_model": "deepseek/deepseek-v4-flash"
   },
 
   "cell": {
@@ -303,7 +303,7 @@ Layer 3 (cost/effort) summary. Aggregated from `trajectory.jsonl` records.
 Every record carries a sub-stage label from the 16-bucket taxonomy. Three classifier sources:
 
 ### `agent_native`
-The agent's own operator type maps to one of our stages. Used when the agent's vocabulary aligns cleanly. Example: MLEvolve's `improve` operator that touches model architecture → `stage.sub_stage = "3a"`. Confidence is always 1.0.
+The agent's own operator type maps to one of our stages. Used when the agent's vocabulary aligns cleanly. Note: AIDE's operator types (`draft|debug|improve`) describe search-loop role, not ML-pipeline stage — so AIDE always uses `ast_choice_extractor`. Confidence is always 1.0 when this source applies.
 
 The mapping table per agent lives in `infra/agents/<name>/stage_map.json`.
 

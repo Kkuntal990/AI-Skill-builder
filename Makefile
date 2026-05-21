@@ -2,10 +2,13 @@
 # mleval — Makefile
 #
 # Sources `.env` automatically (if present) and exports every variable into
-# subshells so envsubst / kubectl / docker see them. Override any var
-# inline:   `make IMAGE_TAG=v0.1.0 docker-agent`
+# subshells so envsubst / kubectl see them. Override any var inline:
+#   `make IMAGE_TAG=v0.1.0 k8s-apply-helper`
 #
 # Print the effective config at any time:  `make config`
+#
+# Container build/push targets are intentionally absent — they live in the
+# per-agent plugin under `infra/agents/<name>/` (added per agent, not here).
 # ============================================================================
 
 # `-include` is the silent variant: no error if .env doesn't exist yet.
@@ -18,16 +21,15 @@ IMAGE_REGISTRY ?= ghcr.io/kkuntal990
 IMAGE_NAME     ?= mleval-agent
 IMAGE_TAG      ?= dev
 GPU_TYPE       ?= nvidia.com/rtxa6000
-MLEVOLVE_REPO  ?= https://github.com/InternScience/MLEvolve.git
-MLEVOLVE_REF   ?= main
+AIDE_REPO      ?= https://github.com/WecoAI/aideml.git
+AIDE_REF       ?= main
 IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .PHONY: install fmt lint typecheck test check clean \
         docker-agent docker-push \
-        config _require_env _require_ns _require_api_key \
-        k8s-secret k8s-apply-pvc \
-        k8s-apply-helper k8s-delete-helper \
-        k8s-apply-job-debug-trl-grpo k8s-delete-job-debug-trl-grpo
+        config _require_env _require_ns _require_api_key _require_ghcr_token \
+        k8s-secret k8s-ghcr-pull-secret k8s-apply-pvc \
+        k8s-apply-helper k8s-delete-helper
 
 # ---- environment ---------------------------------------------------------
 
@@ -41,11 +43,11 @@ config:
 	@echo "IMAGE             = $(IMAGE)"
 	@echo "K8S_NAMESPACE     = $${K8S_NAMESPACE:-<unset>}"
 	@echo "GPU_TYPE          = $(GPU_TYPE)"
+	@echo "AIDE_REPO         = $(AIDE_REPO)"
+	@echo "AIDE_REF          = $(AIDE_REF)"
 	@echo "MLEVAL_LLM_MODEL  = $${MLEVAL_LLM_MODEL:-<unset>}"
 	@echo "MLEVAL_RUN_ID     = $${MLEVAL_RUN_ID:-<unset>}"
 	@echo "DEFAULT_SEED      = $${DEFAULT_SEED:-<unset>}"
-	@echo "MLEVOLVE_REPO     = $(MLEVOLVE_REPO)"
-	@echo "MLEVOLVE_REF      = $(MLEVOLVE_REF)"
 	@if [ -n "$$OPENROUTER_API_KEY" ] && [ "$$OPENROUTER_API_KEY" != "REPLACE_ME" ]; then \
 	    echo "OPENROUTER_API_KEY = <set>"; \
 	 elif [ "$$OPENROUTER_API_KEY" = "REPLACE_ME" ]; then \
@@ -68,6 +70,10 @@ _require_api_key: _require_env
 	@test -n "$$OPENROUTER_API_KEY" -a "$$OPENROUTER_API_KEY" != "REPLACE_ME" \
 	    || { echo "ERROR: OPENROUTER_API_KEY not set in .env" >&2; exit 1; }
 
+_require_ghcr_token: _require_env
+	@test -n "$$GHCR_READ_TOKEN" -a "$$GHCR_READ_TOKEN" != "REPLACE_ME" \
+	    || { echo "ERROR: GHCR_READ_TOKEN not set in .env (need a read:packages PAT)" >&2; exit 1; }
+
 # ---- code quality --------------------------------------------------------
 
 fmt:
@@ -88,11 +94,15 @@ check: lint typecheck test
 
 # ---- containers ----------------------------------------------------------
 
+# Default agent plugin is AIDE. To build a different plugin override AGENT:
+#   make AGENT=mlevolve docker-agent
+AGENT ?= aide
+
 docker-agent:
 	docker build \
-	    --build-arg MLEVOLVE_REPO=$(MLEVOLVE_REPO) \
-	    --build-arg MLEVOLVE_REF=$(MLEVOLVE_REF) \
-	    -f docker/agent.Dockerfile -t $(IMAGE) .
+	    --build-arg AIDE_REPO=$(AIDE_REPO) \
+	    --build-arg AIDE_REF=$(AIDE_REF) \
+	    -f infra/agents/$(AGENT)/Dockerfile -t $(IMAGE) .
 
 docker-push:
 	docker push $(IMAGE)
@@ -113,17 +123,22 @@ k8s-secret: _require_ns _require_api_key
 	    --from-literal=openrouter-api-key="$$OPENROUTER_API_KEY" \
 	    --from-literal=hf-token="$${HF_TOKEN:-}"
 
+# Docker-registry Secret so Nautilus nodes can pull our private ghcr.io image.
+# Idempotent. References this Secret via `imagePullSecrets: [{name: ghcr-pull}]`
+# in helper/job manifests.
+k8s-ghcr-pull-secret: _require_ns _require_ghcr_token
+	kubectl -n $$K8S_NAMESPACE delete secret ghcr-pull --ignore-not-found
+	kubectl -n $$K8S_NAMESPACE create secret docker-registry ghcr-pull \
+	    --docker-server=ghcr.io \
+	    --docker-username=kkuntal990 \
+	    --docker-password="$$GHCR_READ_TOKEN" \
+	    --docker-email=kukokate@ucsd.edu
+
 k8s-apply-helper: _require_ns
 	envsubst < deploy/k8s/helper-jupyter-1gpu.yaml | kubectl -n $$K8S_NAMESPACE apply -f -
 
 k8s-delete-helper: _require_ns
 	kubectl -n $$K8S_NAMESPACE delete pod mleval-jupyter-1gpu --ignore-not-found
-
-k8s-apply-job-debug-trl-grpo: _require_ns
-	envsubst < deploy/k8s/job-debug-trl-grpo.yaml | kubectl -n $$K8S_NAMESPACE apply -f -
-
-k8s-delete-job-debug-trl-grpo: _require_ns
-	kubectl -n $$K8S_NAMESPACE delete job mleval-debug-trl-grpo-mvp --ignore-not-found
 
 # ---- cleanup -------------------------------------------------------------
 

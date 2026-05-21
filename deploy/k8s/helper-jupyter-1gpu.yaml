@@ -17,6 +17,9 @@ metadata:
     task: dev-helper
 spec:
   restartPolicy: Never
+  # Pull our private ghcr.io image. Secret created via `make k8s-ghcr-pull-secret`.
+  imagePullSecrets:
+    - name: ghcr-pull
   containers:
     - name: jupyter
       # Image, registry, tag, and GPU type are filled in by envsubst from .env
@@ -35,11 +38,11 @@ spec:
         limits:
           ${GPU_TYPE}: "1"
           memory: "32Gi"
-          cpu: "4"
+          cpu: "2"
         requests:
           ${GPU_TYPE}: "1"
           memory: "32Gi"
-          cpu: "4"
+          cpu: "2"
 
       volumeMounts:
         - name: cache-volume
@@ -48,6 +51,11 @@ spec:
           mountPath: /workspace
         - name: dev-shm
           mountPath: /dev/shm
+        # Shared trajectory output PVC (CephFS RWX). Same mount path the Job
+        # template uses, so notebooks can inspect prior runs in
+        # /results/${MLEVAL_RUN_ID}/... and stage task data under /results/data/.
+        - name: results
+          mountPath: /results
 
       env:
         # Cache locations (keep heavy HF/Torch artifacts off the rootfs).
@@ -106,3 +114,6 @@ spec:
       emptyDir:
         medium: Memory
         sizeLimit: 16Gi
+    - name: results
+      persistentVolumeClaim:
+        claimName: mleval-results

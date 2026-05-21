@@ -1,6 +1,16 @@
-# Persistent storage for trajectory outputs. One PVC per A/B sweep; sized
-# generously for now (50Gi) — each trajectory writes <100MB (submission +
-# JSON logs + per-stage code), and we'll clean up old runs offline.
+# Persistent storage for trajectory outputs across A/B sweeps.
+#
+# Layout under the mount root (/results):
+#   ${MLEVAL_RUN_ID}/${MLEVAL_TRAJECTORY_ID}/
+#     manifest.json
+#     trajectory.jsonl
+#     submission.*
+#     code/
+#     agent_native_logs/
+#
+# Sizing: ~400MB/trajectory typical, with LLM-Merging trajectories occasionally
+# producing multi-GB checkpoints. 1Ti gives ample room for the full v0.3 sweep
+# plus repeated debug runs without forcing mid-experiment cleanup.
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -8,12 +18,24 @@ metadata:
   name: mleval-results
   labels:
     app: mleval
+  annotations:
+    # Nautilus purges PVCs not accessed for 6 months. The orchestrator should
+    # `touch /results/.heartbeat` on every sweep; long-term archives go to S3.
+    nrp.ai/retention-note: "purged after 6mo inactivity — see docs/eval/ops.md"
 spec:
   accessModes:
-    - ReadWriteMany   # multiple pods write in parallel during an A/B sweep
+    - ReadWriteMany   # parallel pods, one per (task × cell × seed)
+  storageClassName: rook-cephfs   # US West, generic, RWX
   resources:
     requests:
-      storage: 50Gi
-  # Nautilus default storageClass is CephFS-backed RWX. Override if your
-  # namespace uses a different class.
-  # storageClassName: rook-cephfs
+      storage: 1000Gi
+
+# Region notes:
+#   rook-cephfs           — US West generic, available cluster-wide.   ← in use
+#   rook-cephfs-ucsd      — UCSD NVMe, fastest, but restricted to the Hao Su /
+#                           Ravi cluster. Don't pick unless ecepxie is granted
+#                           access and our pods can schedule on those nodes.
+#   rook-cephfs-central / -east / -south-east / -pacific
+#                         — DO NOT USE. Forces pod scheduling to that region,
+#                           adds cross-region latency to every Job, and blocks
+#                           bursty parallel sweeps if quota is tight there.

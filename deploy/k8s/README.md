@@ -1,17 +1,18 @@
-# `deploy/k8s/` — Kubernetes manifests
+# `deploy/k8s/` — Kubernetes manifests (agent-agnostic)
 
 All manifests target Nautilus NRP. **Nothing here is applied automatically.**
 Every k8s operation is fronted by a `make` target that reads `.env` and
 substitutes config at apply time.
 
+Per-agent Job manifests live under `infra/agents/<name>/`, not here.
+
 ## Files
 
 | File | Purpose | How to apply |
 |---|---|---|
-| `pvc.yaml` | Shared PVC for trajectory outputs (50Gi CephFS RWX). | `make k8s-apply-pvc` |
+| `pvc.yaml` | Shared PVC for trajectory outputs (1Ti CephFS RWX). | `make k8s-apply-pvc` |
 | `secret.template.yaml` | **Reference only.** Documents the Secret keys the pods expect. | `make k8s-secret` (provisions from `.env`) |
 | `helper-jupyter-1gpu.yaml` | Single-RTX-A6000 Jupyter pod for interactive dev. | `make k8s-apply-helper` |
-| `job-debug-trl-grpo.yaml` | MVP run #1 — 1h CPU-only baseline. | `make k8s-apply-job-debug-trl-grpo` |
 
 YAML files contain `${VAR}` placeholders that get filled in by `envsubst` at
 apply time. Run `make config` to see exactly what values will be substituted.
@@ -31,12 +32,9 @@ kubectl -n "$K8S_NAMESPACE" describe quota
 # 3. Provision the PVC (one-time per namespace)
 make k8s-apply-pvc
 
-# 4. Provision the Secret (rerun whenever you rotate keys in .env)
-make k8s-secret
-
-# 5. Build + push the image
-make docker-agent
-make docker-push
+# 4. Provision the secrets (rerun whenever you rotate keys in .env)
+make k8s-secret              # OpenRouter + HF tokens
+make k8s-ghcr-pull-secret    # private ghcr.io image pull
 ```
 
 ## Interactive dev on a real GPU node
@@ -50,30 +48,13 @@ kubectl -n "$K8S_NAMESPACE" port-forward pod/mleval-jupyter-1gpu 8888:8888
 make k8s-delete-helper
 ```
 
-## Running the MVP Job
-
-Only after the helper pod has confirmed MLEvolve actually runs end-to-end:
-
-```bash
-make k8s-apply-job-debug-trl-grpo
-kubectl -n "$K8S_NAMESPACE" logs -f job/mleval-debug-trl-grpo-mvp
-
-# pull results off the PVC via a transient mount pod
-kubectl -n "$K8S_NAMESPACE" run pvc-shell --rm -it --restart=Never \
-    --image=alpine \
-    --overrides='{"spec":{"containers":[{"name":"pvc-shell","image":"alpine","stdin":true,"tty":true,"volumeMounts":[{"name":"r","mountPath":"/r"}]}],"volumes":[{"name":"r","persistentVolumeClaim":{"claimName":"mleval-results"}}]}}' \
-    -- /bin/sh
-
-# clean up the job
-make k8s-delete-job-debug-trl-grpo
-```
-
 ## Where each variable goes
 
 | `.env` var | YAML field(s) | Notes |
 |---|---|---|
 | `OPENROUTER_API_KEY` | `Secret/mleval-secrets` (via `make k8s-secret`) | Never enters a YAML file |
 | `HF_TOKEN` | `Secret/mleval-secrets` | Optional |
+| `GHCR_READ_TOKEN` | `Secret/ghcr-pull` (via `make k8s-ghcr-pull-secret`) | classic `read:packages` PAT |
 | `K8S_NAMESPACE` | `kubectl -n` flag (not in YAML) | Used by every k8s target |
 | `IMAGE_REGISTRY` / `IMAGE_NAME` / `IMAGE_TAG` | `containers[*].image` | Same image used by helper pod + Jobs |
 | `GPU_TYPE` | `resources.{limits,requests}` | e.g. `nvidia.com/rtxa6000` |
@@ -88,3 +69,6 @@ make k8s-delete-job-debug-trl-grpo
   Adjust if your namespace's reservation tolerations differ.
 - **No namespace in YAML** — every command uses `kubectl -n $K8S_NAMESPACE`.
 - **No image tag in YAML** — every image reference is `${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}`.
+- **Image pull secret**: every pod that pulls our private image sets
+  `imagePullSecrets: [{name: ghcr-pull}]`. Provisioned once per namespace
+  via `make k8s-ghcr-pull-secret`.
