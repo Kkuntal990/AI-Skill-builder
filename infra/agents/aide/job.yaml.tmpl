@@ -1,0 +1,153 @@
+# AIDE trajectory Job template. Rendered by `envsubst` per (task × cell × seed).
+# DO NOT `kubectl apply -f` directly — apply via the orchestrator or
+# `make k8s-apply-job-aide` which substitutes env vars from .env + flags.
+#
+# Required env at render time (top of orchestrator/run_ab.py wires these):
+#   IMAGE_REGISTRY IMAGE_NAME IMAGE_TAG GPU_TYPE
+#   MLEVAL_RUN_ID MLEVAL_TRAJECTORY_ID MLEVAL_LLM_MODEL
+#   TASK CELL SEED TIME_LIMIT_SECONDS STEP_LIMIT
+#   ACTIVE_DEADLINE_SECONDS                 (== TIME_LIMIT_SECONDS + slack)
+#   MLEVAL_SKILL_PATH                       (empty for without_skill cell)
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${MLEVAL_TRAJECTORY_ID}
+  labels:
+    app: mleval
+    agent: aide
+    run_id: "${MLEVAL_RUN_ID}"
+    task: "${TASK}"
+    cell: "${CELL}"
+    seed: "${SEED}"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: ${ACTIVE_DEADLINE_SECONDS}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: mleval
+        agent: aide
+        run_id: "${MLEVAL_RUN_ID}"
+        task: "${TASK}"
+        cell: "${CELL}"
+        seed: "${SEED}"
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: agent
+          image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+          imagePullPolicy: Always
+          resources:
+            limits:
+              ${GPU_TYPE}: "1"
+              cpu: "8"
+              memory: "32Gi"
+            requests:
+              ${GPU_TYPE}: "1"
+              cpu: "4"
+              memory: "16Gi"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: MLEVAL_RUN_ID
+              value: "${MLEVAL_RUN_ID}"
+            - name: MLEVAL_TRAJECTORY_ID
+              value: "${MLEVAL_TRAJECTORY_ID}"
+            - name: TASK
+              value: "${TASK}"
+            - name: CELL
+              value: "${CELL}"
+            - name: SEED
+              value: "${SEED}"
+            - name: TIME_LIMIT_SECONDS
+              value: "${TIME_LIMIT_SECONDS}"
+            - name: STEP_LIMIT
+              value: "${STEP_LIMIT}"
+            - name: MLEVAL_LLM_MODEL
+              value: "${MLEVAL_LLM_MODEL}"
+            - name: MLEVAL_OUTPUT_DIR
+              value: "/results/${MLEVAL_RUN_ID}/${MLEVAL_TRAJECTORY_ID}"
+            - name: MLEVAL_TASK_INSTRUCTION_PATH
+              value: "/results/data/${TASK}/instruction.md"
+            - name: MLEVAL_TASK_DATA_DIR
+              value: "/results/data/${TASK}/data"
+            - name: MLEVAL_SKILL_PATH
+              value: "${MLEVAL_SKILL_PATH}"
+            - name: GENERATE_REPORT
+              value: "false"
+
+            # Route AIDE's openai backend at OpenRouter (see entrypoint comment).
+            - name: OPENAI_BASE_URL
+              value: "https://openrouter.ai/api/v1"
+            - name: MLEVAL_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mleval-secrets
+                  key: openrouter-api-key
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mleval-secrets
+                  key: openrouter-api-key
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mleval-secrets
+                  key: openrouter-api-key
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mleval-secrets
+                  key: hf-token
+                  optional: true
+
+            - name: HF_HOME
+              value: "/cache/hf"
+            - name: TRANSFORMERS_CACHE
+              value: "/cache/hf/transformers"
+            - name: HF_DATASETS_CACHE
+              value: "/cache/hf/datasets"
+            - name: TORCH_HOME
+              value: "/cache/torch"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "expandable_segments:True"
+
+          volumeMounts:
+            - name: cache-volume
+              mountPath: /cache
+            - name: results
+              mountPath: /results
+            - name: dev-shm
+              mountPath: /dev/shm
+
+      tolerations:
+        - key: nautilus.io/reservation
+          operator: Exists
+          effect: NoSchedule
+        - key: nautilus.io/hardware
+          operator: Equal
+          value: large-gpu
+          effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: PreferNoSchedule
+
+      volumes:
+        - name: cache-volume
+          emptyDir:
+            sizeLimit: 100Gi
+        - name: results
+          persistentVolumeClaim:
+            claimName: mleval-results
+        - name: dev-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

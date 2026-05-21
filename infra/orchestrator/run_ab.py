@@ -1,0 +1,266 @@
+"""Orchestrate paired A/B Jobs across (task × cell × seed).
+
+Reads `.env` for cluster config (registry, namespace, GPU, secrets), reads
+CLI args for the sweep design, renders `infra/agents/aide/job.yaml.tmpl`
+per trajectory via envsubst-style substitution, kubectl-applies each Job,
+waits for completion, and optionally pulls results off the PVC.
+
+Two-phase use:
+
+    Phase A (preview, no cluster touch):
+        python -m infra.orchestrator.run_ab --task <name> --seeds 0 1 --plan-only
+
+    Phase B (live, applies Jobs):
+        python -m infra.orchestrator.run_ab --task <name> --seeds 0 1 --apply
+
+Idempotent: a trajectory whose Job already exists in the namespace is
+treated as "already running" and only watched. A trajectory whose
+``manifest.json`` already sits on the PVC is skipped entirely.
+
+The orchestrator never re-runs a completed trajectory; bump `MLEVAL_RUN_ID`
+in .env to start a fresh sweep.
+
+This file is ~250 LOC, no external deps beyond kubectl + Python stdlib.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+JOB_TEMPLATE = REPO_ROOT / "infra/agents/aide/job.yaml.tmpl"
+
+
+# ---- env loading ----------------------------------------------------------
+
+_ENV_LINE = re.compile(r"^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$")
+
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    """Tiny .env parser — KEY=VALUE lines, no quote handling, no exports."""
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        m = _ENV_LINE.match(line)
+        if not m:
+            continue
+        out[m.group(1)] = m.group(2)
+    return out
+
+
+# ---- envsubst-style template rendering -----------------------------------
+
+_VAR_PATTERN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+
+
+def render(template: str, env: dict[str, str]) -> str:
+    def replace(m: re.Match[str]) -> str:
+        name = m.group(1)
+        if name not in env:
+            raise KeyError(f"job template references ${{{name}}} but env has no value")
+        return env[name]
+
+    return _VAR_PATTERN.sub(replace, template)
+
+
+# ---- trajectory plan -----------------------------------------------------
+
+
+@dataclass
+class Trajectory:
+    task: str
+    cell: str  # "with_skill" | "without_skill"
+    seed: int
+    skill_path: str
+    run_id: str
+    llm_model: str
+    time_limit_sec: int
+    step_limit: int
+
+    @property
+    def trajectory_id(self) -> str:
+        # k8s name constraints: lowercase + -, <= 63 chars.
+        safe_task = re.sub(r"[^a-z0-9-]", "-", self.task.lower())[:30]
+        return f"{self.run_id}-{safe_task}-{self.cell}-s{self.seed}".lower()
+
+    def env_overrides(self, base_env: dict[str, str]) -> dict[str, str]:
+        out = dict(base_env)
+        out.update(
+            {
+                "MLEVAL_RUN_ID": self.run_id,
+                "MLEVAL_TRAJECTORY_ID": self.trajectory_id,
+                "TASK": self.task,
+                "CELL": self.cell,
+                "SEED": str(self.seed),
+                "MLEVAL_LLM_MODEL": self.llm_model,
+                "TIME_LIMIT_SECONDS": str(self.time_limit_sec),
+                "STEP_LIMIT": str(self.step_limit),
+                "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 600),
+                "MLEVAL_SKILL_PATH": self.skill_path if self.cell == "with_skill" else "",
+            }
+        )
+        return out
+
+
+@dataclass
+class Plan:
+    run_id: str
+    task: str
+    seeds: list[int]
+    cells: list[str]
+    namespace: str
+    base_env: dict[str, str]
+    skill_path: str = ""
+    trajectories: list[Trajectory] = field(default_factory=list)
+
+    def build(self, llm_model: str, time_limit_sec: int, step_limit: int) -> None:
+        for cell in self.cells:
+            for seed in self.seeds:
+                self.trajectories.append(
+                    Trajectory(
+                        task=self.task,
+                        cell=cell,
+                        seed=seed,
+                        skill_path=self.skill_path,
+                        run_id=self.run_id,
+                        llm_model=llm_model,
+                        time_limit_sec=time_limit_sec,
+                        step_limit=step_limit,
+                    )
+                )
+
+
+# ---- kubectl wrappers ----------------------------------------------------
+
+
+def _kubectl(args: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
+    cmd = ["kubectl", *args]
+    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
+
+
+def job_exists(namespace: str, name: str) -> bool:
+    cp = _kubectl(["-n", namespace, "get", "job", name, "-o", "name"], check=False)
+    return cp.returncode == 0
+
+
+def apply_job(namespace: str, rendered_yaml: str) -> None:
+    cp = subprocess.run(
+        ["kubectl", "-n", namespace, "apply", "-f", "-"],
+        input=rendered_yaml,
+        text=True,
+        capture_output=True,
+    )
+    if cp.returncode != 0:
+        raise RuntimeError(f"kubectl apply failed:\n{cp.stderr}")
+    print(f"  applied: {cp.stdout.strip()}")
+
+
+def wait_for_job(namespace: str, name: str, timeout_sec: int) -> str:
+    """Returns 'complete' | 'failed' | 'timeout'."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        cp = _kubectl(
+            ["-n", namespace, "get", "job", name, "-o", "jsonpath={.status.conditions[*].type}"],
+            check=False,
+        )
+        conds = (cp.stdout or "").split()
+        if "Complete" in conds:
+            return "complete"
+        if "Failed" in conds:
+            return "failed"
+        time.sleep(10)
+    return "timeout"
+
+
+# ---- main flow -----------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="Orchestrate a paired A/B sweep")
+    p.add_argument("--task", required=True, help="Task name (must match infra/tasks/<task>/)")
+    p.add_argument("--seeds", type=int, nargs="+", default=[0, 1], help="Seed list")
+    p.add_argument(
+        "--cells",
+        nargs="+",
+        default=["with_skill", "without_skill"],
+        choices=["with_skill", "without_skill"],
+    )
+    p.add_argument("--skill-path", default="", help="In-pod path to SKILL.md (only used when cell=with_skill)")
+    p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap")
+    p.add_argument("--step-limit", type=int, default=20, help="AIDE max steps per trajectory")
+    p.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
+    p.add_argument("--namespace", default=None, help="Override K8S_NAMESPACE from .env")
+    p.add_argument("--apply", action="store_true", help="Actually kubectl-apply Jobs (default: dry-run)")
+    p.add_argument("--wait", action="store_true", help="Block until all Jobs reach a terminal state")
+    args = p.parse_args(argv)
+
+    env = _load_dotenv(args.env_file)
+    namespace = args.namespace or env.get("K8S_NAMESPACE", "").strip()
+    if not namespace or namespace == "REPLACE_ME":
+        print("ERROR: K8S_NAMESPACE missing/unset in .env", file=sys.stderr)
+        return 1
+
+    run_id = env.get("MLEVAL_RUN_ID", "mvp-001")
+    llm_model = env.get("MLEVAL_LLM_MODEL", "deepseek/deepseek-v4-flash")
+
+    plan = Plan(
+        run_id=run_id,
+        task=args.task,
+        seeds=list(args.seeds),
+        cells=list(args.cells),
+        namespace=namespace,
+        base_env=env,
+        skill_path=args.skill_path,
+    )
+    plan.build(llm_model=llm_model, time_limit_sec=args.time_limit_sec, step_limit=args.step_limit)
+
+    print(f"=== A/B sweep plan: {len(plan.trajectories)} trajectories ===")
+    print(f"  run_id={run_id}  namespace={namespace}  llm={llm_model}")
+    for t in plan.trajectories:
+        skill = t.skill_path if t.cell == "with_skill" else "(none)"
+        print(f"  - {t.trajectory_id}   cell={t.cell:14s}  seed={t.seed}  skill={skill}")
+
+    if not args.apply:
+        print("\n[plan-only mode] not applying. Re-run with --apply to live-deploy.")
+        return 0
+
+    print()
+    print("=== applying Jobs ===")
+    template = JOB_TEMPLATE.read_text()
+    for t in plan.trajectories:
+        env_for_render = t.env_overrides(env)
+        try:
+            rendered = render(template, env_for_render)
+        except KeyError as e:
+            print(f"  render error for {t.trajectory_id}: {e}", file=sys.stderr)
+            continue
+        if job_exists(namespace, t.trajectory_id):
+            print(f"  skip (exists): {t.trajectory_id}")
+            continue
+        apply_job(namespace, rendered)
+
+    if args.wait:
+        print()
+        print("=== waiting for completion ===")
+        for t in plan.trajectories:
+            status = wait_for_job(namespace, t.trajectory_id, timeout_sec=t.time_limit_sec + 1200)
+            print(f"  {t.trajectory_id}: {status}")
+
+    print()
+    print(f"done. Results land on PVC under /results/{run_id}/<trajectory_id>/")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

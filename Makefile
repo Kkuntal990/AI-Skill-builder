@@ -29,7 +29,9 @@ IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
         docker-agent docker-push \
         config _require_env _require_ns _require_api_key _require_ghcr_token \
         k8s-secret k8s-ghcr-pull-secret k8s-apply-pvc \
-        k8s-apply-helper k8s-delete-helper
+        k8s-apply-helper k8s-delete-helper \
+        ab-plan ab-apply ab-wait \
+        analyze-trajectory aggregate-run
 
 # ---- environment ---------------------------------------------------------
 
@@ -139,6 +141,55 @@ k8s-apply-helper: _require_ns
 
 k8s-delete-helper: _require_ns
 	kubectl -n $$K8S_NAMESPACE delete pod mleval-jupyter-1gpu --ignore-not-found
+
+# ---- A/B sweep orchestration --------------------------------------------
+#
+# `ab-plan` previews trajectories without touching the cluster.
+# `ab-apply` actually applies the Jobs; `ab-wait` polls until completion.
+# Drive task/seed/skill-path via TASK, SEEDS, SKILL_PATH variables; e.g.:
+#     make ab-plan  TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md
+#     make ab-apply TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md
+
+TASK         ?= _template
+SEEDS        ?= 0 1
+SKILL_PATH   ?=
+TIME_LIMIT   ?= 3600
+STEP_LIMIT   ?= 20
+
+ab-plan: _require_ns
+	python3 -m infra.orchestrator.run_ab \
+	    --task $(TASK) --seeds $(SEEDS) \
+	    --skill-path "$(SKILL_PATH)" \
+	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT)
+
+ab-apply: _require_ns _require_api_key
+	python3 -m infra.orchestrator.run_ab \
+	    --task $(TASK) --seeds $(SEEDS) \
+	    --skill-path "$(SKILL_PATH)" \
+	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --apply
+
+ab-wait: _require_ns _require_api_key
+	python3 -m infra.orchestrator.run_ab \
+	    --task $(TASK) --seeds $(SEEDS) \
+	    --skill-path "$(SKILL_PATH)" \
+	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --apply --wait
+
+# ---- post-trajectory analyzers (local invocation; pod-side runs in entrypoint)
+#
+# Useful when iterating on the analyzer code against a pulled trajectory:
+#     make analyze-trajectory DIR=./pulled-results/mvp-001/trajectory_id_xyz
+
+analyze-trajectory:
+	@test -n "$(DIR)" || { echo "ERROR: pass DIR=./path/to/trajectory" >&2; exit 1; }
+	python3 -m mleval.analyzer.adapter_aide $(DIR)
+	python3 -m mleval.analyzer.stage_classifier $(DIR)
+	python3 -m mleval.analyzer.state_predicates $(DIR)
+
+aggregate-run:
+	@test -n "$(RUN_DIR)" || { echo "ERROR: pass RUN_DIR=./path/to/run-root" >&2; exit 1; }
+	python3 -m mleval.analyzer.aggregate $(RUN_DIR)
 
 # ---- cleanup -------------------------------------------------------------
 

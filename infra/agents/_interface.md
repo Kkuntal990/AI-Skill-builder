@@ -10,16 +10,44 @@ The Stage 2 framework runs any MLE agent in an A/B eval (with-skill vs without-s
 
 ## 1. Files every agent dir must provide
 
+Two files are mandatory; everything else is implementation freedom. What
+the contract requires is the env-var inputs (§2) and the output files (§3)
+— how the plugin organizes its internals is up to the plugin author.
+
 ```
 infra/agents/<name>/
-├── Dockerfile                # builds the runtime image
-├── entrypoint.sh             # invoked by k8s pod; reads env, runs agent, calls adapter
-├── inject_skill.{patch|py}   # build-time patch that wires skill-content injection
-├── adapter.py                # post-run: converts agent-native output → universal JSONL
-└── README.md                 # optional: agent-specific build/debug notes
+├── Dockerfile     # required — builds the runtime image
+├── entrypoint.sh  # required — reads env (§2), produces outputs (§3)
+└── ...            # whatever the plugin needs: sidecars, shims, patches, helpers
 ```
 
-The image's entrypoint is always `/workspace/entrypoint.sh` (copied into the image during build). The orchestrator only knows about env vars — never invokes the agent directly.
+The image's entrypoint is always `/workspace/entrypoint.sh` (copied into
+the image during build). The orchestrator only knows about env vars and
+output files — never invokes the agent directly.
+
+The post-trajectory work (`adapter`, `stage_classifier`, `state_predicates`)
+lives in `src/mleval/analyzer/` and runs in the container after the agent
+terminates — the entrypoint invokes `python -m mleval.analyzer.adapter_aide`
+etc. Plugins for new agents add a sibling module (e.g.,
+`src/mleval/analyzer/adapter_mlevolve.py`) when their native log format
+differs enough to need a separate adapter.
+
+The skill-injection mechanism is plugin-specific. AIDE uses
+`aide_sidecar/skill_inject.py` (monkey-patches `aide.utils.config.load_task_desc`).
+A future agent without a clean Python hook could ship `inject_skill.patch`
+applied at build time. Either is acceptable as long as the
+`MLEVAL_SKILL_PATH` env var contract from §2 is honored.
+
+The reference AIDE plugin (see [`infra/agents/aide/`](aide/)) ships:
+
+```
+infra/agents/aide/
+├── Dockerfile, entrypoint.sh    # contract requirements
+├── run_aide.py                  # shim: loads sidecar patches, calls aide.run.run
+├── job.yaml.tmpl                # envsubst-rendered per-trajectory Job
+├── aide_sidecar/                # monkey-patches: seeds, backend wrapper, skill inject, interpreter
+└── README.md
+```
 
 ---
 

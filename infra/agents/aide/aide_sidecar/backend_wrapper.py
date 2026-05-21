@@ -57,7 +57,17 @@ def _make_logged(provider_name: str, original):
     return _logged
 
 
+# Guard against upstream replacing the plain dict with a Mapping/proxy that
+# blocks item assignment. Caught early here, before a silent logging gap.
+assert isinstance(_backend.provider_to_query_func, dict), (
+    "aide.backend.provider_to_query_func is no longer a plain dict — "
+    "the sidecar patch needs a new strategy. Saw: "
+    f"{type(_backend.provider_to_query_func).__name__}"
+)
+
 # Patch every registered provider in-place. New providers added by upstream
-# will need a row here.
+# will need a row here. We only intercept dispatch *after* the top-level
+# `aide.backend.query` selects a provider — that function reads the dict
+# fresh on every call, so we don't need to also patch the dispatcher itself.
 for _provider, _orig in list(_backend.provider_to_query_func.items()):
     _backend.provider_to_query_func[_provider] = _make_logged(_provider, _orig)

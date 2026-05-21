@@ -2,8 +2,11 @@
 # GPU node. Mirrors ~/svcl-projects/vlm-self-reflection/k8s/jupyter-1gpu-test.yaml
 # but reduces to a single RTX A6000 and uses the mleval-agent image.
 #
-# Apply only when you want a live dev environment; tear down with
-# `kubectl delete pod mleval-jupyter-1gpu` when done.
+# !!! DO NOT `kubectl apply -f` this file directly. !!!
+# The image, registry, tag, and GPU type are envsubst placeholders that only
+# resolve via `make k8s-apply-helper`. Direct apply would set the literal
+# string `${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}` as the image and
+# produce a confusing ErrImagePull.
 #
 # Access: `kubectl port-forward pod/mleval-jupyter-1gpu 8888:8888`
 # Token:  `mleval-dev` (matches the --NotebookApp.token below).
@@ -126,9 +129,12 @@ spec:
       emptyDir:
         sizeLimit: 20Gi
     - name: dev-shm
+      # NOTE: /dev/shm counts against the pod's memory limit. We allocate 8Gi
+      # here (was 16Gi), leaving 24Gi for the Python heap + HF cache buffers.
+      # PyTorch DataLoader workers use shm; 8Gi covers PEFT-7B with batch<=4.
       emptyDir:
         medium: Memory
-        sizeLimit: 16Gi
+        sizeLimit: 8Gi
     - name: results
       persistentVolumeClaim:
         claimName: mleval-results

@@ -43,6 +43,8 @@ ARG AIDE_REF=main
 
 RUN git clone --depth 1 --branch "${AIDE_REF}" "${AIDE_REPO}" /opt/aide \
  && cd /opt/aide \
+ # Capture exact SHA for trajectory provenance (manifest.json reads /opt/aide/.aide_sha).
+ && git rev-parse HEAD > /opt/aide/.aide_sha \
  && awk '/^# agent requirements/{exit} {print}' requirements.txt \
         > /tmp/req_harness.txt \
  && pip install -r /tmp/req_harness.txt \

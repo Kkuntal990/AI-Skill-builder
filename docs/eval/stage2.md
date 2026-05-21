@@ -1,40 +1,56 @@
-# Stage 2 — Skill-effect A/B framework (v0.2)
+# Stage 2 — Skill-effect A/B framework (v0.3, AIDE pivot)
 
 Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `MLE-Agent` alone, and *where* does the help come from? Reusable for any `(agent, skill, task)` triple.
 
+> **History.** v0.2 (Apr 2026) targeted MLEvolve as the fixed agent on MLE-Bench tasks. Discovery in May 2026: MLEvolve hard-couples to the MLE-Bench registry (its grading-server sidecar imports `mlebench.registry` + `validate_submission`), so it can't run our custom-skill A/B tasks without registering each as an MLE-Bench competition. v0.3 pivots to AIDE (WecoAI), which is task-agnostic by design and self-scores via LLM judge. MLEvolve is retained as a v0.4 secondary track for MLE-Bench tasks only.
+
 ## Experimental design
 
-Paired with-skill / without-skill, n=3 seeds, k=3 tasks. Skill availability is the *only* difference. Paired seeds for variance reduction.
+Paired with-skill / without-skill, n=3 seeds, k=2 tasks (pilot starts with k=1, scales up post-pilot). Skill availability is the *only* difference. Paired seeds for variance reduction.
 
 Anchored to [ScienceAgentBench](https://arxiv.org/abs/2410.05080) (32.4→34.3 with-knowledge), [ML-Master](https://arxiv.org/abs/2506.16499) (with/without memory), [MLE-STAR](https://arxiv.org/abs/2506.15692) (per-block ablation). Academic precedent: [Du et al. 2026](https://arxiv.org/abs/2602.22442) — paper-only, no code.
 
-## Agent: MLEvolve (fixed)
+## Agent: AIDE (primary)
 
-[github.com/InternScience/MLEvolve](https://github.com/InternScience/MLEvolve) — #1 on MLE-Bench (61.33% Any-Medal / 12 hr). `SearchNode.stage` typed and JSON-serialized natively. Token-tracking gap at `llm/__init__.py:64-81` — patched in ~10 LOC (task #68).
+[github.com/WecoAI/aideml](https://github.com/WecoAI/aideml) — predecessor of MLEvolve's MCTS design, single-file monolithic code per node (easier AST target than MLEvolve's multi-file workspaces), LLM-judge self-scoring (no external grader, no benchmark coupling).
 
-## Task pool — locked
+Per-step structure: 2 LLM calls (code generation + judge). Up to `agent.steps` per trajectory; 20 default for pilot, 50 for full sweep.
 
-| Benchmark | Task | Time budget | PEFT relevance |
+**Gaps AIDE has and how we bridge them** (all four are runtime monkey-patches in `infra/agents/aide/aide_sidecar/`):
+
+| Gap | Bridge |
+|---|---|
+| Discards token counts (`backend/__init__.py:67`) | `backend_wrapper` re-implements provider dispatch and captures the full 5-tuple to `prompts.jsonl` |
+| Never persists prompts (logger.info only, no FileHandler) | Same wrapper writes `system_message` + `user_message` per call |
+| Never calls `random.seed()`; default temp=0.5 | `seed.py` pins `random`/`numpy`/`torch`; entrypoint passes `agent.code.temp=0` + `agent.feedback.temp=0` |
+| Interpreter deletes `working_dir` after each step | `interpreter_patch` snapshots `working_dir` to `$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/` before deletion |
+| No native skill-injection hook | `skill_inject` monkey-patches `aide.utils.config.load_task_desc` to splice `$MLEVAL_SKILL_PATH` content into task_desc |
+| Openrouter backend hardcodes `provider.order=[Fireworks]` and rejects function-calling | Image sets `OPENAI_BASE_URL=https://openrouter.ai/api/v1` so the openai backend (chat.completions path) is used |
+| `report.model=gpt-4.1` default routes to OpenAI's responses.create API | Entrypoint passes `generate_report=false`; we keep `journal.json` + `tree_plot.html` which are richer anyway |
+
+These bridges live alongside AIDE rather than forking it, so an `AIDE_REF` bump just needs a re-test of the patch surface.
+
+## Task pool (v0.3)
+
+Two tasks for the pilot; full sweep scales to three later. Task choice deferred to pilot kickoff (see open decisions below).
+
+| Source | Candidate | Time budget | PEFT relevance |
 |---|---|---|---|
-| [MLE-Dojo](https://arxiv.org/abs/2505.07782) (task data only, not their Gym) | `jigsaw-toxic-comment-classification` | **12 h** | NLP fine-tuning is canonical PEFT use case |
-| [MLRC-Bench](https://arxiv.org/abs/2504.09702) | `LLM-Merging` | **5 h** | Adapter merging is *the* PEFT workflow |
-| [SkillsBench](https://arxiv.org/abs/2602.12670) | `debug-trl-grpo` | **1 h** (CPU-only) | LoRA-on-GRPO post-training |
+| [MLRC-Bench](https://arxiv.org/abs/2504.09702) | `LLM-Merging` | **5 h** GPU | Adapter merging is the canonical PEFT workflow |
+| [SkillsBench](https://arxiv.org/abs/2602.12670) | `debug-trl-grpo` | **1 h** GPU | LoRA-on-GRPO post-training |
+| TBD (LoRA Land or another freeform PEFT task) | TBD | TBD | Decided at pilot start (#88) |
 
-**Per-task time budgets are benchmark-anchored, not arbitrary**:
+`jigsaw-toxic-comment-classification` dropped from the pool — MLE-Bench coupling made it unsuitable for the AIDE harness.
 
-- jigsaw-toxic: 12 h matches MLEvolve's SOTA-validated config; MLE-Bench standard is 24 h but jigsaw is in the `low` complexity split → converges fast; OpenAI scaling data shows diminishing returns past 24 h (medal 8.7% → 11.8% @ 24h → 100h).
-- LLM-Merging: 5 h is MLRC-Bench's own `launch.sh` default (`MAX_HOURS=5`, `MAX_STEPS=50`). Competition rule itself caps merge+eval at 1 h on a 48 GB GPU.
-- debug-trl-grpo: 1 h hard cap from SkillsBench `task.toml` (`agent.timeout_sec = 3600`). CPU-only (4 cores / 2 GB RAM / no GPU) — pure TRL source debugging, no training loop.
-
-**3 tasks × 2 conditions × 3 seeds = 18 trajectories per skill A/B. Total agent runtime per seed × variant ≈ 18 hours** (was 36 h with old 12 h universal budget).
+**3 tasks × 2 conditions × 3 seeds = 18 trajectories per full A/B; pilot is 1 task × 2 cells × 2 seeds = 4 trajectories.**
 
 ## Three-layer metric stack
 
 | Layer | Question | Tokens per A/B |
 |---|---|---|
-| **L1 outcome** | Did the skill solve the task better? | 0 (deterministic graders) |
+| **L1 outcome** | Did the skill solve the task better? | 0 (AIDE LLM-judge already part of agent budget) |
 | **L2 per-stage attribution** | *Where* did the skill help? | 0 (L2a/L2b static) — **L2c judge default OFF**, +~3M if enabled |
-| **L3 trajectory cost/effort** | Slower or more expensive? | 0 (parsed from logs) |
+| **L3 trajectory cost/effort** | Slower or more expensive? | 0 (parsed from `prompts.jsonl` + manifest) |
 
 **Boundary**: L2 is per-stage only; L3 is trajectory aggregates only.
 
@@ -49,242 +65,160 @@ Anchored to [ScienceAgentBench](https://arxiv.org/abs/2410.05080) (32.4→34.3 w
 | 5 | Tuning & ablation | 5a HPO · 5b ablation/error-analysis | [AblationBench](https://arxiv.org/abs/2507.08038), MLE-STAR |
 | 6 | Evaluation & delivery | 6a held-out eval · **6b inference/merge `[LLM]`** · 6c submission | CRISP-ML(Q), HF PEFT `merge_and_unload` |
 
-## Per-sub-stage metric vector (locked)
-
-**Universal activity** (every sub-stage): `reach` (bool), `nodes_touched` (int), `code_share` (float), `tokens` (int).
-
-**Sub-stage-specific**:
-
-| Sub-stage | Choice extraction (AST) | Quality predicate (free) | L2c judge dimension |
-|---|---|---|---|
-| 1a data-loading | `loader_type`, `num_files_loaded` | `no_load_errors` | data_source_approp |
-| 1b EDA | `inspection_types` (set) | `eda_output_present` | exploration_depth |
-| 2a cleaning/encoding | `encoders_used` (set) | `no_nan_in_features` | preprocessing_approp |
-| 2b split & validation | `split_strategy`, `n_folds` | `val_distinct_from_test` | validation_approp |
-| 2c feature-engineering | `fe_types`, `num_features_added` | — | fe_relevance |
-| 3a architecture | `model_family`, `model_name`, `num_params` | `model_loaded_clean` | architecture_approp |
-| 3b loss/objective | `loss_class`, `custom_loss_defined` | `loss_computed_clean` | loss_approp |
-| **3c adapter config** | `lora_rank`, `lora_alpha`, `target_modules`, `quantization_bits`, `use_dora` | `peft_wrap_clean` | adapter_approp |
-| 4a optimizer/scheduler | `optimizer`, `learning_rate`, `has_scheduler`, `weight_decay` | — | optimizer_approp |
-| 4b training loop | `epochs_run`, `batch_size`, `final_train_loss` | `training_completed` | training_setup_approp |
-| **4c preference-opt** | `objective` ∈ {SFT/DPO/GRPO/SimPO/KTO} | `preference_training_completed` | objective_approp |
-| 5a HPO | `hpo_method`, `num_distinct_configs` | `improvements_found` | hpo_strategy_approp |
-| 5b ablation | `error_analysis_present` | — | ablation_quality |
-| 6a held-out eval | `val_metric_name`, `val_metric_value` | `val_evaluation_present` | evaluation_rigor |
-| **6b inference / merge** | `merge_done`, `runtime_load`, `inference_script_present` | `inference_runs_clean` | inference_correctness |
-| 6c submission | `n_rows`, `n_cols`, `file_path` | `submission_present`, `format_valid` | submission_correctness |
-
 ## Layer 1 — outcome metrics
 
-Per-task native metric + normalized + Lift.
+Per-task native metric + paired Lift.
 
 | Metric | Source |
 |---|---|
-| Native (F1/AUC/REWARD/etc.) | Per-task `grade.py`, lifted from [mle-bench/grade_helpers.py](https://github.com/openai/mle-bench) (MIT) |
-| HumanRank % = `1 − p/N` | [MLE-Dojo](https://arxiv.org/abs/2505.07782) formula |
-| Lift = `score(with) − score(without)` paired | [ScienceAgentBench](https://arxiv.org/abs/2410.05080) pattern |
+| Native (val MAE / AUC / accuracy / etc.) | AIDE's per-node `metric.value` (LLM judge extracts from `Validation <metric>: <value>` stdout line) |
+| Lift = `score(with) − score(without)` paired | [ScienceAgentBench](https://arxiv.org/abs/2410.05080) pattern; `mleval.analyzer.aggregate` computes it |
 
 Headline: mean Lift over (tasks × seeds), 95% CI from paired-seed variance.
 
-## Layer 2a — sub-stage activity via PyCG-Extended (FREE)
+Per-trajectory "best metric" = max (or min) over all node metrics (depending on `maximize` flag), matching AIDE's own `journal.get_best_node()` behavior.
 
-Install via `pip install --no-deps git+https://github.com/secure-software-engineering/HeaderGen.git`. Use only `pycg_extended` (call-graph) + `framework_models` (phase mappings) — not the notebook CLI. License: HeaderGen has no LICENSE file; experiment use only.
+## Layer 2a — sub-stage activity (MVP via AST imports/calls)
 
-**Why PyCG-Extended over plain `ast.walk()`**: resolves aliased imports, method calls on typed objects (`trainer.train()` → `Trainer.train`), and transitive calls through helper functions. HeaderGen reports **95.6% precision / 95.3% recall** on Kaggle notebooks ([EMSE 2024](https://link.springer.com/article/10.1007/s10664-024-10525-w)).
+`src/mleval/analyzer/stage_classifier.py` walks each node's code with `ast.parse`, extracts top-level imports and call names, matches against a priority-ordered rule table to assign one of the 16 sub-stages. Outputs `(top_level, sub_stage, label, confidence)` per record.
 
-Integration: ~30 LOC wrapper writes each `SearchNode.code` to a temp `.py`, runs `CallGraphGenerator`, maps resolved calls → HeaderGen phase → our 6×16 taxonomy. ~50 LOC PEFT signature extensions for the 6 sub-stages HeaderGen doesn't natively cover.
-
-**Validation gate**: precision/recall against [Ramasamy 470-notebook corpus](https://link.springer.com/article/10.1007/s10664-022-10229-z) (EMSE 2023). Target ≥80% per stage. Task #70 gates the pilot.
+Pilot uses this MVP classifier. The full PyCG-Extended path (task #62) integrates [HeaderGen](https://link.springer.com/article/10.1007/s10664-024-10525-w) (95.6% precision / 95.3% recall on Kaggle notebooks) and is validated against the [Ramasamy 470-notebook corpus](https://link.springer.com/article/10.1007/s10664-022-10229-z) (target ≥80% per-stage, task #70). Pilot results are exempt from this gate; the full A/B sweep is gated on it.
 
 ## Layer 2b — choice extraction + state predicates (FREE)
 
-**Choice extraction** (~150 LOC, 16 AST visitors): PyCG gives stage tags; we still need *values* (e.g., `lora_rank=16`). Walk AST for known constructor patterns.
+**Choice extraction** is part of the MVP stage_classifier: it surfaces import names and call names per record. For pilot, "agent used LoraConfig" is captured but the *value* of `lora_rank` is not — that needs ~150 LOC of AST visitors (deferred to v0.4).
 
-**State predicates** (~80 LOC, ~5–8 per task): deterministic Python over playground dir, pattern from [AppWorld](https://arxiv.org/abs/2407.18901) + [TheAgentCompany](https://arxiv.org/abs/2412.14161). Examples: `submission_valid`, `checkpoint_saved`, `inference_runs_clean`. Authored per task (~30 min/task).
+**State predicates** are deterministic Python over `working_dirs/op_<step>/` (snapshotted by `aide_sidecar.interpreter_patch`). Generic predicates in `src/mleval/analyzer/state_predicates.py`:
+- `has_best_solution`, `at_least_one_non_buggy_node`, `best_metric_finite`, `prompts_log_present`.
 
-## Layer 2c — evidence-grounded LLM judge (BUILT but DEFAULT OFF)
+Per-task predicates in `infra/tasks/<task>/predicates.py`:
+- `submission_csv_present`, `submission_has_correct_columns`, etc.
 
-Component is built for v0.2 but **disabled by default** via config flag `enable_l2c_judge: false`. Enable only if pilot's L2a + L2b fail to discriminate with-skill vs without-skill, or stakeholder report needs choice-quality dimension.
+Pattern from [AppWorld](https://arxiv.org/abs/2407.18901) + [TheAgentCompany](https://arxiv.org/abs/2412.14161). ~30 min/task to author.
 
-Lifted `DevAsk.check` pattern from [Agent-as-a-Judge](https://github.com/metauto-ai/agent-as-a-judge/blob/main/agent_as_a_judge/module/ask.py) (Apache, ~50 LOC). Per-sub-stage judge call with n=3 majority vote, evidence-grounded (paper shows 60-70% → 88-92% human alignment when evidence is grounded vs flat).
+## Layer 2c — evidence-grounded LLM judge (DEFAULT OFF)
 
-```text
-Criterion: "Did the agent make appropriate {sub_stage} for this task?"
+Built for v0.4; default-off via config flag. Enable only if pilot's L2a + L2b fail to discriminate cells, or stakeholder report needs choice-quality dimension. Lifted `DevAsk.check` pattern from [Agent-as-a-Judge](https://github.com/metauto-ai/agent-as-a-judge/blob/main/agent_as_a_judge/module/ask.py) (Apache, ~50 LOC). Activation criteria (any apply):
 
-Evidence:
-  Task: {instruction.md}
-  Choices: {Layer 2b output}
-  Code: {relevant snippet from contributing nodes}
-  Plan: {agent's reasoning text}
-  Outcome: {quality predicates}
-
-Output: <SATISFIED> or <UNSATISFIED>, then 1-sentence reason.
-```
-
-Three samples at temperature 0.3 → `satisfied_ratio` ∈ {0/3, 1/3, 2/3, 3/3}.
-
-**Token cost when enabled**: ~5K input + ~100 output × 3 samples × ~10 touched sub-stages × 18 trajectories ≈ **~3M tokens total for full A/B**. Negligible vs the agent budget but conditional — default OFF.
-
-**Activation criteria** (enable if any apply):
-- Pilot Layer 2a stage-activity deltas are < 0.05 between with-skill / without-skill cells (no clear discrimination)
+- Pilot Layer 2a stage-activity deltas are < 0.05 between with-skill / without-skill cells
 - Pilot Layer 2b state-predicate pass-rate deltas are similarly small
-- Choice-distribution shifts (LoRA rank histogram etc.) are within noise — need quality grading to distinguish "agent made *different* choices" from "agent made *better* choices"
+- Choice-distribution shifts are within noise
 
-**Validation gate**: hand-rate 20 random pilot trajectories, ≥75% per-sub-stage agreement with human. Escalation: failed sub-stages get full Agent-as-a-Judge module set.
-
-Only the *appropriateness* axis from [Du et al. 2026](https://arxiv.org/abs/2602.22442); other 4 dims (consistency/completeness/efficiency/risk) revisited in v0.3 if signal is noisy.
+**Token cost when enabled**: ~3M total for full A/B. Conditional, not default.
 
 ## Layer 3 — trajectory cost/effort
 
-Wall-clock, total prompt/completion/total tokens, LLM-call count, error count (sum of `is_buggy=True`), skill-citation rate (regex), score-vs-time curve ([RE-Bench](https://arxiv.org/abs/2411.15114) methodology).
+Wall-clock (from manifest), total in/out tokens (sum of `prompts.jsonl`), error count (records with `output.errors`), per-node `req_time_sec`. Rolled up by `mleval.analyzer.aggregate`.
+
+Skill-citation rate (regex match of skill text in node.code) — implemented in v0.4.
 
 ## What we report per A/B cell
 
-1. **Outcome Lift** (L1) — 1 number per task + overall, 95% CI
-2. **Top-level stage activity delta** — 6 bars with-vs-without
-3. **Sub-stage drill-down** — collapsible; PEFT-bold rows surfaced by `|Δ|`; choice histograms; judge `satisfied_ratio` deltas
-4. **Trajectory cost** (L3) — wall-clock, tokens, errors
+Output of `mleval.analyzer.aggregate` is `report.{json,md}` with:
 
-## Token budget
+1. **Outcome Lift** (L1) — paired with−without per (task, seed), mean + 95% CI
+2. **Per-trajectory table** — task, cell, seed, status, best metric, tokens, errors, predicates passed
+3. **Stage activity counts** (L2a) — count of records per sub_stage per cell
+4. **State predicate pass rates** (L2b) — per-trajectory + cell mean
 
-**Honest range, not point estimate.** No published MLEvolve token-cost data exists. Anchors from peers:
+## Reproducibility — what we control and what we don't
 
-| Source | Reported |
+Controlled:
+- `random` / `numpy.random` (legacy + `default_rng`) / `torch` seeds from `$SEED` (`aide_sidecar.seed`)
+- `PYTHONHASHSEED`
+- LLM temperature pinned to 0
+- AIDE git SHA captured in manifest (`/opt/aide/.aide_sha`)
+- Image digest captured at apply time (manifest fills via pod-side env)
+
+NOT controlled (documented limitations):
+- Network-latency-driven retry counts inside AIDE's `backoff_create` change the number of `random.*` calls between steps, which then shifts what `random.shuffle(pkgs)` returns inside AIDE's `_prompt_environment`. Bounded *within* a trajectory; can diverge *across* paired runs. Worst case: temperature-0 LLM responses still differ between cells.
+- AIDE's interpreter spawns a subprocess; its own RNG state is not seeded by our patches.
+- Token undercount: backoff retries inside a backend's `query` are merged into a single sidecar record. L3 token totals systematically undercount actual spend by O(few %).
+
+## Infrastructure
+
+| Concern | Tool |
 |---|---|
-| AIDE + o1-preview @ 24h on MLE-Bench ([arXiv:2410.07095](https://arxiv.org/abs/2410.07095)) | ~1.9M total tokens/task |
-| AIDE + GPT-4-Turbo @ 24h on Weco-Kaggle ([arXiv:2502.13138](https://arxiv.org/abs/2502.13138)) | ~150K–300K tokens/task |
-| AIRA-dojo operator completion tokens ([arXiv:2507.02554](https://arxiv.org/abs/2507.02554) Fig 10) | ~2× AIDE's completion-token usage |
-| AutoMLGen MCGS step cap ([arXiv:2510.08511](https://arxiv.org/abs/2510.08511) § A.3) | 500-step total simulation budget |
+| Orchestration | `infra/orchestrator/run_ab.py` (pure stdlib, ~250 LOC) |
+| k8s Job lifecycle | envsubst-rendered `infra/agents/aide/job.yaml.tmpl` per trajectory |
+| Image | `ghcr.io/kkuntal990/mleval-agent:dev` (built on amusing) |
+| Storage | `mleval-results` PVC, 1Ti CephFS RWX, `rook-cephfs` storage class |
+| Cluster | UCSD Nautilus NRP, namespace `ecepxie`, 1× RTX A6000 per trajectory |
+| Local analyzer | `src/mleval/analyzer/` (pip-installable as part of `mleval` package) |
 
-**Per-task token ranges** (scaled to our per-task time budgets):
-
-| Task | Time | Per-trajectory token range |
-|---|---|---|
-| jigsaw-toxic (12 h, GPU) | 12 h | **1.5M – 3M** |
-| LLM-Merging (5 h, GPU; 50-step cap) | 5 h | **0.6M – 1.5M** |
-| debug-trl-grpo (1 h, CPU) | 1 h | **0.2M – 0.5M** (no training; debug only) |
-
-**Total token range per phase**:
-
-| Phase | Trajectories | Total token range | Notes |
-|---|---|---|---|
-| Pilot (jigsaw × 2 cells × 2 seeds) | 4 | **6M – 12M** | **Primary deliverable: measure actual** |
-| Full A/B (all 3 tasks × 2 × 3), L2c OFF | 18 | **14M – 30M** | Default config |
-| Full A/B with L2c enabled | 18 | 14M – 30M + ~3M | Only if pilot inconclusive |
-| Reusability (opt) | 18 | similar | — |
-
-**Pilot's primary deliverable**: empirical tokens/trajectory for jigsaw under our specific MLEvolve config. Full-sweep budget locked only after pilot measurement.
-
-**Token-reduction levers if pilot tracks high** (cited):
-
-| Lever | Source | Expected cut |
-|---|---|---|
-| `use_global_memory: false` | (our analysis) | ~30% input |
-| `agent.steps: 30` (default 50) | AutoMLGen 500-step cap | ~40% |
-| Per-task time budget (already applied) | MLE-Bench / MLRC-Bench / SkillsBench configs | ~50% vs 12 h universal |
-| `improve_failure_depth ≤ 5` | AIRA-dojo "10 nodes or 12h" debug cap | ~20% |
-| `max_tokens` per call: 8K out / 50K in | MLE-Dojo § 5.3 hard caps | ~30%/call |
-| Data subsampling during refinement | MLE-STAR Appendix F | ~30-50% on training-bound nodes |
-
-Dollar cost computable on demand from current model pricing × measured tokens. Token budget is the primary metric since model choice is swappable.
-
-**Pilot's primary deliverable**: empirical tokens/trajectory for our specific config (model + agent.steps + memory + parallelism). Full-sweep budget locked only after pilot measurement.
-
-**Token-reduction levers if pilot tracks high** (cited):
-
-| Lever | Source | Expected cut |
-|---|---|---|
-| `use_global_memory: false` | (our analysis) | ~30% input |
-| `agent.steps: 30` (default 50) | AutoMLGen 500-step cap | ~40% |
-| `agent.time_limit: 21600` (6h vs 12h) | KompeteAI 6h default | ~30-40% |
-| `improve_failure_depth ≤ 5` | AIRA-dojo "10 nodes or 12h" debug cap | ~20% |
-| `max_tokens` per call: 8K out / 50K in | MLE-Dojo § 5.3 hard caps | ~30%/call |
-| Data subsampling during refinement | MLE-STAR Appendix F | ~30-50% on training-bound nodes |
-
-Dollar cost computable on demand from current model pricing × measured tokens. Token budget is the primary metric since model choice is swappable.
-
-## Infrastructure — pure Python, 2 external deps
-
-No eval-framework dependency (verified [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai), [OpenAI Evals](https://github.com/openai/evals), [Bloom](https://github.com/safety-research/bloom) — all overkill at 18 trajectories; no production-grade ML-pipeline-stage tracker exists per deep-search, closest is paper-only [Du et al. 2026](https://arxiv.org/abs/2602.22442)).
-
-**Dependencies**: `pycg_extended` + `framework_models` from HeaderGen (pip --no-deps); vendored code lifts from `agent-as-a-judge/module/ask.py` (Apache) and `mle-bench/mlebench/grade_helpers.py` (MIT).
-
-**LOC budget**: ~920 hand-written (orchestrator 120 + adapters 120 + agent integration 60 + trace adapter 50 + L2a 80 + L2b 230 + L2c 150 + L3 30 + reporter 80).
+**LOC budget** (current): ~70 sidecar + ~600 analyzer + ~250 orchestrator + ~80 Dockerfile/entrypoint + ~140 Job template. Plus task/skill scaffolds. Well under the v0.2 "~920 hand-written" estimate.
 
 ## File layout
 
+See `CLAUDE.md` "Repo layout" section for the full tree. Stage-2-specific:
+
 ```
-ai-skill-eval-framework/
-├── eval_runner.py                       # main A/B orchestrator
-├── config.yaml                          # MLEvolve config + model + budgets
-├── tasks/{jigsaw-toxic, llm-merging, debug-trl-grpo}/
-│   └── {task.yaml, instruction.md, grade.py, Dockerfile, checkpoints.py}
-├── skills/peft-tuning/                  # SKILL.md + scripts + references
-├── adapters/{mle_bench, mlrc_bench, skillsbench}_score.py
-├── agents/mlevolve/
-│   └── {run.sh, inject_skill.py, token_patch.py, trace_adapter.py}
-├── analyzer/
-│   ├── layer1_outcome.py
-│   ├── layer2a_stage_activity.py        # PyCG-Extended wrapper
-│   ├── layer2b_choice_extractors.py     # 16 AST visitors
-│   ├── layer2b_state_predicates.py
-│   ├── layer2c_judge.py                 # DevAsk-pattern majority-vote
-│   ├── layer3_trajectory_cost.py
-│   ├── signatures/{base.py, peft.py}    # per-skill overlays
-│   └── judges/peft.py                   # per-skill judge prompt
-├── reporter/make_report.py
-└── runs/<run_id>/<task>/<variant>/<seed>/
-    └── {tree.json, tokens.jsonl, submission/, outcome.json, stages.json, judge.json, cost.json}
+src/mleval/analyzer/        adapter_aide, stage_classifier, state_predicates, aggregate
+infra/agents/aide/          Dockerfile, entrypoint.sh, run_aide.py, job.yaml.tmpl, aide_sidecar/
+infra/tasks/<task>/         instruction.md, predicates.py, data/
+infra/skills/<skill>/       SKILL.md, references/
+infra/orchestrator/         run_ab.py
+deploy/k8s/                 pvc.yaml, helper-jupyter-1gpu.yaml, secret.template.yaml
 ```
 
 ## Execution methodology
 
-**MLEvolve**: `bash run_single_task.sh <EXP_ID> <DATASET_DIR>`. Config sets model, steps, time_limit, `use_global_memory`. Output → `runs/<ts>_<exp_id>/`.
+See [`ops.md`](./ops.md) for the operational playbook (pre-flight, staging data, running the sweep, pulling results, aggregating).
 
-**A/B orchestration**: paired seeds, identical config except skill flag. Resumable on failure.
+**Quick reference**:
 
-**Skill injection**: single hook into `MLEvolve/agents/prompts/impl_guideline.py::get_impl_guideline()` (lines 28-60) — propagates to every operator. Plus file-mount at `/skills/{name}/`.
-
-**Token logging patch**: ~10 LOC accumulator in `llm/__init__.py::query()` writes JSONL to `runs/<ts>_<exp_id>/tokens.jsonl`. Schema mirrors [AIRA-dojo `operators_metrics.usage`](https://github.com/facebookresearch/aira-dojo/blob/main/docs/LOGGING.md).
+```bash
+make ab-plan  TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md   # preview
+make ab-apply TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md   # live
+make ab-wait  TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md   # block
+# pull results from PVC, then:
+make aggregate-run RUN_DIR=./pulled-results/$MLEVAL_RUN_ID
+```
 
 ## Extensibility
 
-Skill-agnostic by design. Per-skill bits live in composable overlays.
+Plugin-shaped by design. Per-skill / per-task / per-agent bits live in composable overlays.
 
 | Extension axis | Cost per addition |
 |---|---|
-| New skill (e.g., `vllm-serving`) | `skills/<name>/` + `analyzer/signatures/<name>.py` (~30 LOC) + `analyzer/judges/<name>.py` (~50 LOC) |
-| New task | `tasks/<id>/` (~50 LOC + data) |
-| New benchmark | `adapters/<bench>_score.py` (~40 LOC) |
-| New MLE agent (e.g., AIDE) | `agents/<agent>/` (~150 LOC) |
+| New skill | `infra/skills/<name>/SKILL.md` (~50 lines) + optional `references/` |
+| New task | `infra/tasks/<name>/{instruction.md, predicates.py, data/}` (~100 LOC + data staging) |
+| New agent | `infra/agents/<name>/{Dockerfile, entrypoint.sh, ...}` + `src/mleval/analyzer/adapter_<name>.py` (~300 LOC) |
+| New benchmark adapter | thin wrapper around the agent's native metric (~40 LOC) |
 
-Filesystem contracts (`tree.json`, `tokens.jsonl`, `submission/`) are the seams between agent / analyzer / reporter — nothing else couples.
+Filesystem contracts (`trajectory.jsonl`, `prompts.jsonl`, `manifest.json`, `state.json`, `working_dirs/op_<step>/`) are the seams between agent / analyzer / reporter — nothing else couples.
 
-## Implementation roadmap
+## Open decisions before pilot kickoff
 
-| Phase | Goal | Token budget | Tasks |
-|---|---|---|---|
-| **Phase 0** — Classifier validation | ≥80% precision/recall vs Ramasamy 470-corpus | 0 (no agent runs) | #62 → #70 |
-| **Phase 1** — Pilot | End-to-end + token calibration (L2c off) | 2M – 16M (measure actual) | #61, #63, #64, #68 → #65 |
-| **Phase 2** — Full peft A/B | Headline numbers, ship decision (L2c off unless pilot inconclusive) | 9M – 75M, +~3M if L2c enabled | #66 (+#71 if enabled) |
-| **Phase 3** — Reusability (opt) | Port to 2nd agent + 2nd skill | similar to Phase 2 | #67 |
+1. **Pilot task** (#88) — choose one of:
+   - AIDE bundled example (`house-prices`) — proves harness, not PEFT-relevant
+   - `debug-trl-grpo` from SkillsBench — PEFT-relevant, needs staging
+   - LoRA Land sub-task — PEFT-direct, published benchmark, needs licensing check
+2. **Pilot skill** — author or reuse an `infra/skills/peft-tuning/SKILL.md`. Skill-builder agent in `agents/ai-skill-builder/` is the canonical author tool.
+3. **AIDE pin** — replace `AIDE_REF=main` with a SHA before the pilot.
 
-## Open decisions
+## Roadmap
 
-- **Model**: DeepSeek V4 Pro (recommend) vs Gemini-3-Pro (MLEvolve's SOTA result)
-- **Pilot task**: `jigsaw-toxic` (1 task × 2 cells × 2 seeds = 4 trajectories)
-- **L2c activation** (if needed post-pilot): hand-rate 20 trajectories first, ≥75% per-sub-stage agreement before relying on it
+| Phase | Goal | Tasks |
+|---|---|---|
+| **Phase 0** — pre-flight | Cluster access, image, sidecar smoke | ✅ done (#72, #73, #84, #86) |
+| **Phase 1** — pilot infra | All analyzers, orchestrator, templates, doc rewrite | ✅ done (#61, #62 MVP, #63, #64, #68, #74-#77 setup, #89) |
+| **Phase 2** — first pilot run | 1 task × 2 cells × 2 seeds = 4 trajectories | #65, #77 (gated on user approval) |
+| **Phase 3** — full PEFT A/B | 2 tasks × 2 cells × 3 seeds = 12 trajectories | #79, #80 |
+| **Phase 4** — reusability | Port to MLEvolve (v0.4) + 2nd skill | #67 |
+| **Phase 5** — classifier upgrade | PyCG-Extended replacing MVP rule table | #62, #70 |
+| **Phase 6** — L2c judge | Conditional on pilot inconclusive | #71 |
 
 ## Sources
 
 **Pipeline-stage taxonomy & ML-code analysis**: [ScienceAgentBench](https://arxiv.org/abs/2410.05080), [HeaderGen](https://arxiv.org/abs/2301.04419) ([repo](https://github.com/secure-software-engineering/HeaderGen), [EMSE 2024](https://link.springer.com/article/10.1007/s10664-024-10525-w)), [PyCG](https://arxiv.org/abs/2103.00587) ([repo](https://github.com/vitsalis/PyCG), Apache-2.0), [DataSciBench](https://arxiv.org/abs/2502.13897), [Ramasamy EMSE 2023](https://link.springer.com/article/10.1007/s10664-022-10229-z).
 
-**MLE-agent scaffolds**: [MLEvolve](https://github.com/InternScience/MLEvolve), [AutoMLGen](https://arxiv.org/abs/2510.08511), [AIDE](https://arxiv.org/abs/2502.13138), [AIRA-dojo](https://arxiv.org/abs/2507.02554), [ML-Master](https://arxiv.org/abs/2506.16499), [MLE-STAR](https://arxiv.org/abs/2506.15692).
+**MLE-agent scaffolds**: [AIDE](https://github.com/WecoAI/aideml), [AIDE paper](https://arxiv.org/abs/2502.13138), [MLEvolve](https://github.com/InternScience/MLEvolve) (archived), [AutoMLGen](https://arxiv.org/abs/2510.08511), [AIRA-dojo](https://arxiv.org/abs/2507.02554), [ML-Master](https://arxiv.org/abs/2506.16499), [MLE-STAR](https://arxiv.org/abs/2506.15692), [RD-Agent](https://github.com/microsoft/RD-Agent).
 
 **Eval methodology**: [Anthropic Demystifying Evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), [AppWorld](https://arxiv.org/abs/2407.18901), [TheAgentCompany](https://arxiv.org/abs/2412.14161), [Agent-as-a-Judge](https://arxiv.org/abs/2410.10934) ([repo](https://github.com/metauto-ai/agent-as-a-judge)), [Du et al. 2026](https://arxiv.org/abs/2602.22442), [RE-Bench](https://arxiv.org/abs/2411.15114), [AblationBench](https://arxiv.org/abs/2507.08038).
 
-**Benchmarks**: [MLE-Dojo](https://arxiv.org/abs/2505.07782), [MLE-Bench](https://arxiv.org/abs/2410.07095), [MLRC-Bench](https://arxiv.org/abs/2504.09702), [SkillsBench](https://arxiv.org/abs/2602.12670).
+**Benchmarks**: [MLRC-Bench](https://arxiv.org/abs/2504.09702), [SkillsBench](https://arxiv.org/abs/2602.12670), [MLE-Bench](https://arxiv.org/abs/2410.07095) (used by archived MLEvolve track), [MLE-Dojo](https://arxiv.org/abs/2505.07782) (jigsaw source — task dropped).
 
-**PEFT pipeline**: [HF TRL](https://huggingface.co/docs/trl), [HF PEFT](https://github.com/huggingface/peft), [Raschka 2025](https://magazine.sebastianraschka.com/p/state-of-llms-2025).
+**PEFT pipeline**: [HF TRL](https://huggingface.co/docs/trl), [HF PEFT](https://github.com/huggingface/peft), [Raschka 2025](https://magazine.sebastianraschka.com/p/state-of-llms-2025), [LoRA Land](https://arxiv.org/abs/2405.00732).
 
-**Infrastructure**: [MLE-Bench repo](https://github.com/openai/mle-bench), [AIRA-dojo LOGGING.md](https://github.com/facebookresearch/aira-dojo/blob/main/docs/LOGGING.md).
+**Infrastructure**: [Nautilus NRP docs](https://nrp.ai/documentation), [AIRA-dojo LOGGING.md](https://github.com/facebookresearch/aira-dojo/blob/main/docs/LOGGING.md).
