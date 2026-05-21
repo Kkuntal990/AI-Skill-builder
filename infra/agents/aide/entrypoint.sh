@@ -37,6 +37,21 @@ require OPENROUTER_API_KEY
 mkdir -p "$MLEVAL_OUTPUT_DIR" "$MLEVAL_OUTPUT_DIR/agent_logs"
 export MLEVAL_PROMPTS_LOG="$MLEVAL_OUTPUT_DIR/prompts.jsonl"
 
+# Route AIDE's openai backend at OpenRouter. With OPENAI_BASE_URL set AND the
+# model not matching gpt-*/o*/codex, AIDE picks `use_chat_api=true` which uses
+# chat.completions.create (OpenRouter-compatible). Without this, AIDE falls
+# back to `responses.create` which is OpenAI-only and 401s.
+# See aide/backend/backend_openai.py:74.
+export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}"
+export OPENAI_API_KEY="${OPENAI_API_KEY:-$OPENROUTER_API_KEY}"
+
+# AIDE also has a `generate_report=true` default that calls journal2report
+# with `report.model=gpt-4.1`. Since gpt-4.1 matches the openai-model regex,
+# it bypasses the chat-api branch and hits responses.create → 401. We disable
+# the report (we have journal.json + tree_plot.html which are enough); to
+# re-enable, override `report.model` to a non-openai slug in the run cmd.
+GENERATE_REPORT="${GENERATE_REPORT:-false}"
+
 START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 START_EPOCH=$(date -u +%s)
 
@@ -53,14 +68,11 @@ timeout --foreground --signal=TERM --kill-after=10s "${TIME_LIMIT_SECONDS}s" \
         workspace_dir="$MLEVAL_OUTPUT_DIR/aide_workspace" \
         exp_name="$MLEVAL_TRAJECTORY_ID" \
         agent.code.model="$MLEVAL_LLM_MODEL" \
-        agent.code.base_url="https://openrouter.ai/api/v1" \
-        agent.code.api_key="$OPENROUTER_API_KEY" \
         agent.code.temp=0 \
         agent.feedback.model="$MLEVAL_LLM_MODEL" \
-        agent.feedback.base_url="https://openrouter.ai/api/v1" \
-        agent.feedback.api_key="$OPENROUTER_API_KEY" \
         agent.feedback.temp=0 \
         agent.steps="$STEP_LIMIT" \
+        generate_report="$GENERATE_REPORT" \
         2>&1 | tee "$MLEVAL_OUTPUT_DIR/agent_logs/run.log"
 AGENT_EXIT=${PIPESTATUS[0]}
 set -e

@@ -78,6 +78,18 @@ spec:
         - name: PYTORCH_CUDA_ALLOC_CONF
           value: "expandable_segments:True"
 
+        # Route AIDE's openai backend at OpenRouter (see entrypoint.sh comment).
+        # The openai backend uses chat.completions.create when OPENAI_BASE_URL
+        # is set AND the model name isn't gpt-*/o*/codex — exactly our case.
+        - name: OPENAI_BASE_URL
+          value: "https://openrouter.ai/api/v1"
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mleval-secrets
+              key: openrouter-api-key
+              optional: true
+
         # Optional secrets — created via `kubectl apply -f secret.template.yaml`
         # after substituting real values. Marked optional so the pod still
         # starts when the secret hasn't been provisioned yet.

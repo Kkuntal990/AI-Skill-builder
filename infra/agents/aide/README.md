@@ -25,23 +25,30 @@ Defaults from `.env`: `AIDE_REPO=https://github.com/WecoAI/aideml.git`, `AIDE_RE
 
 ## Run (inside a pod)
 
+The image's helper-pod env exports `OPENAI_BASE_URL=https://openrouter.ai/api/v1`
+and `OPENAI_API_KEY=$OPENROUTER_API_KEY` so AIDE's openai backend uses
+chat.completions.create (OpenRouter-compatible) instead of responses.create
+(OpenAI-only). Models matching `gpt-*/o*/codex` will still go to api.openai.com.
+
 ```bash
 python /workspace/run_aide.py \
     data_dir=/path/to/task/data \
     desc_file=/path/to/task/instruction.md \
     agent.code.model=$MLEVAL_LLM_MODEL \
-    agent.code.base_url=https://openrouter.ai/api/v1 \
-    agent.code.api_key=$OPENROUTER_API_KEY \
     agent.code.temp=0 \
     agent.feedback.model=$MLEVAL_LLM_MODEL \
-    agent.feedback.base_url=https://openrouter.ai/api/v1 \
-    agent.feedback.api_key=$OPENROUTER_API_KEY \
     agent.feedback.temp=0 \
     agent.steps=20 \
+    generate_report=false \
     log_dir=/results/$MLEVAL_RUN_ID/$MLEVAL_TRAJECTORY_ID/aide_logs \
     workspace_dir=/results/$MLEVAL_RUN_ID/$MLEVAL_TRAJECTORY_ID/aide_workspace \
     exp_name=$MLEVAL_TRAJECTORY_ID
 ```
+
+`generate_report=false` skips AIDE's journal2report step, which would call
+the `report.model=gpt-4.1` default through OpenAI's `responses.create` and
+401 against OpenRouter. To enable, override `report.model` to a non-openai
+slug (e.g. `deepseek/deepseek-v4-flash`) as well.
 
 The entrypoint script wires all of this from env vars in a Job pod.
 

@@ -1,14 +1,17 @@
-"""Capture every aide.backend.query call to prompts.jsonl.
+"""Capture every aide.backend.* LLM call to prompts.jsonl.
 
-AIDE's `backend/__init__.py::query` discards the 5-tuple returned by the
-provider-specific query funcs (in_tokens, out_tokens, req_time, info), so
-upstream there is no record of prompts or token usage. This wrapper
-re-implements the dispatch but persists each call as one JSON line under
-$MLEVAL_PROMPTS_LOG (default `./prompts.jsonl`).
+Why patch provider_to_query_func entries instead of `aide.backend.query`:
+`aide.agent` does `from .backend import query` at module import time, which
+captures the ORIGINAL `query` reference. By the time our sidecar runs, that
+binding is already frozen. But the original `query` looks up
+`provider_to_query_func[provider]` at call time, so patching the dict
+entries reaches every code path (agent, journal2report, future callers).
 
-Must be imported BEFORE aide.agent / aide.run — those modules do
-`from .backend import query` at import time, binding whatever `query` is
-visible on `aide.backend` at that moment.
+This file also disables AIDE's hardcoded `order=["Fireworks"]` in the
+openrouter backend — it broke when serving DeepSeek (not on Fireworks).
+Preferred path is to set OPENAI_BASE_URL=https://openrouter.ai/api/v1 in
+the env so the openai backend is used; this still supports the openrouter
+backend as a fallback.
 """
 
 from __future__ import annotations
@@ -24,58 +27,37 @@ _LOG_PATH = Path(os.environ.get("MLEVAL_PROMPTS_LOG", "./prompts.jsonl"))
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _wrapped_query(
-    system_message,
-    user_message,
-    model,
-    temperature=None,
-    max_tokens=None,
-    func_spec=None,
-    **model_kwargs,
-):
-    """Mirror of aide.backend.query that logs the full 5-tuple before discarding."""
-    started = time.time()
+def _make_logged(provider_name: str, original):
+    """Return a wrapper around a provider-specific query func that logs each call."""
 
-    # Re-implement aide.backend.query's body so we can grab the tuple.
-    # See /opt/aide/aide/backend/__init__.py:34-74 (kept in sync there).
-    model_kwargs = model_kwargs | {
-        "model": model,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    provider = _backend.determine_provider(model)
-    query_func = _backend.provider_to_query_func[provider]
+    def _logged(system_message=None, user_message=None, func_spec=None, **model_kwargs):
+        started = time.time()
+        output, req_time, in_tok, out_tok, info = original(
+            system_message=system_message,
+            user_message=user_message,
+            func_spec=func_spec,
+            **model_kwargs,
+        )
+        record = {
+            "ts": started,
+            "provider": provider_name,
+            "model": model_kwargs.get("model"),
+            "system_message": system_message,
+            "user_message": user_message,
+            "output": output if isinstance(output, str) else json.dumps(output, default=str),
+            "in_tokens": in_tok,
+            "out_tokens": out_tok,
+            "req_time_sec": req_time,
+            "func_spec_name": getattr(func_spec, "name", None),
+        }
+        with _LOG_PATH.open("a") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        return output, req_time, in_tok, out_tok, info
 
-    compiled_system = (
-        _backend.compile_prompt_to_md(system_message) if system_message else None
-    )
-    compiled_user = (
-        _backend.compile_prompt_to_md(user_message) if user_message else None
-    )
-
-    output, req_time, in_tok, out_tok, info = query_func(
-        system_message=compiled_system,
-        user_message=compiled_user,
-        func_spec=func_spec,
-        **model_kwargs,
-    )
-
-    record = {
-        "ts": started,
-        "model": model,
-        "provider": provider,
-        "system_message": compiled_system,
-        "user_message": compiled_user,
-        "output": output if isinstance(output, str) else json.dumps(output, default=str),
-        "in_tokens": in_tok,
-        "out_tokens": out_tok,
-        "req_time_sec": req_time,
-        "func_spec_name": getattr(func_spec, "name", None),
-    }
-    with _LOG_PATH.open("a") as f:
-        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-
-    return output
+    return _logged
 
 
-_backend.query = _wrapped_query
+# Patch every registered provider in-place. New providers added by upstream
+# will need a row here.
+for _provider, _orig in list(_backend.provider_to_query_func.items()):
+    _backend.provider_to_query_func[_provider] = _make_logged(_provider, _orig)
