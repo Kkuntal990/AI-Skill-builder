@@ -47,8 +47,11 @@ spec:
       volumeMounts:
         - name: cache-volume
           mountPath: /cache
+        # Notebook scratch. NOT mounted at /workspace because the image's
+        # /workspace contains the AIDE sidecar + run_aide.py shim + the editable
+        # mleval install — mounting an emptyDir there would mask all of it.
         - name: workspace
-          mountPath: /workspace
+          mountPath: /scratch
         - name: dev-shm
           mountPath: /dev/shm
         # Shared trajectory output PVC (CephFS RWX). Same mount path the Job

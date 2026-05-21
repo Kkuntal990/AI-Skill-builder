@@ -47,6 +47,13 @@ RUN git clone --depth 1 --branch "${AIDE_REF}" "${AIDE_REPO}" /opt/aide \
         > /tmp/req_harness.txt \
  && pip install -r /tmp/req_harness.txt \
  && pip install --no-deps . \
+ # Harness deps that AIDE imports but ships in the kitchen-sink section of
+ # requirements.txt (caught by audit: aide imports `backoff`, `plotly`,
+ # `dotenv` but the awk-strip put them below the divider).
+ && pip install \
+        backoff \
+        plotly \
+        python-dotenv \
  # Curated agent-side stack for PEFT trajectories. Versions left unpinned so
  # pip resolves against torch 2.7.1 from the base image.
  && pip install \
