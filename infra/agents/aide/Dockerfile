@@ -41,8 +41,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG AIDE_REPO=https://github.com/WecoAI/aideml.git
 ARG AIDE_REF=main
 
-RUN git clone --depth 1 --branch "${AIDE_REF}" "${AIDE_REPO}" /opt/aide \
- && cd /opt/aide \
+RUN mkdir -p /opt/aide && cd /opt/aide \
+ # `git clone --branch` only accepts branch/tag names, not SHAs — pinning
+ # to a SHA needs a two-step init+fetch. Works for branch names too because
+ # `git fetch origin <ref>` resolves both.
+ && git init -q \
+ && git remote add origin "${AIDE_REPO}" \
+ && git fetch --depth 1 origin "${AIDE_REF}" \
+ && git checkout -q FETCH_HEAD \
  # Capture exact SHA for trajectory provenance (manifest.json reads /opt/aide/.aide_sha).
  && git rev-parse HEAD > /opt/aide/.aide_sha \
  && awk '/^# agent requirements/{exit} {print}' requirements.txt \
