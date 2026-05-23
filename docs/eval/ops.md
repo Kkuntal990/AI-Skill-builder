@@ -2,6 +2,31 @@
 
 How to operate the Stage 2 A/B framework on UCSD Nautilus NRP. Pair with [`stage2.md`](./stage2.md) for the methodology and [`infra/agents/_interface.md`](../../infra/agents/_interface.md) for the contract.
 
+## NRP cluster policies (must read)
+
+Source: <https://nrp.ai/documentation/userdocs/start/policies/>. Violating these can get the namespace banned. The Job templates already encode compliance; the table here exists so changes don't drift.
+
+| Policy | How we comply |
+|---|---|
+| **CPU/Memory limits must stay within 20% of requests** (== request when running >100 pods) | Both templates use `request == limit`. |
+| **No more than 4 pods may simultaneously have CPU usage <20% of requested *or* memory usage <20% of requested** | Pilot template uses the exempt tier (≤1 CPU + ≤2 GiB) → enforcement doesn't apply. Full PEFT template sized so training fills the resource ask. |
+| **GPU utilization must exceed 40%, ideally near 100%** | CPU-only tasks (tabular pilots) use `--profile cpu` → no GPU requested. GPU is only allocated for tasks that actually use CUDA. |
+| **CPU-only pods should add `priorityClassName: opportunistic` + node anti-affinity to GPU nodes** | `job_cpu.yaml.tmpl` has both. |
+| **Interactive pods destroyed after 6h** | `mleval-jupyter-1gpu` is short-lived; redeploy via `make k8s-apply-helper` and tear down between sweeps. |
+| **`sleep infinity` / non-terminating commands = ban** | Entrypoint runs AIDE then exits; no sleeps. |
+| **A100 default quota = 0** | We target `rtxa6000` only (set via `GPU_TYPE` in `.env`). A100 needs a separate request. |
+
+When in doubt: shrink CPU/RAM to the exempt tier (1 CPU / 2 GiB) and drop the GPU. That's always safe.
+
+## Choosing a profile
+
+| Profile | Use when | Resources |
+|---|---|---|
+| `cpu` (default for pilots) | Task does NOT use CUDA (tabular, small NLP, smoke runs) | 1 CPU / 2 GiB, no GPU, opportunistic priority, anti-affinity to GPU nodes |
+| `gpu` (default for `make ab-*`) | Task fine-tunes / runs CUDA models | 1× rtxa6000 + 4 CPU / 16 GiB |
+
+Override per-invocation: `make ab-plan PROFILE=cpu TASK=house-prices ...`.
+
 ## One-time setup (per fresh `.env`)
 
 ```bash

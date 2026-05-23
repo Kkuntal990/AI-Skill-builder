@@ -36,7 +36,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-JOB_TEMPLATE = REPO_ROOT / "infra/agents/aide/job.yaml.tmpl"
+JOB_TEMPLATES = {
+    "gpu": REPO_ROOT / "infra/agents/aide/job.yaml.tmpl",
+    "cpu": REPO_ROOT / "infra/agents/aide/job_cpu.yaml.tmpl",
+}
 
 
 # ---- env loading ----------------------------------------------------------
@@ -90,9 +93,11 @@ class Trajectory:
 
     @property
     def trajectory_id(self) -> str:
-        # k8s name constraints: lowercase + -, <= 63 chars.
+        # k8s Job names must be DNS-1123 labels: lowercase alphanumeric + '-'
+        # only (no '_'), <= 63 chars.
         safe_task = re.sub(r"[^a-z0-9-]", "-", self.task.lower())[:30]
-        return f"{self.run_id}-{safe_task}-{self.cell}-s{self.seed}".lower()
+        safe_cell = self.cell.replace("_", "-")
+        return f"{self.run_id}-{safe_task}-{safe_cell}-s{self.seed}".lower()
 
     def env_overrides(self, base_env: dict[str, str]) -> dict[str, str]:
         out = dict(base_env)
@@ -199,6 +204,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--skill-path", default="", help="In-pod path to SKILL.md (only used when cell=with_skill)")
     p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap")
     p.add_argument("--step-limit", type=int, default=20, help="AIDE max steps per trajectory")
+    p.add_argument(
+        "--profile",
+        choices=["cpu", "gpu"],
+        default="gpu",
+        help="Job profile. 'gpu' = 1×rtxa6000 + 4cpu/16Gi (PEFT). 'cpu' = 1cpu/2Gi NRP-exempt (tabular pilots).",
+    )
     p.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     p.add_argument("--namespace", default=None, help="Override K8S_NAMESPACE from .env")
     p.add_argument("--apply", action="store_true", help="Actually kubectl-apply Jobs (default: dry-run)")
@@ -225,8 +236,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     plan.build(llm_model=llm_model, time_limit_sec=args.time_limit_sec, step_limit=args.step_limit)
 
+    template_path = JOB_TEMPLATES[args.profile]
     print(f"=== A/B sweep plan: {len(plan.trajectories)} trajectories ===")
-    print(f"  run_id={run_id}  namespace={namespace}  llm={llm_model}")
+    print(f"  run_id={run_id}  namespace={namespace}  llm={llm_model}  profile={args.profile}")
+    print(f"  template={template_path.relative_to(REPO_ROOT)}")
     for t in plan.trajectories:
         skill = t.skill_path if t.cell == "with_skill" else "(none)"
         print(f"  - {t.trajectory_id}   cell={t.cell:14s}  seed={t.seed}  skill={skill}")
@@ -237,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print()
     print("=== applying Jobs ===")
-    template = JOB_TEMPLATE.read_text()
+    template = template_path.read_text()
     for t in plan.trajectories:
         env_for_render = t.env_overrides(env)
         try:

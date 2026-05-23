@@ -1,13 +1,13 @@
-# AIDE trajectory Job template. Rendered by `envsubst` per (task × cell × seed).
-# DO NOT `kubectl apply -f` directly — apply via the orchestrator or
-# `make k8s-apply-job-aide` which substitutes env vars from .env + flags.
+# AIDE CPU-only trajectory Job template. Rendered by `envsubst` per (task × cell × seed).
 #
-# Required env at render time (top of orchestrator/run_ab.py wires these):
-#   IMAGE_REGISTRY IMAGE_NAME IMAGE_TAG GPU_TYPE
-#   MLEVAL_RUN_ID MLEVAL_TRAJECTORY_ID MLEVAL_LLM_MODEL
-#   TASK CELL SEED TIME_LIMIT_SECONDS STEP_LIMIT
-#   ACTIVE_DEADLINE_SECONDS                 (== TIME_LIMIT_SECONDS + slack)
-#   MLEVAL_SKILL_PATH                       (empty for without_skill cell)
+# Use this template when the task does NOT need a GPU (e.g., tabular tasks
+# like house-prices). NRP-policy compliance baked in:
+#   - request == limit, ≤ 1 CPU and ≤ 2 GiB → exempt from utilization-floor enforcement
+#   - priorityClassName: opportunistic           (preemptible; doesn't block GPU work)
+#   - nodeAffinity: NotIn pci-10de.present       (don't squat on GPU nodes)
+#   - no GPU resource request
+#
+# Apply via `python -m infra.orchestrator.run_ab --profile cpu ...`.
 
 apiVersion: batch/v1
 kind: Job
@@ -16,6 +16,7 @@ metadata:
   labels:
     app: mleval
     agent: aide
+    profile: cpu
     run_id: "${MLEVAL_RUN_ID}"
     task: "${TASK}"
     cell: "${CELL}"
@@ -29,30 +30,35 @@ spec:
       labels:
         app: mleval
         agent: aide
+        profile: cpu
         run_id: "${MLEVAL_RUN_ID}"
         task: "${TASK}"
         cell: "${CELL}"
         seed: "${SEED}"
     spec:
       restartPolicy: Never
+      priorityClassName: opportunistic
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: feature.node.kubernetes.io/pci-10de.present
+                    operator: NotIn
+                    values: ["true"]
       imagePullSecrets:
         - name: ghcr-pull
       containers:
         - name: agent
           image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
           imagePullPolicy: Always
-          # Per NRP policy: limit must be within 20% of request (and for jobs
-          # at scale, limit == request). We use request == limit for full
-          # compliance and to make the spec easy to reason about.
           resources:
             requests:
-              ${GPU_TYPE}: "1"
-              cpu: "4"
-              memory: "16Gi"
+              cpu: "1"
+              memory: "2Gi"
             limits:
-              ${GPU_TYPE}: "1"
-              cpu: "4"
-              memory: "16Gi"
+              cpu: "1"
+              memory: "2Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -120,8 +126,6 @@ spec:
               value: "/cache/torch"
             - name: PYTHONUNBUFFERED
               value: "1"
-            - name: PYTORCH_CUDA_ALLOC_CONF
-              value: "expandable_segments:True"
 
           volumeMounts:
             - name: cache-volume
@@ -131,26 +135,14 @@ spec:
             - name: dev-shm
               mountPath: /dev/shm
 
-      tolerations:
-        - key: nautilus.io/reservation
-          operator: Exists
-          effect: NoSchedule
-        - key: nautilus.io/hardware
-          operator: Equal
-          value: large-gpu
-          effect: NoSchedule
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: PreferNoSchedule
-
       volumes:
         - name: cache-volume
           emptyDir:
-            sizeLimit: 100Gi
+            sizeLimit: 10Gi
         - name: results
           persistentVolumeClaim:
             claimName: mleval-results
         - name: dev-shm
           emptyDir:
             medium: Memory
-            sizeLimit: 8Gi
+            sizeLimit: 1Gi
