@@ -156,12 +156,14 @@ SKILL_PATH   ?=
 TIME_LIMIT   ?= 3600
 STEP_LIMIT   ?= 20
 PROFILE      ?= gpu
+LLM_TIMEOUT  ?= 120
 
 ab-plan: _require_ns
 	python3 -m infra.orchestrator.run_ab \
 	    --task $(TASK) --seeds $(SEEDS) \
 	    --skill-path "$(SKILL_PATH)" \
 	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --llm-timeout-sec $(LLM_TIMEOUT) \
 	    --profile $(PROFILE)
 
 ab-apply: _require_ns _require_api_key
@@ -169,6 +171,7 @@ ab-apply: _require_ns _require_api_key
 	    --task $(TASK) --seeds $(SEEDS) \
 	    --skill-path "$(SKILL_PATH)" \
 	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --llm-timeout-sec $(LLM_TIMEOUT) \
 	    --profile $(PROFILE) \
 	    --apply
 
@@ -177,6 +180,7 @@ ab-wait: _require_ns _require_api_key
 	    --task $(TASK) --seeds $(SEEDS) \
 	    --skill-path "$(SKILL_PATH)" \
 	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --llm-timeout-sec $(LLM_TIMEOUT) \
 	    --profile $(PROFILE) \
 	    --apply --wait
 

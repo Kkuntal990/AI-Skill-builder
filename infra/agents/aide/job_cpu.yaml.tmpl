@@ -37,6 +37,9 @@ spec:
         seed: "${SEED}"
     spec:
       restartPolicy: Never
+      # 90s grace gives the entrypoint SIGTERM-trap room to write manifest +
+      # run analyzer chain (adapter -> classifier -> predicates).
+      terminationGracePeriodSeconds: 90
       priorityClassName: opportunistic
       affinity:
         nodeAffinity:
@@ -88,6 +91,12 @@ spec:
               value: "/results/data/${TASK}/data"
             - name: MLEVAL_SKILL_PATH
               value: "${MLEVAL_SKILL_PATH}"
+            - name: MLEVAL_TASK_REQS_PATH
+              value: "${MLEVAL_TASK_REQS_PATH}"
+            - name: MLEVAL_SKILL_REQS_PATH
+              value: "${MLEVAL_SKILL_REQS_PATH}"
+            - name: MLEVAL_LLM_TIMEOUT_SEC
+              value: "${MLEVAL_LLM_TIMEOUT_SEC}"
             - name: GENERATE_REPORT
               value: "false"
 

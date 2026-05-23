@@ -90,6 +90,7 @@ class Trajectory:
     llm_model: str
     time_limit_sec: int
     step_limit: int
+    llm_timeout_sec: int = 120
 
     @property
     def trajectory_id(self) -> str:
@@ -98,6 +99,19 @@ class Trajectory:
         safe_task = re.sub(r"[^a-z0-9-]", "-", self.task.lower())[:30]
         safe_cell = self.cell.replace("_", "-")
         return f"{self.run_id}-{safe_task}-{safe_cell}-s{self.seed}".lower()
+
+    @property
+    def task_reqs_path(self) -> str:
+        # Mirrors task-data staging on PVC: /results/data/<task>/requirements.txt
+        return f"/results/data/{self.task}/requirements.txt"
+
+    @property
+    def skill_reqs_path(self) -> str:
+        # Sibling of SKILL.md. Empty if without_skill or no skill_path declared.
+        if self.cell != "with_skill" or not self.skill_path:
+            return ""
+        skill_dir = self.skill_path.rsplit("/", 1)[0]
+        return f"{skill_dir}/requirements.txt"
 
     def env_overrides(self, base_env: dict[str, str]) -> dict[str, str]:
         out = dict(base_env)
@@ -113,6 +127,9 @@ class Trajectory:
                 "STEP_LIMIT": str(self.step_limit),
                 "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 600),
                 "MLEVAL_SKILL_PATH": self.skill_path if self.cell == "with_skill" else "",
+                "MLEVAL_TASK_REQS_PATH": self.task_reqs_path,
+                "MLEVAL_SKILL_REQS_PATH": self.skill_reqs_path,
+                "MLEVAL_LLM_TIMEOUT_SEC": str(self.llm_timeout_sec),
             }
         )
         return out
@@ -129,7 +146,7 @@ class Plan:
     skill_path: str = ""
     trajectories: list[Trajectory] = field(default_factory=list)
 
-    def build(self, llm_model: str, time_limit_sec: int, step_limit: int) -> None:
+    def build(self, llm_model: str, time_limit_sec: int, step_limit: int, llm_timeout_sec: int = 120) -> None:
         for cell in self.cells:
             for seed in self.seeds:
                 self.trajectories.append(
@@ -142,6 +159,7 @@ class Plan:
                         llm_model=llm_model,
                         time_limit_sec=time_limit_sec,
                         step_limit=step_limit,
+                        llm_timeout_sec=llm_timeout_sec,
                     )
                 )
 
@@ -204,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--skill-path", default="", help="In-pod path to SKILL.md (only used when cell=with_skill)")
     p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap")
     p.add_argument("--step-limit", type=int, default=20, help="AIDE max steps per trajectory")
+    p.add_argument("--llm-timeout-sec", type=int, default=120, help="Per-LLM-request HTTP timeout (read).")
     p.add_argument(
         "--profile",
         choices=["cpu", "gpu"],
@@ -234,7 +253,12 @@ def main(argv: list[str] | None = None) -> int:
         base_env=env,
         skill_path=args.skill_path,
     )
-    plan.build(llm_model=llm_model, time_limit_sec=args.time_limit_sec, step_limit=args.step_limit)
+    plan.build(
+        llm_model=llm_model,
+        time_limit_sec=args.time_limit_sec,
+        step_limit=args.step_limit,
+        llm_timeout_sec=args.llm_timeout_sec,
+    )
 
     template_path = JOB_TEMPLATES[args.profile]
     print(f"=== A/B sweep plan: {len(plan.trajectories)} trajectories ===")

@@ -73,7 +73,7 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
 
     return {
         "task": manifest.get("task", {}).get("name"),
-        "cell": "with_skill" if manifest.get("cell", {}).get("with_skill") else "without_skill",
+        "cell": manifest.get("cell", {}).get("name", "without_skill"),
         "seed": manifest.get("seed"),
         "status": manifest.get("result", {}).get("status"),
         "wall_clock_sec": manifest.get("timestamps", {}).get("wall_clock_sec"),

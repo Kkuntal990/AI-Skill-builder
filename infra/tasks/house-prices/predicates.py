@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def _find_submissions(output_dir: Path) -> list[Path]:
-    return sorted(output_dir.glob("working_dirs/*/submission.csv"))
+    return sorted(output_dir.glob("working_dirs/*/working/submission.csv"))
 
 
 def submission_csv_present(output_dir: Path) -> bool:

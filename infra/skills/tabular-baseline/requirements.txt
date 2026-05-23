@@ -1,0 +1,7 @@
+# Skill-level dependencies for tabular-baseline.
+# Installed at trajectory startup ONLY when cell=with_skill. Leave empty if
+# the skill's recommended libraries are already in the task requirements.
+#
+# tabular-baseline recommends LightGBM/XGBoost/CatBoost; those are universal
+# enough that we list them at the task level (house-prices/requirements.txt).
+# No skill-unique packages here.

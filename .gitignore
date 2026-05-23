@@ -53,3 +53,4 @@ logs/
 .idea/
 *.swp
 *.swo
+pulled-results/
