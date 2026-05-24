@@ -1,0 +1,21 @@
+# Task-level deps for llama-inference. Installed at trajectory startup by
+# entrypoint.sh into the PVC-cached pip dir. Both with_skill and
+# without_skill cells get the same library universe so the only A/B
+# variable is the SKILL.md prompt injection — never library availability.
+#
+# torch is already in the base image (pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime).
+# Versions pinned for reproducibility; bump only when validating a fresh stack.
+#
+# vllm is included here (not in the skill's requirements) so the
+# without_skill cell can ALSO use it if the agent independently discovers it
+# — preserves methodological isolation. vLLM 0.6+ supports PyTorch 2.7 /
+# CUDA 12.6. The wheel is ~150 MB but pulls heavy CUDA libs at install time;
+# expect first-run pip install to take 2-3 min before the PVC cache primes.
+
+transformers==4.46.3
+peft==0.13.2
+accelerate==1.2.1
+datasets==3.2.0
+bitsandbytes==0.45.0
+sentencepiece==0.2.0
+vllm==0.6.6

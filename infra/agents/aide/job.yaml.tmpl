@@ -119,14 +119,18 @@ spec:
                   key: hf-token
                   optional: true
 
+            # HF cache on PVC so model weights are downloaded once per sweep,
+            # not once per trajectory. Use `make hf-warm MODEL=<name>` to pre-
+            # populate it before launching A/B Jobs (avoids parallel-download
+            # races between the first cohort of pods).
             - name: HF_HOME
-              value: "/cache/hf"
+              value: "/results/.hf-cache/hf"
             - name: TRANSFORMERS_CACHE
-              value: "/cache/hf/transformers"
+              value: "/results/.hf-cache/hf/transformers"
             - name: HF_DATASETS_CACHE
-              value: "/cache/hf/datasets"
+              value: "/results/.hf-cache/hf/datasets"
             - name: TORCH_HOME
-              value: "/cache/torch"
+              value: "/results/.hf-cache/torch"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: PYTORCH_CUDA_ALLOC_CONF

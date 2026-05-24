@@ -1,0 +1,7 @@
+# Skill-level requirements for vllm-inference.
+#
+# Intentionally empty: vllm is in the llama-inference task's requirements.txt
+# so both with_skill and without_skill cells have the same library universe.
+# The only A/B variable is the SKILL.md prompt injection (entry + references).
+#
+# If a future skill introduces a library NOT in the task universe, add here.

@@ -44,14 +44,15 @@ infra/                            Stage-2 runtime, plugin layout
 │   ├── _interface.md             contract: env vars, output files, schema
 │   └── aide/
 │       ├── Dockerfile
-│       ├── entrypoint.sh
+│       ├── entrypoint.sh           setsid+PGID trap; runs pip install then AIDE then analyzers
 │       ├── run_aide.py             shim — loads sidecar patches before AIDE
-│       ├── job.yaml.tmpl           envsubst Job template
-│       ├── aide_sidecar/           monkey-patches (seed, backend, skill, interpreter)
+│       ├── job.yaml.tmpl           GPU profile (1×rtxa6000 + 4cpu/16Gi, PEFT)
+│       ├── job_cpu.yaml.tmpl       CPU profile (1cpu/2Gi NRP-exempt, tabular pilots)
+│       ├── aide_sidecar/           monkey-patches (seed, openai_timeout, backend, skill, interpreter)
 │       └── README.md
-├── tasks/                        per-task scaffolds (instruction.md + predicates.py)
+├── tasks/                        per-task scaffolds (instruction.md + predicates.py + requirements.txt)
 │   └── _template/
-├── skills/                       skills under eval (SKILL.md files)
+├── skills/                       skills under eval (SKILL.md + requirements.txt)
 │   └── _template/
 └── orchestrator/
     └── run_ab.py                 spawn N Jobs per (task × cell × seed), wait, collect
@@ -132,25 +133,49 @@ Current research focus. Two-stage pipeline; index at `docs/eval/overview.md`.
   make docker-push      # ghcr.io login must already be done (write:packages PAT)
   ```
 - **Config:** everything is `.env`-driven (gitignored; template at `.env.example`). Variables: `IMAGE_*`, `K8S_NAMESPACE=ecepxie`, `GPU_TYPE=nvidia.com/rtxa6000`, `OPENROUTER_API_KEY`, `MLEVAL_LLM_MODEL`, `MLEVAL_RUN_ID`, `DEFAULT_SEED`, `GHCR_READ_TOKEN`, `AIDE_REPO`, `AIDE_REF`. The Makefile `-include`s it and `envsubst`s it into the k8s manifests at apply time.
-- **AIDE pinning:** `AIDE_REF=main` is OK for smoke; pin to a SHA before the pilot.
+- **AIDE pinning:** pinned to a SHA (`AIDE_REF=40dcf28fc3a39e93c7192acec0c9e2e9bffa973d`). The Dockerfile uses `git init + git fetch --depth 1 + git checkout FETCH_HEAD` rather than `git clone --branch` so SHAs (which are not branch names) work. Bump only when intentionally upgrading AIDE; the SHA is also written to `/opt/aide/.aide_sha` inside the image for provenance.
 - **OpenRouter routing:** Image sets `OPENAI_BASE_URL=https://openrouter.ai/api/v1` so AIDE's openai backend's `use_chat_api=true` path is taken (supports function-calling). The openrouter backend is also patched but unused — it hardcodes `provider.order=[Fireworks]` which breaks DeepSeek.
-- **Manifests** in `deploy/k8s/` (agent-agnostic): `pvc.yaml` (1Ti CephFS RWX), `helper-jupyter-1gpu.yaml` (1× rtxa6000 interactive pod), `secret.template.yaml` (reference; real Secret created via `make k8s-secret`). Per-agent Job manifests live under `infra/agents/<name>/job.yaml.tmpl` and are envsubst-rendered by the orchestrator.
+- **Manifests** in `deploy/k8s/` (agent-agnostic): `pvc.yaml` (1Ti CephFS RWX), `helper-jupyter-1gpu.yaml` (1× rtxa6000 interactive pod), `pip-warm.yaml` (ephemeral pod that pre-downloads task/skill wheels into `/results/.pip-cache`), `secret.template.yaml` (reference; real Secret created via `make k8s-secret`). Per-agent Job manifests live under `infra/agents/<name>/{job,job_cpu}.yaml.tmpl` and are envsubst-rendered by the orchestrator. Pick GPU vs CPU profile via `make ab-apply PROFILE=cpu|gpu` (default `gpu`).
 - **Hard rule (still in effect):** do **not** apply any trajectory Job to Nautilus until the user explicitly approves a live run.
 
 ## Sidecar architecture (AIDE plugin)
 
-The AIDE plugin runs four monkey-patches that load at import time via `run_aide.py`:
+The AIDE plugin runs five monkey-patches that load at import time via `run_aide.py` (and re-exported in order from `aide_sidecar/__init__.py`):
 
 | Patch | What it does | Why |
 |---|---|---|
 | `aide_sidecar.seed` | Seeds `random`, `numpy.random` (legacy + `default_rng`), `torch`. Sets `PYTHONHASHSEED`. | AIDE never seeds anything; paired seeds require this. |
+| `aide_sidecar.openai_timeout` | Injects `httpx.Timeout(read=$MLEVAL_LLM_TIMEOUT_SEC, connect=$MLEVAL_LLM_CONNECT_TIMEOUT_SEC)` (defaults 120s / 10s) into `openai.OpenAI.__init__` and `openai.AsyncOpenAI.__init__`. | OpenAI client default is no read timeout — mvp-001 hung 24+ min on a stalled OpenRouter call before this was added. |
 | `aide_sidecar.backend_wrapper` | Wraps each entry in `aide.backend.provider_to_query_func` to log `(prompt, response, in/out tokens, req_time)` to `$MLEVAL_PROMPTS_LOG`. | AIDE discards token counts; prompts are never persisted. |
 | `aide_sidecar.skill_inject` | If `$MLEVAL_SKILL_PATH` is set + exists, splices the file content into `aide.utils.config.load_task_desc`'s return value. | Makes the skill visible to every code-gen and judge call. |
 | `aide_sidecar.interpreter_patch` | Wraps `Interpreter.run` to snapshot `working_dir` to `$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/` per step. Skips heavy globs (`*.bin`, `*.safetensors`, etc.). | State predicates need to inspect submission CSVs / checkpoints; AIDE deletes them. |
 
-Patch ordering matters: seed first (so any subsequent randomness is determined), then backend (must run before `aide.agent` does `from .backend import query`), then skill_inject (before `Agent.__init__` calls `load_task_desc`).
+Patch ordering matters: seed first (so any subsequent randomness is determined), then openai_timeout (must run before any openai client is constructed), then backend (must run before `aide.agent` does `from .backend import query`), then skill_inject (before `Agent.__init__` calls `load_task_desc`).
 
 The `aide.agent.query` capture-at-import problem is solved by patching the dict `provider_to_query_func` (which the top-level `query` reads at call time) instead of `aide.backend.query` itself. The dispatcher reads the dict fresh on every call — bypass-proof.
+
+## Per-task / per-skill Python dependencies
+
+Tasks and skills declare their pip deps in a sibling `requirements.txt` rather than baking them into the image — keeps the base image lean and lets new tasks ship without an image rebuild.
+
+- `infra/tasks/<task>/requirements.txt`  → installed in **every** cell
+- `infra/skills/<skill>/requirements.txt` → installed **only** when `cell == with_skill` (methodological isolation: a skill's deps must not leak into the baseline)
+
+The orchestrator threads these as `MLEVAL_TASK_REQS_PATH` / `MLEVAL_SKILL_REQS_PATH`; `entrypoint.sh` `pip install -r`'s them before launching AIDE, with `--cache-dir /results/.pip-cache` (PVC-backed CephFS RWX) so wheels are reused across trajectories.
+
+**`make pip-warm TASK=<name> [SKILL=<name>]`** pre-populates that cache from an ephemeral 1cpu/2Gi pod — run it before launching a fresh sweep so the first trajectory doesn't pay the 30-60s wheel download. The pip cache survives across runs; only re-warm when a `requirements.txt` changes.
+
+Empty skill `requirements.txt` files are intentional and valid (skip-handled by the entrypoint and pip-warm pod).
+
+## Trajectory lifecycle (entrypoint signal handling)
+
+`infra/agents/aide/entrypoint.sh` is the contract between k8s and AIDE; getting it wrong loses the entire trajectory's analyzer output. Key invariants:
+
+- AIDE is launched inside `setsid bash -c '...timeout ... python ... | tee ...' &` so it gets its own PGID. The entrypoint waits on the background PID via the `wait` builtin (signal-interruptible). On SIGTERM, the trap `kill -TERM -- -$PGID` tears down the whole `timeout|python|tee` pipeline, then `finalize()` runs the analyzer chain (adapter → classifier → predicates) idempotently so `manifest.json` + `trajectory.jsonl` + `state.json` always land on the PVC.
+- Without `setsid`, a foreground pipeline blocks the trap from firing until the pipeline completes — observed in mvp-001/002.
+- Pod spec sets `terminationGracePeriodSeconds: 90` (analyzer headroom before SIGKILL).
+- Orchestrator sets `ACTIVE_DEADLINE_SECONDS = time_limit_sec + 1200` to cover image pull (~10 min cold), first-trajectory pip install (~3 min), and analyzers (~5 min). Tighter buffer killed mvp-002 mid-AIDE.
+- AIDE itself runs under `timeout --foreground --signal=TERM --kill-after=10s ${TIME_LIMIT_SECONDS}s` — the soft cap. The k8s activeDeadline is the outer safety net.
 
 ## Known issues & deferred work
 
@@ -189,3 +214,6 @@ These are tracked-in-repo canonical copies. The live agents run under `~/.opencl
 - **Plugin code lives in `infra/`; harness code lives in `src/mleval/`.** Harness modules are pip-installable; plugin modules are file-copied into the container image during build.
 - **`.env` is the single source of truth.** Never hard-code config in YAML or Python; always thread via `.env` -> Makefile -> envsubst / orchestrator.
 - **Don't `kubectl apply` agent-agnostic YAMLs directly** — they contain `${...}` envsubst markers. Always go through `make k8s-apply-*` targets.
+- **Bump `MLEVAL_RUN_ID` per sweep** (currently `mvp-003`). The orchestrator treats an existing manifest at that run_id as "already done" and won't re-run — fresh sweeps require a fresh ID so PVC paths stay disjoint.
+- **k8s Job names are DNS-1123 labels** — no underscores. The orchestrator does `cell.replace("_", "-")` to render `with_skill` → `with-skill` in the Job name. Don't undo this.
+- **Limit CLAUDE.md to 250 lines, use references to other docs**

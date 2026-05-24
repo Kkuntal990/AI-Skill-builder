@@ -1,0 +1,10 @@
+# Skill-level requirements for peft-tuning.
+#
+# Intentionally empty: every PEFT-related library this skill references
+# (peft, transformers, accelerate, datasets, bitsandbytes) is already in
+# the task's requirements.txt. Keeping this empty preserves methodological
+# isolation — both with_skill and without_skill cells have the same library
+# universe, so the only A/B variable is the SKILL.md prompt injection.
+#
+# If a future skill introduces a library NOT in the task universe (e.g.,
+# a niche optimizer or evaluation harness), add it here.

@@ -1,0 +1,15 @@
+# Task-level deps for jigsaw-toxic. Installed at trajectory startup by
+# entrypoint.sh into the PVC-cached pip dir. Both with_skill and without_skill
+# cells get these libraries so the only A/B variable is the SKILL.md prompt
+# injection — never library availability.
+#
+# torch is already in the base image (pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime).
+# Versions pinned for reproducibility; bump only when validating a fresh stack.
+
+transformers==4.46.3
+peft==0.13.2
+accelerate==1.2.1
+datasets==3.2.0
+bitsandbytes==0.45.0
+sentencepiece==0.2.0
+scikit-learn==1.5.2
