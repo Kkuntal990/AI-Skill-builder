@@ -125,7 +125,10 @@ class Trajectory:
                 "MLEVAL_LLM_MODEL": self.llm_model,
                 "TIME_LIMIT_SECONDS": str(self.time_limit_sec),
                 "STEP_LIMIT": str(self.step_limit),
-                "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 600),
+                # +1200s buffer = ~10 min image pull + ~3 min first-run pip
+                # install + ~5 min for analyzers / cleanup. Tighter buffer
+                # killed mvp-002 mid-AIDE before the 1800s soft cap fired.
+                "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 1200),
                 "MLEVAL_SKILL_PATH": self.skill_path if self.cell == "with_skill" else "",
                 "MLEVAL_TASK_REQS_PATH": self.task_reqs_path,
                 "MLEVAL_SKILL_REQS_PATH": self.skill_reqs_path,

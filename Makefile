@@ -142,6 +142,26 @@ k8s-apply-helper: _require_ns
 k8s-delete-helper: _require_ns
 	kubectl -n $$K8S_NAMESPACE delete pod mleval-jupyter-1gpu --ignore-not-found
 
+# Pre-download task (and optionally skill) requirements into the PVC pip
+# cache so the first trajectory of a sweep doesn't pay the wheel-download
+# cost (~30-60s for the tabular stack, more for PEFT). Idempotent. Re-run
+# whenever a requirements.txt changes.
+#
+#     make pip-warm TASK=house-prices
+#     make pip-warm TASK=house-prices SKILL=tabular-baseline
+pip-warm: _require_ns
+	@test -n "$(TASK)" -a "$(TASK)" != "_template" || { echo "ERROR: TASK= is required" >&2; exit 1; }
+	@SKILL_REQS=""; \
+	if [ -n "$(SKILL)" ]; then SKILL_REQS=/results/skills/$(SKILL)/requirements.txt; fi; \
+	TASK_SLUG=$$(echo "$(TASK)" | tr '[:upper:]_' '[:lower:]-' | sed 's/[^a-z0-9-]/-/g'); \
+	export TASK_SLUG TASK=$(TASK) IMAGE_REGISTRY=$(IMAGE_REGISTRY) IMAGE_NAME=$(IMAGE_NAME) IMAGE_TAG=$(IMAGE_TAG); \
+	export REQS_PATHS="/results/data/$(TASK)/requirements.txt $$SKILL_REQS"; \
+	envsubst < deploy/k8s/pip-warm.yaml | kubectl -n $$K8S_NAMESPACE apply -f -; \
+	echo "[make] waiting for pip-warm-$$TASK_SLUG pod to complete..."; \
+	kubectl -n $$K8S_NAMESPACE wait --for=condition=Ready pod/pip-warm-$$TASK_SLUG --timeout=120s; \
+	kubectl -n $$K8S_NAMESPACE logs -f pod/pip-warm-$$TASK_SLUG; \
+	kubectl -n $$K8S_NAMESPACE delete pod pip-warm-$$TASK_SLUG --wait=false
+
 # ---- A/B sweep orchestration --------------------------------------------
 #
 # `ab-plan` previews trajectories without touching the cluster.

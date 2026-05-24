@@ -1,0 +1,64 @@
+# Ephemeral pod that pre-downloads task/skill requirements into the PVC
+# pip cache, so first-trajectory installs don't pay the 30-60s download cost.
+#
+# Rendered + applied by `make pip-warm TASK=<name>`. Reads $REQS_PATH from
+# env. NRP-compliant: opportunistic priority, anti-affinity to GPU nodes,
+# exempt tier (1 CPU / 2 GiB).
+#
+# Uses the same image as trajectory pods so wheels are compatible with the
+# Python version AIDE will run.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pip-warm-${TASK_SLUG}
+  labels:
+    app: mleval
+    role: pip-warm
+    task: "${TASK}"
+spec:
+  restartPolicy: Never
+  priorityClassName: opportunistic
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: feature.node.kubernetes.io/pci-10de.present
+                operator: NotIn
+                values: ["true"]
+  imagePullSecrets:
+    - name: ghcr-pull
+  containers:
+    - name: pip-warm
+      image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+      imagePullPolicy: IfNotPresent
+      command: ["bash", "-c"]
+      args:
+        - |
+          set -eo pipefail
+          mkdir -p /results/.pip-cache
+          for req in "${REQS_PATHS}"; do
+              [[ -z "$req" || ! -f "$req" ]] && continue
+              if ! grep -qE '^[^#[:space:]]' "$req"; then
+                  echo "[pip-warm] $req has no non-comment lines, skipping"
+                  continue
+              fi
+              echo "[pip-warm] warming cache with $req"
+              pip install --cache-dir /results/.pip-cache --quiet -r "$req"
+          done
+          echo "[pip-warm] cache contents:"
+          du -sh /results/.pip-cache 2>/dev/null || true
+          ls /results/.pip-cache/wheels 2>/dev/null | wc -l | xargs echo "[pip-warm] wheel count:"
+      env:
+        - name: REQS_PATHS
+          value: "${REQS_PATHS}"
+      resources:
+        requests: { cpu: "1", memory: "2Gi" }
+        limits:   { cpu: "1", memory: "2Gi" }
+      volumeMounts:
+        - { name: r, mountPath: /results }
+  volumes:
+    - name: r
+      persistentVolumeClaim:
+        claimName: mleval-results

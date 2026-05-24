@@ -159,16 +159,30 @@ finalize() {
 }
 
 # Preempt-safe trap: SIGTERM (kubelet preempt, node drain, kubectl delete)
-# sets a flag and lets the AIDE loop unwind. The post-AIDE block then writes
-# the manifest with status=interrupted and runs analyzers within the
-# remaining terminationGracePeriodSeconds window (default 30s; we set 90s
-# in the Job templates to give analyzers room).
+# kills the AIDE process group, then lets the script fall through to
+# finalize() (which writes manifest + runs analyzers).
+#
+# Critical: bash `wait` is signal-interruptible, BUT a foreground command in
+# a pipeline (e.g. `timeout ... | tee ...`) blocks the trap from running
+# until the pipeline finishes. We work around this by running the AIDE
+# pipeline backgrounded in its OWN process group (via setsid) and waiting
+# with the bash `wait` builtin. Then this trap actively SIGTERMs the
+# process group when k8s asks us to shut down.
 on_signal() {
     SIGNAL_RECEIVED=true
     STATUS="interrupted"
     AGENT_EXIT=130
     trap '' SIGTERM SIGINT  # don't recurse
-    echo "[entrypoint] signal received — will finalize with status=interrupted" >&2
+    echo "[entrypoint] signal received — killing AIDE process group ${AGENT_PGID:-?}" >&2
+    if [[ -n "$AGENT_PGID" ]]; then
+        kill -TERM -- "-${AGENT_PGID}" 2>/dev/null || true
+        # Brief grace for AIDE to finish the in-flight LLM call + tee flush.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            kill -0 -- "-${AGENT_PGID}" 2>/dev/null || break
+        done
+        kill -KILL -- "-${AGENT_PGID}" 2>/dev/null || true
+    fi
 }
 trap on_signal SIGTERM SIGINT
 
@@ -208,26 +222,66 @@ pip freeze > "$MLEVAL_OUTPUT_DIR/pip_freeze.txt" 2>/dev/null || true
 
 # ---- run AIDE ----------------------------------------------------------
 
+LOG_FILE="$MLEVAL_OUTPUT_DIR/agent_logs/run.log"
+EXIT_FILE="$MLEVAL_OUTPUT_DIR/.agent_exit"
+rm -f "$EXIT_FILE"
+
 set +e
-CUDA_VISIBLE_DEVICES="$MEMORY_INDEX" \
-timeout --foreground --signal=TERM --kill-after=10s "${TIME_LIMIT_SECONDS}s" \
-    python /workspace/run_aide.py \
-        data_dir="$MLEVAL_TASK_DATA_DIR" \
-        desc_file="$MLEVAL_TASK_INSTRUCTION_PATH" \
-        log_dir="$MLEVAL_OUTPUT_DIR/aide_logs" \
-        workspace_dir="$MLEVAL_OUTPUT_DIR/aide_workspace" \
-        exp_name="$MLEVAL_TRAJECTORY_ID" \
-        agent.code.model="$MLEVAL_LLM_MODEL" \
-        agent.code.temp=0 \
-        agent.feedback.model="$MLEVAL_LLM_MODEL" \
-        agent.feedback.temp=0 \
-        agent.steps="$STEP_LIMIT" \
-        generate_report="$GENERATE_REPORT" \
-        2>&1 | tee "$MLEVAL_OUTPUT_DIR/agent_logs/run.log"
-PIPE_STATUS=("${PIPESTATUS[@]}")
-RAW_AGENT_EXIT=${PIPE_STATUS[0]}
-TEE_EXIT=${PIPE_STATUS[1]}
+# setsid puts the entire AIDE pipeline (timeout → python → tee) into a NEW
+# session/process group. We background it so the parent shell can `wait` on
+# it; bash `wait` IS signal-interruptible. When the trap fires, it sends
+# SIGTERM to the whole group via `kill -- -$AGENT_PGID`, killing timeout +
+# python + tee cleanly, then `wait` returns and the script continues to
+# finalize(). PIPESTATUS only valid in the inner shell, so the inner shell
+# writes the exit codes to $EXIT_FILE which we source after wait returns.
+CUDA_VISIBLE_DEVICES="$MEMORY_INDEX" setsid bash -c '
+    timeout --foreground --signal=TERM --kill-after=10s "${1}s" \
+        python /workspace/run_aide.py \
+            data_dir="$2" \
+            desc_file="$3" \
+            log_dir="$4" \
+            workspace_dir="$5" \
+            exp_name="$6" \
+            agent.code.model="$7" \
+            agent.code.temp=0 \
+            agent.feedback.model="$7" \
+            agent.feedback.temp=0 \
+            agent.steps="$8" \
+            generate_report="$9" \
+            2>&1 | tee "${10}"
+    printf "INNER_AGENT_EXIT=%s\nINNER_TEE_EXIT=%s\n" \
+        "${PIPESTATUS[0]}" "${PIPESTATUS[1]}" > "${11}"
+' bash \
+    "$TIME_LIMIT_SECONDS" \
+    "$MLEVAL_TASK_DATA_DIR" \
+    "$MLEVAL_TASK_INSTRUCTION_PATH" \
+    "$MLEVAL_OUTPUT_DIR/aide_logs" \
+    "$MLEVAL_OUTPUT_DIR/aide_workspace" \
+    "$MLEVAL_TRAJECTORY_ID" \
+    "$MLEVAL_LLM_MODEL" \
+    "$STEP_LIMIT" \
+    "$GENERATE_REPORT" \
+    "$LOG_FILE" \
+    "$EXIT_FILE" &
+AGENT_PID=$!
+# PGID == PID for a session leader created by setsid. ps confirms.
+AGENT_PGID=$(ps -o pgid= -p "$AGENT_PID" 2>/dev/null | tr -d ' ')
+[[ -z "$AGENT_PGID" ]] && AGENT_PGID="$AGENT_PID"
+echo "[entrypoint] AIDE PID=$AGENT_PID PGID=$AGENT_PGID"
+
+wait "$AGENT_PID"
+WAIT_EXIT=$?
 set -e
+
+# Recover the real pipeline exit codes from the inner shell's $EXIT_FILE.
+INNER_AGENT_EXIT=
+INNER_TEE_EXIT=
+if [[ -f "$EXIT_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$EXIT_FILE"
+fi
+RAW_AGENT_EXIT="${INNER_AGENT_EXIT:-$WAIT_EXIT}"
+TEE_EXIT="${INNER_TEE_EXIT:-0}"
 
 # Trap may have already set STATUS/AGENT_EXIT to interrupted/130. Only
 # overwrite from AIDE's exit code if we didn't receive a signal.
