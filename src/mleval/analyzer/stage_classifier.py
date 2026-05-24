@@ -59,12 +59,17 @@ _RULES: list[Rule] = [
     Rule(sub_stage="4c", label="preference_opt", top_level="4", confidence=0.92, priority=95,
          import_any=frozenset({"trl"}),
          call_any=frozenset({"GRPOTrainer", "DPOTrainer", "SimPOTrainer", "KTOTrainer", "SFTTrainer"})),
-    # 6b — inference / merge
-    Rule(sub_stage="6b", label="inference_merge", top_level="6", confidence=0.85, priority=85,
+    # 5a — hyperparameter optimization (kept above 6b/6c but below adapter/preference rules)
+    # 6b/6c are intentionally LOW-priority: agents frequently call from_pretrained or
+    # to_csv as side-effects of a step whose primary purpose is training / architecture /
+    # eval. They're meant as fallback labels when no other signal fires. Without this
+    # demotion, every house-prices step landed in 6c (#104).
+    # 6b — inference / merge (fallback, fires only if no training/HPO signal)
+    Rule(sub_stage="6b", label="inference_merge", top_level="6", confidence=0.7, priority=12,
          import_any=frozenset({"peft", "transformers"}),
-         call_any=frozenset({"merge_and_unload", "generate", "from_pretrained"})),
-    # 6c — submission write
-    Rule(sub_stage="6c", label="submission", top_level="6", confidence=0.85, priority=80,
+         call_any=frozenset({"merge_and_unload", "generate"})),
+    # 6c — submission write (lowest fallback)
+    Rule(sub_stage="6c", label="submission", top_level="6", confidence=0.7, priority=10,
          call_any=frozenset({"to_csv", "to_parquet", "to_json"})),
     # 5a — hyperparameter optimization
     Rule(sub_stage="5a", label="hpo", top_level="5", confidence=0.85, priority=75,
