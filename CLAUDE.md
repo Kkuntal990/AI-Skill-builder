@@ -37,6 +37,8 @@ src/mleval/                       harness Python package (pip-installable)
     ├── adapter_aide.py             AIDE journal.json + prompts.jsonl -> trajectory.jsonl
     ├── stage_classifier.py         AST -> 6x16 sub-stage labels (MVP; PyCG upgrade is task #62)
     ├── state_predicates.py         generic + per-task assertions over outputs
+    ├── pricing.py                  OpenRouter $/1M-token table (per-model in/out)
+    ├── metrics.py                  per-trajectory derivations + cost-norm Lift + stage chi-sq
     └── aggregate.py                cross-trajectory L1/L3 + paired Lift rollup
 
 infra/                            Stage-2 runtime, plugin layout
@@ -50,10 +52,14 @@ infra/                            Stage-2 runtime, plugin layout
 │       ├── job_cpu.yaml.tmpl       CPU profile (1cpu/2Gi NRP-exempt, tabular pilots)
 │       ├── aide_sidecar/           monkey-patches (seed, openai_timeout, backend, skill, interpreter)
 │       └── README.md
-├── tasks/                        per-task scaffolds (instruction.md + predicates.py + requirements.txt)
-│   └── _template/
-├── skills/                       skills under eval (SKILL.md + requirements.txt)
-│   └── _template/
+├── tasks/                        per-task scaffolds (instruction.md + predicates.py + requirements.txt [+ data/])
+│   ├── _template/
+│   ├── house-prices/               tabular Kaggle pilot — mvp-003 (without_skill: 6c overmatch fixed)
+│   └── llama-inference/            MLAgentBench port — primary GPU pilot, paired with vllm-inference
+├── skills/                       skills under eval (SKILL.md + optional references/*.md + requirements.txt)
+│   ├── _template/
+│   ├── tabular-baseline/           tested in mvp-003 on house-prices
+│   └── vllm-inference/             117-line SKILL.md + 4 references (1,803 LOC) — next pilot
 └── orchestrator/
     └── run_ab.py                 spawn N Jobs per (task × cell × seed), wait, collect
 
@@ -73,7 +79,7 @@ Current research focus. Two-stage pipeline; index at `docs/eval/overview.md`.
 | Stage | Question | Doc | Status |
 |---|---|---|---|
 | 1 | Does the skill fire on the right prompts and surface the right facts? | `docs/eval/stage1.md` | locked, in production |
-| 2 | Does the MLE agent build measurably better pipelines *with* the skill, and *where* does the help land? | `docs/eval/stage2.md` | v0.3 AIDE pivot complete; pre-pilot |
+| 2 | Does the MLE agent build measurably better pipelines *with* the skill, and *where* does the help land? | `docs/eval/stage2.md` | mvp-003 dry-run on house-prices × tabular-baseline; next: llama-inference × vllm-inference on GPU |
 
 **Stage 2 in one sentence:** paired with-skill / without-skill A/B on a freeform PEFT-relevant task on a pluggable MLE agent (primary: AIDE), decomposing trajectories into a 6 × 16 pipeline-stage taxonomy and attributing improvements via AST imports/calls + state predicates (LLM judge default OFF).
 
@@ -136,6 +142,7 @@ Current research focus. Two-stage pipeline; index at `docs/eval/overview.md`.
 - **AIDE pinning:** pinned to a SHA (`AIDE_REF=40dcf28fc3a39e93c7192acec0c9e2e9bffa973d`). The Dockerfile uses `git init + git fetch --depth 1 + git checkout FETCH_HEAD` rather than `git clone --branch` so SHAs (which are not branch names) work. Bump only when intentionally upgrading AIDE; the SHA is also written to `/opt/aide/.aide_sha` inside the image for provenance.
 - **OpenRouter routing:** Image sets `OPENAI_BASE_URL=https://openrouter.ai/api/v1` so AIDE's openai backend's `use_chat_api=true` path is taken (supports function-calling). The openrouter backend is also patched but unused — it hardcodes `provider.order=[Fireworks]` which breaks DeepSeek.
 - **Manifests** in `deploy/k8s/` (agent-agnostic): `pvc.yaml` (1Ti CephFS RWX), `helper-jupyter-1gpu.yaml` (1× rtxa6000 interactive pod), `pip-warm.yaml` (ephemeral pod that pre-downloads task/skill wheels into `/results/.pip-cache`), `secret.template.yaml` (reference; real Secret created via `make k8s-secret`). Per-agent Job manifests live under `infra/agents/<name>/{job,job_cpu}.yaml.tmpl` and are envsubst-rendered by the orchestrator. Pick GPU vs CPU profile via `make ab-apply PROFILE=cpu|gpu` (default `gpu`).
+- **HF cache on PVC:** GPU Jobs set `HF_HOME`/`TRANSFORMERS_CACHE`/`HF_DATASETS_CACHE`/`TORCH_HOME` to `/results/.hf-cache/*` so model weights download once per sweep, not once per trajectory. `hf-warm.yaml` + `make hf-warm MODEL=<name>` to pre-populate this cache is still pending — without it, the first cohort of A/B pods can race-download large checkpoints (huggyllama/llama-7b is ~13 GB).
 - **Hard rule (still in effect):** do **not** apply any trajectory Job to Nautilus until the user explicitly approves a live run.
 
 ## Sidecar architecture (AIDE plugin)
@@ -147,7 +154,7 @@ The AIDE plugin runs five monkey-patches that load at import time via `run_aide.
 | `aide_sidecar.seed` | Seeds `random`, `numpy.random` (legacy + `default_rng`), `torch`. Sets `PYTHONHASHSEED`. | AIDE never seeds anything; paired seeds require this. |
 | `aide_sidecar.openai_timeout` | Injects `httpx.Timeout(read=$MLEVAL_LLM_TIMEOUT_SEC, connect=$MLEVAL_LLM_CONNECT_TIMEOUT_SEC)` (defaults 120s / 10s) into `openai.OpenAI.__init__` and `openai.AsyncOpenAI.__init__`. | OpenAI client default is no read timeout — mvp-001 hung 24+ min on a stalled OpenRouter call before this was added. |
 | `aide_sidecar.backend_wrapper` | Wraps each entry in `aide.backend.provider_to_query_func` to log `(prompt, response, in/out tokens, req_time)` to `$MLEVAL_PROMPTS_LOG`. | AIDE discards token counts; prompts are never persisted. |
-| `aide_sidecar.skill_inject` | If `$MLEVAL_SKILL_PATH` is set + exists, splices the file content into `aide.utils.config.load_task_desc`'s return value. | Makes the skill visible to every code-gen and judge call. |
+| `aide_sidecar.skill_inject` | `$MLEVAL_SKILL_PATH` may be a SKILL.md file *or* a skill directory; if a sibling `references/` dir exists, all `*.md` are concatenated in deterministic filename order with `## references/<name>.md` headers. Result spliced into `aide.utils.config.load_task_desc`'s return value. | Makes the full progressive-disclosure bundle visible to every code-gen and judge call (AIDE cannot navigate the filesystem from prompts). |
 | `aide_sidecar.interpreter_patch` | Wraps `Interpreter.run` to snapshot `working_dir` to `$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/` per step. Skips heavy globs (`*.bin`, `*.safetensors`, etc.). | State predicates need to inspect submission CSVs / checkpoints; AIDE deletes them. |
 
 Patch ordering matters: seed first (so any subsequent randomness is determined), then openai_timeout (must run before any openai client is constructed), then backend (must run before `aide.agent` does `from .backend import query`), then skill_inject (before `Agent.__init__` calls `load_task_desc`).
@@ -183,8 +190,9 @@ Logged in the task list (use `TaskList` to inspect). Highlights:
 
 | # | Issue | Why deferred |
 |---|---|---|
-| #62 | Stage classifier is a flat AST rule table (MVP); real PyCG-Extended integration is task #62 + #70 validation gate | Pilot uses MVP; PyCG upgrade gates the full A/B (#66) |
+| #62 | Stage classifier is a flat AST rule table (MVP); real PyCG-Extended integration is task #62 + #70 validation gate | Pilot uses MVP; PyCG upgrade gates the full A/B (#66). 6c/6b overmatch (#104) was fixed in-place by demoting their priority — fallback-only labels now. |
 | #71 | Layer-2c LLM judge is unimplemented | Default OFF; only flipped on if pilot's L2a/L2b can't discriminate cells |
+| hf-warm | Pre-populating `/results/.hf-cache/` is not yet automated (mirrors pip-warm pattern) | Workaround: first GPU trajectory pays a one-time download; subsequent ones hit the PVC. Acceptable for smoke; will hurt parallel A/B if both pods race the download. |
 | Reproducibility | `random.shuffle` of package list in AIDE prompts depends on retry-count nondeterminism (network) | Documented in `aide_sidecar/seed.py`; bounded within a trajectory, not across |
 | Token undercount | Backoff-layer retries inside provider backends are not counted by our wrapper | Acceptable bias for L3 cost; documented in `backend_wrapper.py` |
 | Secret leak surface | AIDE's `logger.info` includes raw completion text in `run.log` on the PVC | API key isn't in payload; mitigated by namespace ACLs |
@@ -214,6 +222,6 @@ These are tracked-in-repo canonical copies. The live agents run under `~/.opencl
 - **Plugin code lives in `infra/`; harness code lives in `src/mleval/`.** Harness modules are pip-installable; plugin modules are file-copied into the container image during build.
 - **`.env` is the single source of truth.** Never hard-code config in YAML or Python; always thread via `.env` -> Makefile -> envsubst / orchestrator.
 - **Don't `kubectl apply` agent-agnostic YAMLs directly** — they contain `${...}` envsubst markers. Always go through `make k8s-apply-*` targets.
-- **Bump `MLEVAL_RUN_ID` per sweep** (currently `mvp-003`). The orchestrator treats an existing manifest at that run_id as "already done" and won't re-run — fresh sweeps require a fresh ID so PVC paths stay disjoint.
+- **Bump `MLEVAL_RUN_ID` per sweep** (last shipped: `mvp-003` on house-prices CPU; next: `mvp-004-smoke` for llama-inference GPU smoke, then `mvp-005-ab` for the paired A/B). The orchestrator treats an existing manifest at that run_id as "already done" and won't re-run — fresh sweeps require a fresh ID so PVC paths stay disjoint.
 - **k8s Job names are DNS-1123 labels** — no underscores. The orchestrator does `cell.replace("_", "-")` to render `with_skill` → `with-skill` in the Job name. Don't undo this.
 - **Limit CLAUDE.md to 250 lines, use references to other docs**

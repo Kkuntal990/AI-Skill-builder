@@ -32,17 +32,17 @@ These bridges live alongside AIDE rather than forking it, so an `AIDE_REF` bump 
 
 ## Task pool (v0.3)
 
-Two tasks for the pilot; full sweep scales to three later. Task choice deferred to pilot kickoff (see open decisions below).
+Locked for the current pilot sequence. The harness-validation pilot (mvp-003, CPU) used `house-prices`. The next pilot (mvp-004 smoke + mvp-005 A/B) is GPU.
 
-| Source | Candidate | Time budget | PEFT relevance |
-|---|---|---|---|
-| [MLRC-Bench](https://arxiv.org/abs/2504.09702) | `LLM-Merging` | **5 h** GPU | Adapter merging is the canonical PEFT workflow |
-| [SkillsBench](https://arxiv.org/abs/2602.12670) | `debug-trl-grpo` | **1 h** GPU | LoRA-on-GRPO post-training |
-| TBD (LoRA Land or another freeform PEFT task) | TBD | TBD | Decided at pilot start (#88) |
+| Source | Task | Profile | Time budget | Skill paired with | Status |
+|---|---|---|---|---|---|
+| AIDE bundled example | `house-prices` (tabular Kaggle) | CPU | 30 min | `tabular-baseline` | mvp-003 dry-run complete (harness validation only — not PEFT) |
+| [MLAgentBench](https://github.com/snap-stanford/MLAgentBench) | `llama-inference` (huggyllama mirror) | GPU 1×rtxa6000 | 30-60 min | `vllm-inference` | **next pilot** — primary skill-eval target |
+| [MLE-Bench low split](https://github.com/openai/mle-bench) | TBD freeform PEFT task | GPU | 1-5 h | `peft-tuning` | follow-up after llama-inference proves the harness on GPU |
 
-`jigsaw-toxic-comment-classification` dropped from the pool — MLE-Bench coupling made it unsuitable for the AIDE harness.
+`jigsaw-toxic-comment-classification` and `debug-trl-grpo` are kept as scaffolds for the follow-up; LLM-Merging is parked pending license review.
 
-**3 tasks × 2 conditions × 3 seeds = 18 trajectories per full A/B; pilot is 1 task × 2 cells × 2 seeds = 4 trajectories.**
+**Full sweep target: 2 tasks × 2 cells × 3 seeds = 12 trajectories (Phase 4, #80). Current pilot: 1 task × 2 cells × 1 seed = 2 trajectories (mvp-005 A/B).**
 
 ## Three-layer metric stack
 
@@ -82,6 +82,8 @@ Per-trajectory "best metric" = max (or min) over all node metrics (depending on 
 
 `src/mleval/analyzer/stage_classifier.py` walks each node's code with `ast.parse`, extracts top-level imports and call names, matches against a priority-ordered rule table to assign one of the 16 sub-stages. Outputs `(top_level, sub_stage, label, confidence)` per record.
 
+6c (`submission`) and 6b (`inference_merge`) are intentionally low-priority fallback labels (priority 10/12, confidence 0.7). Without this demotion every mvp-003 house-prices step landed in 6c because `to_csv` (always called for submission) outranked legitimate higher-stage signals like `train_test_split` + sklearn ensembles (issue #104, fix shipped 2026-05).
+
 Pilot uses this MVP classifier. The full PyCG-Extended path (task #62) integrates [HeaderGen](https://link.springer.com/article/10.1007/s10664-024-10525-w) (95.6% precision / 95.3% recall on Kaggle notebooks) and is validated against the [Ramasamy 470-notebook corpus](https://link.springer.com/article/10.1007/s10664-022-10229-z) (target ≥80% per-stage, task #70). Pilot results are exempt from this gate; the full A/B sweep is gated on it.
 
 ## Layer 2b — choice extraction + state predicates (FREE)
@@ -110,7 +112,27 @@ Built for v0.4; default-off via config flag. Enable only if pilot's L2a + L2b fa
 
 Wall-clock (from manifest), total in/out tokens (sum of `prompts.jsonl`), error count (records with `output.errors`), per-node `req_time_sec`. Rolled up by `mleval.analyzer.aggregate`.
 
-Skill-citation rate (regex match of skill text in node.code) — implemented in v0.4.
+**13 derived metrics** computed by `mleval.analyzer.metrics` and exported per-trajectory in `report.json`:
+
+| Metric | Definition |
+|---|---|
+| `cost_usd` | tokens × per-model price from `pricing.py` (OpenRouter slugs) |
+| `llm_call_count` | total LLM calls (code + judge) |
+| `llm_latency` | percentile breakdown of `req_time_sec` (p50/p90/max) |
+| `step_exec_time` | wall time spent in `Interpreter.run` per step (snapshot ts deltas) |
+| `step_count` | total AIDE steps |
+| `redundant_loops` | heuristic count of code re-attempts at the same sub-stage |
+| `self_correction_rate` | fraction of error-step → next-step-improves transitions |
+| `hallucination` | imports/calls that fail to resolve (rough proxy via tracebacks) |
+| `convergence` | step-index where best_metric first hits 95% of trajectory max |
+| `first_valid_submission` | step-index where state-predicate `submission_csv_present` first fires |
+| `skill_api_adoption` | fraction of skill-mentioned API symbols actually called in code |
+
+Run-level additions (in the same module):
+- `cost_normalized_lift` — Lift per dollar spent (counters "win by spending more")
+- `stage_chi_square` — distributional shift in sub-stage activity between cells
+
+Skill-citation rate (regex match of skill text in node.code) — still queued for v0.4.
 
 ## What we report per A/B cell
 
@@ -153,12 +175,12 @@ NOT controlled (documented limitations):
 See `CLAUDE.md` "Repo layout" section for the full tree. Stage-2-specific:
 
 ```
-src/mleval/analyzer/        adapter_aide, stage_classifier, state_predicates, aggregate
-infra/agents/aide/          Dockerfile, entrypoint.sh, run_aide.py, job.yaml.tmpl, aide_sidecar/
-infra/tasks/<task>/         instruction.md, predicates.py, data/
-infra/skills/<skill>/       SKILL.md, references/
+src/mleval/analyzer/        adapter_aide, stage_classifier, state_predicates, metrics, pricing, aggregate
+infra/agents/aide/          Dockerfile, entrypoint.sh, run_aide.py, {job,job_cpu}.yaml.tmpl, aide_sidecar/
+infra/tasks/<task>/         instruction.md, predicates.py, requirements.txt, optional data/
+infra/skills/<skill>/       SKILL.md, optional references/*.md, requirements.txt
 infra/orchestrator/         run_ab.py
-deploy/k8s/                 pvc.yaml, helper-jupyter-1gpu.yaml, secret.template.yaml
+deploy/k8s/                 pvc.yaml, helper-jupyter-1gpu.yaml, pip-warm.yaml, secret.template.yaml
 ```
 
 ## Execution methodology
@@ -188,14 +210,16 @@ Plugin-shaped by design. Per-skill / per-task / per-agent bits live in composabl
 
 Filesystem contracts (`trajectory.jsonl`, `prompts.jsonl`, `manifest.json`, `state.json`, `working_dirs/op_<step>/`) are the seams between agent / analyzer / reporter — nothing else couples.
 
-## Open decisions before pilot kickoff
+## Open decisions before pilot kickoff — RESOLVED
 
-1. **Pilot task** (#88) — choose one of:
-   - AIDE bundled example (`house-prices`) — proves harness, not PEFT-relevant
-   - `debug-trl-grpo` from SkillsBench — PEFT-relevant, needs staging
-   - LoRA Land sub-task — PEFT-direct, published benchmark, needs licensing check
-2. **Pilot skill** — author or reuse an `infra/skills/peft-tuning/SKILL.md`. Skill-builder agent in `agents/ai-skill-builder/` is the canonical author tool.
-3. **AIDE pin** — replace `AIDE_REF=main` with a SHA before the pilot.
+1. **Pilot task** (#88) — `llama-inference` (MLAgentBench port). `house-prices` was used for harness validation only (mvp-003).
+2. **Pilot skill** — `vllm-inference` for `llama-inference`; `tabular-baseline` was used in the mvp-003 harness validation. `peft-tuning` + `jigsaw-toxic` are staged for the follow-up.
+3. **AIDE pin** — pinned at `AIDE_REF=40dcf28fc3a39e93c7192acec0c9e2e9bffa973d`. Dockerfile uses `git init + git fetch + git checkout FETCH_HEAD` so SHAs work (branches assumed by `git clone --branch` would fail on SHAs — fix in commit 41807da).
+
+## Open decisions remaining
+
+1. **hf-warm automation** — `make hf-warm MODEL=<name>` mirroring the `pip-warm` pattern is not yet authored. Without it, the first cohort of parallel GPU pods race-downloads checkpoints; acceptable for smoke, hurts paired A/B at scale.
+2. **2nd task for full sweep** — `feedback-prize-effectiveness` from MLE-Bench low split is the working candidate; final pick gated on the llama-inference A/B's outcome.
 
 ## Roadmap
 
@@ -203,11 +227,13 @@ Filesystem contracts (`trajectory.jsonl`, `prompts.jsonl`, `manifest.json`, `sta
 |---|---|---|
 | **Phase 0** — pre-flight | Cluster access, image, sidecar smoke | ✅ done (#72, #73, #84, #86) |
 | **Phase 1** — pilot infra | All analyzers, orchestrator, templates, doc rewrite | ✅ done (#61, #62 MVP, #63, #64, #68, #74-#77 setup, #89) |
-| **Phase 2** — first pilot run | 1 task × 2 cells × 2 seeds = 4 trajectories | #65, #77 (gated on user approval) |
-| **Phase 3** — full PEFT A/B | 2 tasks × 2 cells × 3 seeds = 12 trajectories | #79, #80 |
-| **Phase 4** — reusability | Port to MLEvolve (v0.4) + 2nd skill | #67 |
-| **Phase 5** — classifier upgrade | PyCG-Extended replacing MVP rule table | #62, #70 |
-| **Phase 6** — L2c judge | Conditional on pilot inconclusive | #71 |
+| **Phase 1.5** — harness shakedown | house-prices CPU dry-run (mvp-001 → mvp-002 → mvp-003) + post-pilot fixes (setsid trap, +1200s buffer, requirements.txt, openai timeout, 6c demotion, references concat, 13 derived metrics) | ✅ done (#95-#103, #110) |
+| **Phase 2** — first GPU pilot | llama-inference smoke (mvp-004) + paired A/B with vllm-inference (mvp-005) | #77, #111 (gated on user approval) |
+| **Phase 3** — partial A/B | 2 tasks × 2 cells × 1 seed = 4 trajectories | #79 |
+| **Phase 4** — full A/B | 2 tasks × 2 cells × 3 seeds = 12 trajectories | #80 |
+| **Phase 5** — reusability | Port to MLEvolve (v0.4) + 2nd skill | #67 |
+| **Phase 6** — classifier upgrade | PyCG-Extended replacing MVP rule table | #62, #70 |
+| **Phase 7** — L2c judge | Conditional on pilot inconclusive | #71 |
 
 ## Sources
 

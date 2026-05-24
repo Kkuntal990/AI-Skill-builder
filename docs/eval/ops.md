@@ -64,6 +64,16 @@ $EDITOR .env
 # Stage task data + skill onto the PVC (one-time per task/skill)
 # See infra/tasks/README.md "Staging task data onto the PVC" for the
 # alpine-pod cp recipe.
+
+# Warm the pip cache (saves ~30-60s on every trajectory's first launch).
+# Re-run only when a task or skill `requirements.txt` changes.
+make pip-warm TASK=llama-inference SKILL=vllm-inference
+
+# (GPU profile only) Warm the HF cache so model weights are downloaded
+# once per sweep, not once per trajectory. NOT YET AUTOMATED — see the
+# "Open decisions remaining" section in stage2.md. Workaround: launch
+# one smoke trajectory before the parallel A/B and let it populate
+# /results/.hf-cache/ on its own.
 ```
 
 ## Interactive dev pod (smoke tests, prototyping)
