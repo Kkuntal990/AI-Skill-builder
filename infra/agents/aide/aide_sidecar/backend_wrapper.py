@@ -27,32 +27,53 @@ _LOG_PATH = Path(os.environ.get("MLEVAL_PROMPTS_LOG", "./prompts.jsonl"))
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _is_null_response(output) -> bool:
+    """Detect the OpenRouter/DeepSeek 'empty-completion' pattern.
+
+    Observed in mvp-006: a draft retry returned `output='null', out_tok=1,
+    req_time=0.87s` — far too fast to be a real generation, and AIDE's
+    extract_code(None) blew up downstream. Retrying once recovers in most
+    cases; the upstream cause is OpenRouter pre-filter latency, not the model.
+    """
+    if output is None:
+        return True
+    if isinstance(output, str) and output.strip().lower() in ("", "null"):
+        return True
+    return False
+
+
 def _make_logged(provider_name: str, original):
-    """Return a wrapper around a provider-specific query func that logs each call."""
+    """Return a wrapper around a provider-specific query func that logs each
+    call and retries once on a null response.
+    """
 
     def _logged(system_message=None, user_message=None, func_spec=None, **model_kwargs):
-        started = time.time()
-        output, req_time, in_tok, out_tok, info = original(
-            system_message=system_message,
-            user_message=user_message,
-            func_spec=func_spec,
-            **model_kwargs,
-        )
-        record = {
-            "ts": started,
-            "provider": provider_name,
-            "model": model_kwargs.get("model"),
-            "system_message": system_message,
-            "user_message": user_message,
-            "output": output if isinstance(output, str) else json.dumps(output, default=str),
-            "in_tokens": in_tok,
-            "out_tokens": out_tok,
-            "req_time_sec": req_time,
-            "func_spec_name": getattr(func_spec, "name", None),
-        }
-        with _LOG_PATH.open("a") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        return output, req_time, in_tok, out_tok, info
+        for attempt in (1, 2):
+            started = time.time()
+            output, req_time, in_tok, out_tok, info = original(
+                system_message=system_message,
+                user_message=user_message,
+                func_spec=func_spec,
+                **model_kwargs,
+            )
+            record = {
+                "ts": started,
+                "provider": provider_name,
+                "model": model_kwargs.get("model"),
+                "system_message": system_message,
+                "user_message": user_message,
+                "output": output if isinstance(output, str) else json.dumps(output, default=str),
+                "in_tokens": in_tok,
+                "out_tokens": out_tok,
+                "req_time_sec": req_time,
+                "func_spec_name": getattr(func_spec, "name", None),
+                "attempt": attempt,
+            }
+            with _LOG_PATH.open("a") as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            if attempt == 2 or not _is_null_response(output):
+                return output, req_time, in_tok, out_tok, info
+            # null on attempt 1 — fall through to attempt 2
 
     return _logged
 
