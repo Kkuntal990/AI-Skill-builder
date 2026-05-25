@@ -47,15 +47,23 @@ spec:
           # Per NRP policy: limit must be within 20% of request (and for jobs
           # at scale, limit == request). We use request == limit for full
           # compliance and to make the spec easy to reason about.
+          # Right-sized for llama-inference: huggyllama/llama-7b fp16 load
+          # peaks at ~13 GiB CPU RAM during from_pretrained; AIDE itself +
+          # deps add ~2 GiB; 24 GiB leaves headroom for optimizations that
+          # transiently double-load weights or import vllm/accelerate dispatch.
+          # 2 CPU is enough — the GPU does the inference; CPU only matters
+          # during one-shot tokenize (num_proc=4 burst) and pip install.
+          # If a future task needs more (e.g., llama-13b), parameterize via
+          # POD_CPU / POD_MEMORY envsubst vars threaded from the orchestrator.
           resources:
             requests:
               ${GPU_TYPE}: "1"
-              cpu: "4"
-              memory: "16Gi"
+              cpu: "2"
+              memory: "24Gi"
             limits:
               ${GPU_TYPE}: "1"
-              cpu: "4"
-              memory: "16Gi"
+              cpu: "2"
+              memory: "24Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
