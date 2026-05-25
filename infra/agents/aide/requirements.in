@@ -12,9 +12,18 @@
 #
 # To regenerate requirements.lock from this file:
 #
-#   docker run --rm -v $PWD:/work vllm/vllm-openai:v0.9.2 \
-#       bash -c 'pip install -r /work/infra/agents/aide/requirements.in \
-#                 && pip freeze > /work/infra/agents/aide/requirements.lock'
+#   docker run --rm --entrypoint bash -v $PWD:/work vllm/vllm-openai:v0.9.2 \
+#       -c 'pip install -q -r /work/infra/agents/aide/requirements.in \
+#            && pip freeze > /work/infra/agents/aide/requirements.lock' \
+#   && sed -i '/^vllm @ file:/d; /^flashinfer-python @ https:/d' \
+#       infra/agents/aide/requirements.lock
+#
+# The sed step strips two entries that pip freeze captures as local-file
+# / URL wheel paths (vllm itself, and flashinfer-python from pytorch.org):
+# both are already pre-installed in the base image and would fail to
+# resolve when the lockfile is consumed by the Dockerfile's pip install
+# step running in a fresh build context. Removing them is safe — pip's
+# `Requirement already satisfied` logic leaves the base versions in place.
 #
 # Bump versions deliberately. Do not edit the .lock by hand.
 
