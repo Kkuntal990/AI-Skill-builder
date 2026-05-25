@@ -1,4 +1,4 @@
-"""Snapshot AIDE's per-step working_dir so state predicates can inspect it.
+"""Snapshot AIDE's per-step working_dir + stage skill scripts into it.
 
 AIDE's ``Interpreter.run()`` writes ``runfile.py`` into ``working_dir``,
 executes it, then deletes the file before returning (see
@@ -6,10 +6,20 @@ executes it, then deletes the file before returning (see
 its contents (model checkpoints, intermediate CSVs) get overwritten or
 removed by AIDE's cleanup logic.
 
-We wrap ``Interpreter.run`` so that AFTER each execution we copy whatever
-exists in ``working_dir`` to ``$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/``.
-This snapshot is what ``state_predicates`` reads to assert task-specific
-post-conditions (``submission_present``, ``checkpoint_saved``, etc.).
+This patch does two things per call:
+
+1. **Before** ``Interpreter.run``: idempotently copy the skill's
+   ``scripts/`` directory (if any) into ``working_dir/scripts/`` so prompts
+   like ``bash scripts/check_vram.sh`` actually find the file. OpenClaw
+   skills bundle executable helpers alongside the markdown; without this
+   copy, every reference to ``scripts/*`` in the spliced SKILL.md is a dead
+   pointer. Idempotent via ``dst.exists()`` check — copied once per
+   trajectory's working_dir, no-op thereafter.
+
+2. **After** ``Interpreter.run``: copy whatever exists in ``working_dir``
+   to ``$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/``. This snapshot is what
+   ``state_predicates`` reads to assert task-specific post-conditions
+   (``submission_present``, ``checkpoint_saved``, etc.).
 
 Size caveat: PEFT runs produce multi-MB checkpoints; with 20 steps that's
 hundreds of MB per trajectory. We skip files matching SKIP_GLOBS (caches,
@@ -24,6 +34,8 @@ import shutil
 from pathlib import Path
 
 import aide.interpreter as _interp
+
+from . import skill_inject as _skill_inject
 
 _OUTPUT_DIR = Path(os.environ.get("MLEVAL_OUTPUT_DIR", "."))
 _SNAPSHOT_ROOT = _OUTPUT_DIR / "working_dirs"
@@ -67,12 +79,41 @@ _step_counter = {"n": 0}
 _original_run = _interp.Interpreter.run
 
 
+def _maybe_stage_skill_scripts(working_dir: Path) -> None:
+    """Copy the skill's scripts/ dir into working_dir/scripts/ if not done.
+
+    Idempotent: returns early when the destination already exists. So once
+    AIDE's working_dir is populated, subsequent steps are O(1) stat calls.
+    """
+    skill_dir = _skill_inject.get_skill_dir()
+    if skill_dir is None:
+        return
+    scripts_src = skill_dir / "scripts"
+    if not scripts_src.is_dir():
+        return
+    scripts_dst = working_dir / "scripts"
+    if scripts_dst.exists():
+        return
+    try:
+        shutil.copytree(scripts_src, scripts_dst)
+    except Exception:  # noqa: BLE001
+        # Best-effort; if it fails the agent sees the same dead-pointer
+        # state as before the patch, which is recoverable.
+        pass
+
+
 def _wrapped_run(self, code, *args, **kwargs):
+    wd = Path(getattr(self, "working_dir", "")) if hasattr(self, "working_dir") else None
+    if wd and wd.is_dir():
+        try:
+            _maybe_stage_skill_scripts(wd)
+        except Exception:  # noqa: BLE001
+            pass
+
     result = _original_run(self, code, *args, **kwargs)
     step = _step_counter["n"]
     _step_counter["n"] += 1
     try:
-        wd = Path(getattr(self, "working_dir", "")) if hasattr(self, "working_dir") else None
         if wd and wd.is_dir():
             _copy_filtered(wd, _SNAPSHOT_ROOT / f"op_{step:03d}")
     except Exception:  # noqa: BLE001

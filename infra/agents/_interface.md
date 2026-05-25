@@ -64,8 +64,7 @@ Set by the orchestrator (`scripts/run_ab.py`) per trajectory. All required unles
 | `SEED` | `42` | Pinned at entrypoint: `torch`, `numpy`, `random` |
 | `TIME_LIMIT_SECONDS` | `43200` | Hard wall-clock cap; entrypoint must enforce |
 | `MLEVAL_OUTPUT_DIR` | `/pvc/<run_id>/<trajectory_id>` | Where adapter writes outputs |
-| `MLEVAL_SKILL_PATH` | `/workspace/skill/SKILL.md` | Path to skill file. Empty/unset in `without_skill` cell |
-| `MLEVAL_SKILL_REFERENCES_DIR` | `/workspace/skill/references` | Optional. Path agent can read for deep-dive content |
+| `MLEVAL_SKILL_PATH` | `/results/skills/vllm-inference/SKILL.md` | Path to the skill's entry-point file. Empty/unset in `without_skill` cell. Sibling `references/*.md` (deep-dive markdown) and `scripts/*` (executables the skill instructs the agent to run) are auto-discovered relative to this path. |
 | `MLEVAL_SKILL_SHA256` | `4b6af703...` | Pinned skill version; recorded in `manifest.json` |
 | `MLEVAL_TASK_INSTRUCTION_PATH` | `/workspace/task/instruction.md` | Task description (e.g., AIDE's `goal` field reads from this) |
 | `MLEVAL_TASK_DATA_DIR` | `/workspace/task/data` | Task data; read-only mount |

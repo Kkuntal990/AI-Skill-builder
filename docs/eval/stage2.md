@@ -178,7 +178,7 @@ See `CLAUDE.md` "Repo layout" section for the full tree. Stage-2-specific:
 src/mleval/analyzer/        adapter_aide, stage_classifier, state_predicates, metrics, pricing, aggregate
 infra/agents/aide/          Dockerfile, entrypoint.sh, run_aide.py, {job,job_cpu}.yaml.tmpl, aide_sidecar/
 infra/tasks/<task>/         instruction.md, predicates.py, requirements.txt, optional data/
-infra/skills/<skill>/       SKILL.md, optional references/*.md, requirements.txt
+infra/skills/<skill>/       SKILL.md, optional references/*.md, optional scripts/*, requirements.txt
 infra/orchestrator/         run_ab.py
 deploy/k8s/                 pvc.yaml, helper-jupyter-1gpu.yaml, pip-warm.yaml, secret.template.yaml
 ```
@@ -203,7 +203,7 @@ Plugin-shaped by design. Per-skill / per-task / per-agent bits live in composabl
 
 | Extension axis | Cost per addition |
 |---|---|
-| New skill | `infra/skills/<name>/SKILL.md` (~50 lines) + optional `references/` |
+| New skill | `infra/skills/<name>/SKILL.md` (~50-150 lines) + optional `references/*.md` (auto-concatenated into the prompt by `skill_inject`) + optional `scripts/*` (auto-copied into AIDE's working_dir by `interpreter_patch`) |
 | New task | `infra/tasks/<name>/{instruction.md, predicates.py, data/}` (~100 LOC + data staging) |
 | New agent | `infra/agents/<name>/{Dockerfile, entrypoint.sh, ...}` + `src/mleval/analyzer/adapter_<name>.py` (~300 LOC) |
 | New benchmark adapter | thin wrapper around the agent's native metric (~40 LOC) |

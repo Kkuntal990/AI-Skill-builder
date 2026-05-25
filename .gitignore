@@ -54,3 +54,10 @@ logs/
 *.swp
 *.swo
 pulled-results/
+
+# Skill builder outputs — Stage 1 grading artifacts belong in
+# ~/.openclaw/skills/<name>/evals/, not in the staged eval repo.
+# If a skill rebuild drops them in-tree, they're filtered here so they
+# don't bloat the staging rsync to the PVC.
+infra/skills/*/evals/
+

@@ -45,6 +45,26 @@ _SKILL_PATH = os.environ.get("MLEVAL_SKILL_PATH", "").strip()
 _original_load_task_desc = _config.load_task_desc
 
 
+def get_skill_dir() -> Path | None:
+    """Return the skill bundle's root directory, or None if unset/missing.
+
+    Public helper shared with :mod:`interpreter_patch` so the scripts/ copy
+    resolves the same way the references/ concat does. The skill root is:
+      * ``Path(MLEVAL_SKILL_PATH).parent``  if the env var points at a file
+        (the canonical case — orchestrator passes the SKILL.md path)
+      * ``Path(MLEVAL_SKILL_PATH)``         if it points at a directory
+      * ``None`` otherwise (unset, empty, missing path)
+    """
+    if not _SKILL_PATH:
+        return None
+    p = Path(_SKILL_PATH)
+    if p.is_file():
+        return p.parent
+    if p.is_dir():
+        return p
+    return None
+
+
 def _concat_references(refs_dir: Path, parts: list[str]) -> None:
     if not refs_dir.is_dir():
         return

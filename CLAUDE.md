@@ -56,10 +56,10 @@ infra/                            Stage-2 runtime, plugin layout
 │   ├── _template/
 │   ├── house-prices/               tabular Kaggle pilot — mvp-003 (without_skill: 6c overmatch fixed)
 │   └── llama-inference/            MLAgentBench port — primary GPU pilot, paired with vllm-inference
-├── skills/                       skills under eval (SKILL.md + optional references/*.md + requirements.txt)
+├── skills/                       skills under eval (SKILL.md [+ references/*.md] [+ scripts/*] + requirements.txt)
 │   ├── _template/
 │   ├── tabular-baseline/           tested in mvp-003 on house-prices
-│   └── vllm-inference/             117-line SKILL.md + 4 references (1,803 LOC) — next pilot
+│   └── vllm-inference/             162-line SKILL.md + 6 references (~2,300 LOC) + 3 scripts — next pilot
 └── orchestrator/
     └── run_ab.py                 spawn N Jobs per (task × cell × seed), wait, collect
 
@@ -154,8 +154,8 @@ The AIDE plugin runs five monkey-patches that load at import time via `run_aide.
 | `aide_sidecar.seed` | Seeds `random`, `numpy.random` (legacy + `default_rng`), `torch`. Sets `PYTHONHASHSEED`. | AIDE never seeds anything; paired seeds require this. |
 | `aide_sidecar.openai_timeout` | Injects `httpx.Timeout(read=$MLEVAL_LLM_TIMEOUT_SEC, connect=$MLEVAL_LLM_CONNECT_TIMEOUT_SEC)` (defaults 120s / 10s) into `openai.OpenAI.__init__` and `openai.AsyncOpenAI.__init__`. | OpenAI client default is no read timeout — mvp-001 hung 24+ min on a stalled OpenRouter call before this was added. |
 | `aide_sidecar.backend_wrapper` | Wraps each entry in `aide.backend.provider_to_query_func` to log `(prompt, response, in/out tokens, req_time)` to `$MLEVAL_PROMPTS_LOG`. | AIDE discards token counts; prompts are never persisted. |
-| `aide_sidecar.skill_inject` | `$MLEVAL_SKILL_PATH` may be a SKILL.md file *or* a skill directory; if a sibling `references/` dir exists, all `*.md` are concatenated in deterministic filename order with `## references/<name>.md` headers. Result spliced into `aide.utils.config.load_task_desc`'s return value. | Makes the full progressive-disclosure bundle visible to every code-gen and judge call (AIDE cannot navigate the filesystem from prompts). |
-| `aide_sidecar.interpreter_patch` | Wraps `Interpreter.run` to snapshot `working_dir` to `$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/` per step. Skips heavy globs (`*.bin`, `*.safetensors`, etc.). | State predicates need to inspect submission CSVs / checkpoints; AIDE deletes them. |
+| `aide_sidecar.skill_inject` | `$MLEVAL_SKILL_PATH` may be a SKILL.md file *or* a skill directory; if a sibling `references/` dir exists, all `*.md` are concatenated in deterministic filename order with `## references/<name>.md` headers. Result spliced into `aide.utils.config.load_task_desc`'s return value. Also exports `get_skill_dir()` used by `interpreter_patch` to locate `scripts/`. | Makes the full progressive-disclosure bundle visible to every code-gen and judge call (AIDE cannot navigate the filesystem from prompts). |
+| `aide_sidecar.interpreter_patch` | (1) **Before** `Interpreter.run`: idempotently copies the skill's `scripts/` dir into `working_dir/scripts/` so SKILL.md instructions like `bash scripts/check_vram.sh` actually find the file. (2) **After**: snapshots `working_dir` to `$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/` per step. Skips heavy globs (`*.bin`, `*.safetensors`, etc.). | Skill scripts are dead pointers without (1) — markdown gets spliced but executables don't follow. State predicates need (2) because AIDE deletes intermediates. |
 
 Patch ordering matters: seed first (so any subsequent randomness is determined), then openai_timeout (must run before any openai client is constructed), then backend (must run before `aide.agent` does `from .backend import query`), then skill_inject (before `Agent.__init__` calls `load_task_desc`).
 
@@ -172,7 +172,9 @@ The orchestrator threads these as `MLEVAL_TASK_REQS_PATH` / `MLEVAL_SKILL_REQS_P
 
 **`make pip-warm TASK=<name> [SKILL=<name>]`** pre-populates that cache from an ephemeral 1cpu/2Gi pod — run it before launching a fresh sweep so the first trajectory doesn't pay the 30-60s wheel download. The pip cache survives across runs; only re-warm when a `requirements.txt` changes.
 
-Empty skill `requirements.txt` files are intentional and valid (skip-handled by the entrypoint and pip-warm pod).
+Empty skill `requirements.txt` files are intentional and valid (skip-handled by the entrypoint and pip-warm pod) — they preserve methodological isolation when a skill's deps are already in the task's universe (e.g., vllm-inference declares no deps because llama-inference's reqs already include vllm).
+
+Skill bundles may also include a `scripts/` dir (executable helpers the skill markdown instructs the agent to run) and a build-tool-output `evals/` dir (Stage 1 grading artifacts). `scripts/` is copied into AIDE's working_dir by `interpreter_patch`; `evals/` is `.gitignore`'d and should not appear in-tree (it belongs in `~/.openclaw/skills/<name>/evals/` on the author's machine).
 
 ## Trajectory lifecycle (entrypoint signal handling)
 
