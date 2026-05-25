@@ -45,18 +45,20 @@ infra/                            Stage-2 runtime, plugin layout
 ├── agents/                       per-agent plugins (one subdir each)
 │   ├── _interface.md             contract: env vars, output files, schema
 │   └── aide/
-│       ├── Dockerfile
-│       ├── entrypoint.sh           setsid+PGID trap; runs pip install then AIDE then analyzers
+│       ├── Dockerfile              vllm/vllm-openai:v0.9.2 base + lockfile install (MLE-Bench pattern)
+│       ├── requirements.in         top-level pins added on top of vllm-openai's universe
+│       ├── requirements.lock       278-package frozen lockfile (do not hand-edit; regen recipe in .in)
+│       ├── entrypoint.sh           setsid+PGID trap; runs (now empty) pip install then AIDE then analyzers
 │       ├── run_aide.py             shim — loads sidecar patches before AIDE
-│       ├── job.yaml.tmpl           GPU profile (1×rtxa6000 + 4cpu/16Gi, PEFT)
+│       ├── job.yaml.tmpl           GPU profile (1×rtxa6000 + 2cpu/24Gi)
 │       ├── job_cpu.yaml.tmpl       CPU profile (1cpu/2Gi NRP-exempt, tabular pilots)
 │       ├── aide_sidecar/           monkey-patches (seed, openai_timeout, backend, skill, interpreter)
 │       └── README.md
-├── tasks/                        per-task scaffolds (instruction.md + predicates.py + requirements.txt [+ data/])
+├── tasks/                        per-task scaffolds (instruction.md + predicates.py + [empty] requirements.txt [+ data/])
 │   ├── _template/
 │   ├── house-prices/               tabular Kaggle pilot — mvp-003 (without_skill: 6c overmatch fixed)
 │   └── llama-inference/            MLAgentBench port — primary GPU pilot, paired with vllm-inference
-├── skills/                       skills under eval (SKILL.md [+ references/*.md] [+ scripts/*] + requirements.txt)
+├── skills/                       skills under eval (SKILL.md [+ references/*.md] [+ scripts/*] + [empty] requirements.txt)
 │   ├── _template/
 │   ├── tabular-baseline/           tested in mvp-003 on house-prices
 │   └── vllm-inference/             162-line SKILL.md + 6 references (~2,300 LOC) + 3 scripts — next pilot
@@ -128,7 +130,8 @@ Current research focus. Two-stage pipeline; index at `docs/eval/overview.md`.
 ## Container image — `infra/agents/aide/`, `deploy/k8s/`
 
 - **Image tag:** `ghcr.io/kkuntal990/mleval-agent:dev` (overwrites on every push)
-- **Base:** `pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime` — shared across plugins for layer reuse.
+- **Base:** `vllm/vllm-openai:v0.9.2` — vllm owns the torch ABI (torch 2.7.0+cu128, vllm 0.9.2, transformers 4.53.1 pinned). Replaces the prior `pytorch/pytorch:2.7.1` base, which broke when per-task `pip install vllm` forced torch 2.7→2.5 downgrade. Switched 2026-05-25.
+- **Dep stack:** single `pip install --no-deps -r requirements.lock` in the Dockerfile (MLE-Bench pattern). Lockfile is 280 packages frozen from `infra/agents/aide/requirements.in` resolved INSIDE the same `vllm/vllm-openai:v0.9.2` base (recipe in `requirements.in` header). pip sees the full dep graph once at image-build time — no runtime cascades. Per-task `requirements.txt` files are intentionally empty (kept for backward compat; tasks ship data + prompts, not deps).
 - **Build/push host:** `amusing.ucsd.edu` (32-core Linux amd64, native BuildKit via per-user `~/.docker/cli-plugins/docker-buildx` v0.18.0). Mac builds via QEMU emulation take ~30 min vs ~5–10 min native. **Don't build locally on Mac unless amusing is down.**
 - **All other ops happen from this Mac:** `kubectl` against `ecepxie`, `make k8s-*`, helper-pod / Job lifecycle, secret creation, log tailing, orchestrator runs.
 - **SSH to amusing:** `ssh ad-kkokate@amusing.ucsd.edu`. Key passphrase is the literal string `"amusing"`.
@@ -163,18 +166,14 @@ The `aide.agent.query` capture-at-import problem is solved by patching the dict 
 
 ## Per-task / per-skill Python dependencies
 
-Tasks and skills declare their pip deps in a sibling `requirements.txt` rather than baking them into the image — keeps the base image lean and lets new tasks ship without an image rebuild.
+**As of 2026-05-25: per-task and per-skill `requirements.txt` are deprecated.** All ML/agent deps are now in the base image's `infra/agents/aide/requirements.lock` (resolved once at image-build time inside the same `vllm/vllm-openai:v0.9.2` base — MLE-Bench's frozen-lockfile pattern). The earlier "per-task pip install at trajectory startup" architecture caused a cascade where `vllm==0.6.6` in a task's reqs forced torch 2.7→2.5 downgrade, broke torchaudio + transformers ABI, and crashed AIDE; see the git log around commit 72cb6bd / 5d1c5d6 for the post-mortem.
 
-- `infra/tasks/<task>/requirements.txt`  → installed in **every** cell
-- `infra/skills/<skill>/requirements.txt` → installed **only** when `cell == with_skill` (methodological isolation: a skill's deps must not leak into the baseline)
+- `infra/tasks/<task>/requirements.txt`  → kept as **empty files** for backward compat (entrypoint.sh skips on no-non-comment-lines). Add to these ONLY if a task needs a niche package not in the lockfile — and never re-pin major libs (torch, transformers, vllm), that goes in `infra/agents/aide/requirements.in` + Dockerfile rebuild.
+- `infra/skills/<skill>/requirements.txt` → same. Empty by design; the lockfile owns the dep universe so methodological isolation is preserved by-default across all cells.
 
-The orchestrator threads these as `MLEVAL_TASK_REQS_PATH` / `MLEVAL_SKILL_REQS_PATH`; `entrypoint.sh` `pip install -r`'s them before launching AIDE, with `--cache-dir /results/.pip-cache` (PVC-backed CephFS RWX) so wheels are reused across trajectories.
+`make pip-warm` is now a no-op for the canonical tasks (their requirements.txt are empty) but still works for any task that does declare extras. The PVC pip cache at `/results/.pip-cache/` is still mounted and used by the entrypoint's pip-install step (which now finds nothing to install).
 
-**`make pip-warm TASK=<name> [SKILL=<name>]`** pre-populates that cache from an ephemeral 1cpu/2Gi pod — run it before launching a fresh sweep so the first trajectory doesn't pay the 30-60s wheel download. The pip cache survives across runs; only re-warm when a `requirements.txt` changes.
-
-Empty skill `requirements.txt` files are intentional and valid (skip-handled by the entrypoint and pip-warm pod) — they preserve methodological isolation when a skill's deps are already in the task's universe (e.g., vllm-inference declares no deps because llama-inference's reqs already include vllm).
-
-Skill bundles may also include a `scripts/` dir (executable helpers the skill markdown instructs the agent to run) and a build-tool-output `evals/` dir (Stage 1 grading artifacts). `scripts/` is copied into AIDE's working_dir by `interpreter_patch`; `evals/` is `.gitignore`'d and should not appear in-tree (it belongs in `~/.openclaw/skills/<name>/evals/` on the author's machine).
+Skill bundles may include a `scripts/` dir (executable helpers the skill markdown instructs the agent to run) — copied into AIDE's working_dir by `interpreter_patch` — and a build-tool-output `evals/` dir (Stage 1 grading artifacts; `.gitignore`'d, belongs in `~/.openclaw/skills/<name>/evals/` on the author's machine).
 
 ## Trajectory lifecycle (entrypoint signal handling)
 
@@ -194,6 +193,8 @@ Logged in the task list (use `TaskList` to inspect). Highlights:
 |---|---|---|
 | #62 | Stage classifier is a flat AST rule table (MVP); real PyCG-Extended integration is task #62 + #70 validation gate | Pilot uses MVP; PyCG upgrade gates the full A/B (#66). 6c/6b overmatch (#104) was fixed in-place by demoting their priority — fallback-only labels now. |
 | #71 | Layer-2c LLM judge is unimplemented | Default OFF; only flipped on if pilot's L2a/L2b can't discriminate cells |
+| transformers pin | `transformers==4.53.1` hard-pinned in `requirements.in` because `vllm==0.9.2` + `transformers>=5` conflict on the `aimv2` config registration | Bumping `VLLM_TAG` to a release supporting transformers 5.x (e.g., the post-July-2025 nightlies) would unlock newer transformers — but those don't have stable Docker tags, only `nightly-<sha>`. Deferred until methodologically necessary. |
+| trl excluded | `trl` is intentionally NOT in `requirements.lock` because trl 1.4+ requires transformers>=4.56, which conflicts with the vllm pin | PEFT tasks needing trl must pin to a pre-1.4 release in per-task requirements.txt or bump VLLM_TAG. |
 | hf-warm | Pre-populating `/results/.hf-cache/` is not yet automated (mirrors pip-warm pattern) | Workaround: first GPU trajectory pays a one-time download; subsequent ones hit the PVC. Acceptable for smoke; will hurt parallel A/B if both pods race the download. |
 | Reproducibility | `random.shuffle` of package list in AIDE prompts depends on retry-count nondeterminism (network) | Documented in `aide_sidecar/seed.py`; bounded within a trajectory, not across |
 | Token undercount | Backoff-layer retries inside provider backends are not counted by our wrapper | Acceptable bias for L3 cost; documented in `backend_wrapper.py` |

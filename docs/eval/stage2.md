@@ -151,6 +151,7 @@ Controlled:
 - LLM temperature pinned to 0
 - AIDE git SHA captured in manifest (`/opt/aide/.aide_sha`)
 - Image digest captured at apply time (manifest fills via pod-side env)
+- **Frozen package versions**: 278-package lockfile at `infra/agents/aide/requirements.lock` resolved once at image build inside `vllm/vllm-openai:v0.9.2`. No runtime pip install at trajectory startup (the prior per-task pip install architecture was abandoned 2026-05-25 after vllm 0.6.6 in task reqs forced torch 2.7→2.5 downgrade — see commit 72cb6bd). Pip freeze of the running container is also snapshotted to `/opt/requirements.freeze` for audit.
 
 NOT controlled (documented limitations):
 - Network-latency-driven retry counts inside AIDE's `backoff_create` change the number of `random.*` calls between steps, which then shifts what `random.shuffle(pkgs)` returns inside AIDE's `_prompt_environment`. Bounded *within* a trajectory; can diverge *across* paired runs. Worst case: temperature-0 LLM responses still differ between cells.
@@ -174,7 +175,7 @@ So the "no MCP" reality is AIDE-specific (and broadly true of MLAgentBench and D
 |---|---|
 | Orchestration | `infra/orchestrator/run_ab.py` (pure stdlib, ~250 LOC) |
 | k8s Job lifecycle | envsubst-rendered `infra/agents/aide/job.yaml.tmpl` per trajectory |
-| Image | `ghcr.io/kkuntal990/mleval-agent:dev` (built on amusing) |
+| Image | `ghcr.io/kkuntal990/mleval-agent:dev` (single-image, MLE-Bench-style; base `vllm/vllm-openai:v0.9.2`; deps from `requirements.lock`; built on amusing) |
 | Storage | `mleval-results` PVC, 1Ti CephFS RWX, `rook-cephfs` storage class |
 | Cluster | UCSD Nautilus NRP, namespace `ecepxie`, 1× RTX A6000 per trajectory |
 | Local analyzer | `src/mleval/analyzer/` (pip-installable as part of `mleval` package) |

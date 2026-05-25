@@ -66,7 +66,10 @@ $EDITOR .env
 # alpine-pod cp recipe.
 
 # Warm the pip cache (saves ~30-60s on every trajectory's first launch).
-# Re-run only when a task or skill `requirements.txt` changes.
+# As of 2026-05-25 this is a near-no-op because per-task requirements.txt
+# files are now empty (all ML deps live in the base image lockfile at
+# infra/agents/aide/requirements.lock — see commit 72cb6bd). Still safe
+# to run; only meaningful if you add a niche package to a task's reqs.
 make pip-warm TASK=llama-inference SKILL=vllm-inference
 
 # (GPU profile only) Warm the HF cache so model weights are downloaded
