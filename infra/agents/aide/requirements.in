@@ -1,0 +1,65 @@
+# Top-level Python deps to layer on top of vllm/vllm-openai:v0.9.2.
+#
+# Everything else (torch, vllm, transformers, accelerate, numpy, scipy,
+# bitsandbytes, sentencepiece, jsonschema, rich, openai, httpx, tqdm,
+# python-dotenv) ships with the base image at compatible versions.
+# We deliberately do NOT reinstall those — the base owns the torch ABI
+# and vllm's pin chain.
+#
+# AIDE itself is installed in the Dockerfile via git clone + pip install
+# --no-deps so its old `datasets==2.1.0` / `rich==13.7.0` pins do not
+# downgrade the base versions.
+#
+# To regenerate requirements.lock from this file:
+#
+#   docker run --rm -v $PWD:/work vllm/vllm-openai:v0.9.2 \
+#       bash -c 'pip install -r /work/infra/agents/aide/requirements.in \
+#                 && pip freeze > /work/infra/agents/aide/requirements.lock'
+#
+# Bump versions deliberately. Do not edit the .lock by hand.
+
+# AIDE harness deps (above the # agent requirements divider in AIDE's
+# upstream requirements.txt). Loosely pinned so pip resolves against
+# vllm-openai's package universe.
+backoff>=2.2
+plotly>=5.0
+gymnasium>=0.29
+python-igraph>=0.11
+
+# AIDE-relied data/plot stack
+pandas>=2.0
+scikit-learn>=1.5
+matplotlib>=3.8
+seaborn>=0.13
+scikit-image>=0.24
+
+# Pin transformers to whatever vllm/vllm-openai:v0.9.2 ships (4.53.1).
+# Going higher breaks vllm at import time — vllm 0.9.2 registers `aimv2`
+# config that transformers 5.x bakes in itself, raising `ValueError:
+# 'aimv2' is already used by a Transformers config`. Validated on
+# amusing 2026-05-25.
+transformers==4.53.1
+
+# HF agent stack — peft / datasets needed by AIDE analysis and PEFT-family
+# tasks. datasets is in AIDE's upstream pins but at the obsolete ==2.1.0;
+# we let pip pick a modern release that still respects transformers==4.53.1.
+# trl is INTENTIONALLY excluded here — trl 1.4+ requires transformers>=4.56
+# which conflicts with our vllm-pinned 4.53.1. PEFT tasks that need trl
+# can install a pre-1.4 release in their per-task requirements.txt or via
+# the skill's requirements.txt.
+datasets>=3.0,<5.0
+peft>=0.13,<0.20
+
+# Tabular boosters for house-prices and similar Kaggle tasks. Pre-installing
+# avoids the per-task pip install that the prior architecture relied on
+# (those installs were the source of dep cascades — see CLAUDE.md
+# "Container image" section).
+xgboost>=2.1
+lightgbm>=4.5
+catboost>=1.2
+
+# Interactive helper-pod extras (deploy/k8s/helper-jupyter-1gpu.yaml runs
+# jupyter lab inside this same image).
+jupyterlab>=4.0
+ipywidgets>=8.0
+notebook>=7.0

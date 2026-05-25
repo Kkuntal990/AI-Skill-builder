@@ -1,15 +1,11 @@
-# Task-level deps for jigsaw-toxic. Installed at trajectory startup by
-# entrypoint.sh into the PVC-cached pip dir. Both with_skill and without_skill
-# cells get these libraries so the only A/B variable is the SKILL.md prompt
-# injection — never library availability.
+# Task-level Python deps for jigsaw-toxic (deferred follow-up pilot).
 #
-# torch is already in the base image (pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime).
-# Versions pinned for reproducibility; bump only when validating a fresh stack.
-
-transformers==4.46.3
-peft==0.13.2
-accelerate==1.2.1
-datasets==3.2.0
-bitsandbytes==0.45.0
-sentencepiece==0.2.0
-scikit-learn==1.5.2
+# Intentionally empty as of 2026-05-25 — transformers/peft/accelerate/
+# datasets/bitsandbytes/sentencepiece/scikit-learn are in the base image
+# lockfile. See infra/tasks/llama-inference/requirements.txt for rationale.
+#
+# NOTE for the PEFT follow-up: if jigsaw-toxic needs trl (transformers
+# RL/SFT trainer), pin to a pre-1.4 release (trl 1.4+ wants
+# transformers>=4.56 which conflicts with our vllm-pinned 4.53.1). Better
+# path: bump the base image's VLLM_TAG to a newer release that supports
+# transformers 5.x, then add `trl` to requirements.in instead of here.
