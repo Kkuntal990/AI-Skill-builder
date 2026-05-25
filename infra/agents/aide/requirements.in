@@ -29,11 +29,24 @@
 
 # AIDE harness deps (above the # agent requirements divider in AIDE's
 # upstream requirements.txt). Loosely pinned so pip resolves against
-# vllm-openai's package universe.
+# vllm-openai's package universe. These are what AIDE imports at runtime;
+# AIDE itself is installed with --no-deps in the Dockerfile so its old
+# strict pins (datasets==2.1.0, rich==13.7.0, etc.) do not downgrade.
 backoff>=2.2
 plotly>=5.0
 gymnasium>=0.29
 python-igraph>=0.11
+dataclasses-json>=0.6
+omegaconf>=2.3
+hydra-core>=1.3
+shutup>=0.2
+genson>=1.2
+funcy>=2.0
+coolname>=2.2
+loguru>=0.7
+anthropic>=0.20
+black>=24.0
+humanize>=4.8
 
 # AIDE-relied data/plot stack
 pandas>=2.0
