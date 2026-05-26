@@ -269,6 +269,25 @@ AGENT_PGID=$(ps -o pgid= -p "$AGENT_PID" 2>/dev/null | tr -d ' ')
 [[ -z "$AGENT_PGID" ]] && AGENT_PGID="$AGENT_PID"
 echo "[entrypoint] AIDE PID=$AGENT_PID PGID=$AGENT_PGID"
 
+# Memory sampler — code review M3 / answers "why did we OOM at N GiB" by
+# logging actual peak RSS + pod-level memory + GPU util every 5s while AIDE
+# is alive. Self-terminates when AGENT_PID exits; no separate kill needed.
+# Background subshell, set -e doesn't propagate.
+SAMPLER_LOG="$MLEVAL_OUTPUT_DIR/mem_sample.csv"
+echo "ts_unix,pgrp_rss_kb,pod_mem_used_kb,gpu_util_pct,gpu_mem_used_mib" > "$SAMPLER_LOG"
+( while kill -0 "$AGENT_PID" 2>/dev/null; do
+    ts=$(date +%s)
+    rss=$(ps -eo pid,pgid,rss --no-headers 2>/dev/null \
+          | awk -v pgid="$AGENT_PGID" '$2==pgid {s+=$3} END{print s+0}')
+    pod=$(awk '/^MemTotal:/{mt=$2} /^MemAvailable:/{ma=$2} END{print mt-ma}' /proc/meminfo)
+    gpu=$(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null \
+          | head -1 | tr -d ' ')
+    [[ -z "$gpu" ]] && gpu="0,0"
+    echo "${ts},${rss},${pod},${gpu}" >> "$SAMPLER_LOG"
+    sleep 5
+done ) &
+SAMPLER_PID=$!
+
 wait "$AGENT_PID"
 WAIT_EXIT=$?
 set -e

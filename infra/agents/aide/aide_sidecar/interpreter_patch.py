@@ -40,13 +40,24 @@ from . import skill_inject as _skill_inject
 _OUTPUT_DIR = Path(os.environ.get("MLEVAL_OUTPUT_DIR", "."))
 _SNAPSHOT_ROOT = _OUTPUT_DIR / "working_dirs"
 
-# Globs to skip when snapshotting; matched against file basename.
+# Globs to skip when snapshotting; matched against file basename. shutil.copy2
+# is kernel-streamed (not buffered in Python), so the OOM risk is PVC bloat
+# not RAM. Extended in code-review C2 to cover formats AIDE writes during
+# inference / dataset prep on LLM tasks.
 SKIP_GLOBS = (
     "*.bin",
     "*.safetensors",
     "*.pt",
+    "*.pth",
     "*.ckpt",
     "*.h5",
+    "*.gguf",
+    "*.arrow",
+    "*.parquet",
+    "*.npy",
+    "*.npz",
+    "*.pkl",
+    "*.pickle",
     "*.tar.gz",
     "__pycache__",
     ".cache",

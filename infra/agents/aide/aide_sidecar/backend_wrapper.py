@@ -86,6 +86,9 @@ def _make_logged(provider_name: str, original):
     """
 
     def _logged(system_message=None, user_message=None, func_spec=None, **model_kwargs):
+        # Shallow-copy so we don't mutate the caller's dict (e.g., a cached
+        # config object that subsequent non-deepseek calls might reuse).
+        model_kwargs = dict(model_kwargs)
         _apply_provider_routing(model_kwargs, has_func_spec=func_spec is not None)
         for attempt in (1, 2):
             started = time.time()

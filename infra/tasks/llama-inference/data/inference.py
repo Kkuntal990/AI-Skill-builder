@@ -1,5 +1,4 @@
 from transformers import LlamaTokenizer, AutoModelForCausalLM, AutoConfig
-from peft import prepare_model_for_int8_training
 from peft import LoraConfig, get_peft_model, TaskType, get_peft_config
 from peft import PeftModel, PeftConfig
 import torch
@@ -20,8 +19,12 @@ from datasets import load_dataset
 generation_length = 1
 context_length = 128
 
-tokenizer = LlamaTokenizer.from_pretrained("decapoda-research/llama-7b-hf")
-model = LlamaForCausalLM.from_pretrained("decapoda-research/llama-7b-hf").to("cuda")
+# Upstream task loaded `decapoda-research/llama-7b-hf` which was removed
+# from the HF Hub; `huggyllama/llama-7b` is a Meta-license-compliant mirror
+# with identical weights. Substitution is explicitly authorized in
+# instruction.md "Framework integration notes".
+tokenizer = LlamaTokenizer.from_pretrained("huggyllama/llama-7b")
+model = LlamaForCausalLM.from_pretrained("huggyllama/llama-7b").to("cuda")
 eval_dataset = load_dataset("wikitext", 'wikitext-103-v1', split="test")
 
 # tokenize the dataset and filter out examples that are shorter than the context length

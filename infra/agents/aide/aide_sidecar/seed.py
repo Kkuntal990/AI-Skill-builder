@@ -53,11 +53,17 @@ try:
     torch.manual_seed(_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(_seed)
-    # Forbid nondeterministic ops where possible (PyTorch may still fall back).
-    try:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-    except Exception:  # noqa: BLE001
-        pass
+    # Optionally forbid nondeterministic CUDA ops. OFF by default because
+    # deterministic kernels allocate extra workspace on attention / embedding
+    # / scatter ops — adds 2-5 GiB to peak CUDA memory on a 7B model (see
+    # code-review H2). Network-retry nondeterminism already bounds our
+    # reproducibility floor (see module docstring), so the trade is rarely
+    # worth it. Set MLEVAL_DETERMINISTIC_OPS=1 to re-enable.
+    if os.environ.get("MLEVAL_DETERMINISTIC_OPS", "0") == "1":
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception:  # noqa: BLE001
+            pass
 except ImportError:
     pass
 

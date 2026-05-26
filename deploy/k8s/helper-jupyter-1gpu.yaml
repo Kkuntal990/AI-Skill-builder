@@ -38,6 +38,13 @@ spec:
         - --NotebookApp.token=mleval-dev
 
       resources:
+        # NRP admission webhook caps controllerless pods at 32 GiB / 16 CPU.
+        # See: PODs without controllers are limited to 16 cores and 32 GB of RAM
+        # /dev/shm below is medium=Memory and counts against this limit, so
+        # 32Gi total = 4Gi shm + 28Gi for Python heap + HF/torch buffers.
+        # mvp-010 OOMKilled at 8Gi shm + 24Gi heap; tightening shm to 4Gi
+        # buys 4 GiB more heap for Llama-7B fp16 (~13 GB) + AIDE overhead.
+        # If still tight, move to a Deployment to lift the 32 GiB cap.
         limits:
           ${GPU_TYPE}: "1"
           memory: "32Gi"
@@ -129,11 +136,12 @@ spec:
       emptyDir:
         sizeLimit: 20Gi
     - name: dev-shm
-      # NOTE: /dev/shm counts against the pod's memory limit. We allocate 8Gi
-      # here (was 16Gi), leaving 24Gi for the Python heap + HF cache buffers.
-      # PyTorch DataLoader workers use shm; 8Gi covers PEFT-7B with batch<=4.
+      # Disk-backed (not medium: Memory) per code review C1 — memory-backed
+      # shm counts against the pod's 32 GiB controllerless cap and silently
+      # shaved 4-8 GiB off effective heap. DataLoader workers rarely need
+      # huge shm; bump sizeLimit if you see "Bus error" or "No space left
+      # on device" inside training scripts.
       emptyDir:
-        medium: Memory
         sizeLimit: 8Gi
     - name: results
       persistentVolumeClaim:

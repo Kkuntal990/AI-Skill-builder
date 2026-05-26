@@ -44,26 +44,27 @@ spec:
         - name: agent
           image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
           imagePullPolicy: Always
-          # Per NRP policy: limit must be within 20% of request (and for jobs
-          # at scale, limit == request). We use request == limit for full
-          # compliance and to make the spec easy to reason about.
-          # Right-sized for llama-inference: huggyllama/llama-7b fp16 load
-          # peaks at ~13 GiB CPU RAM during from_pretrained; AIDE itself +
-          # deps add ~2 GiB; 24 GiB leaves headroom for optimizations that
-          # transiently double-load weights or import vllm/accelerate dispatch.
-          # 2 CPU is enough — the GPU does the inference; CPU only matters
-          # during one-shot tokenize (num_proc=4 burst) and pip install.
-          # If a future task needs more (e.g., llama-13b), parameterize via
-          # POD_CPU / POD_MEMORY envsubst vars threaded from the orchestrator.
+          # Per NRP policy: limit must be within 20% of request. We use
+          # request == limit for full compliance.
+          # Sized for llama-inference with AIDE-driven optimizations:
+          #   from_pretrained transient fp32 load              ~26 GiB
+          #   Accelerator(fp16) fp32 master + fp16 working     ~+13 GiB
+          #   torch.compile Dynamo/Inductor trace workspace    ~+20 GiB transient
+          #   CUDA reserved + cuDNN workspaces + Python heap   ~+10 GiB
+          # mvp-013 OOMKilled at 64 GiB during compile workspace expansion
+          # (4th draft was the first to clear the peft ImportError). Bumped
+          # to 96 GiB for headroom; controlled pods (Jobs) bypass NRP's
+          # 32 GiB controllerless cap. If 96 GiB still OOMs, we instrument
+          # the entrypoint with a memory sampler instead of guessing.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "24Gi"
+              memory: "96Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "24Gi"
+              memory: "96Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -172,6 +173,10 @@ spec:
           persistentVolumeClaim:
             claimName: mleval-results
         - name: dev-shm
+          # Disk-backed (not medium: Memory) — memory-backed shm counts against
+          # the pod's memory limit, silently shaving ~8 GiB off effective RAM.
+          # PyTorch DataLoader workers in AIDE-generated code rarely need huge
+          # shm; if a future task fails with "Bus error" or "No space left on
+          # device" in /dev/shm, bump sizeLimit or revisit medium: Memory.
           emptyDir:
-            medium: Memory
             sizeLimit: 8Gi
