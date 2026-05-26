@@ -42,12 +42,36 @@ def _is_null_response(output) -> bool:
     return False
 
 
+def _apply_provider_routing(model_kwargs: dict) -> None:
+    """For deepseek/* models, force OpenRouter to use DeepSeek's own infra.
+
+    Without this, OpenRouter load-balances across DeepInfra/Alibaba/Together
+    /etc., several of which break AIDE: Alibaba 400s on tool_choice in
+    thinking mode (mvp-008), and some proxies return 1-token `null`
+    completions (mvp-006/-007 — possibly aggressive content filters).
+
+    Pinning to provider.only=["DeepSeek"] gives consistent behavior since
+    DeepSeek's own API supports tool_choice and doesn't add filtering.
+    Non-deepseek models are untouched so a future switch to gpt-4o-mini or
+    claude-haiku-4-5 still routes normally.
+    """
+    model = model_kwargs.get("model") or ""
+    if not model.startswith("deepseek/"):
+        return
+    eb = model_kwargs.setdefault("extra_body", {})
+    if not isinstance(eb, dict):
+        return  # caller passed something exotic; don't overwrite
+    provider = eb.setdefault("provider", {})
+    provider.setdefault("only", ["DeepSeek"])
+
+
 def _make_logged(provider_name: str, original):
     """Return a wrapper around a provider-specific query func that logs each
-    call and retries once on a null response.
+    call, applies provider routing, and retries once on a null response.
     """
 
     def _logged(system_message=None, user_message=None, func_spec=None, **model_kwargs):
+        _apply_provider_routing(model_kwargs)
         for attempt in (1, 2):
             started = time.time()
             output, req_time, in_tok, out_tok, info = original(
