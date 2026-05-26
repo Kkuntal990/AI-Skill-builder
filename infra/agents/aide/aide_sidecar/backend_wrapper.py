@@ -43,17 +43,24 @@ def _is_null_response(output) -> bool:
 
 
 def _apply_provider_routing(model_kwargs: dict) -> None:
-    """For deepseek/* models, force OpenRouter to use DeepSeek's own infra.
+    """For deepseek/* models, pin OpenRouter to DeepInfra.
 
-    Without this, OpenRouter load-balances across DeepInfra/Alibaba/Together
-    /etc., several of which break AIDE: Alibaba 400s on tool_choice in
-    thinking mode (mvp-008), and some proxies return 1-token `null`
-    completions (mvp-006/-007 — possibly aggressive content filters).
+    Of the 13 providers serving deepseek-v4-flash, DeepInfra is the ONLY
+    one that supports AIDE's full call pattern (probed amusing
+    2026-05-25): free-form completion AND tool_choice=required (used by
+    AIDE's feedback grader for the is_bug / metric schema).
 
-    Pinning to provider.only=["DeepSeek"] gives consistent behavior since
-    DeepSeek's own API supports tool_choice and doesn't add filtering.
-    Non-deepseek models are untouched so a future switch to gpt-4o-mini or
-    claude-haiku-4-5 still routes normally.
+    Other providers fail in specific ways:
+      - Alibaba: 400 on tool_choice "in thinking mode" (mvp-008)
+      - Novita/Parasail/SiliconFlow: 404 "No endpoints found that support
+        the provided tool_choice value"
+      - Morph/StreamLake: occasional 1-token "null" completions
+        (mvp-006/-007 — pre-filter behavior at ~0.7s)
+      - DeepSeek (own): account privacy filter blocks training-data
+        providers; provider.allow_training is not a valid OpenRouter key
+
+    Non-deepseek models are untouched so a future switch to gpt-4o-mini
+    or claude-haiku-4-5 still routes normally.
     """
     model = model_kwargs.get("model") or ""
     if not model.startswith("deepseek/"):
@@ -62,7 +69,7 @@ def _apply_provider_routing(model_kwargs: dict) -> None:
     if not isinstance(eb, dict):
         return  # caller passed something exotic; don't overwrite
     provider = eb.setdefault("provider", {})
-    provider.setdefault("only", ["DeepSeek"])
+    provider.setdefault("only", ["DeepInfra"])
 
 
 def _make_logged(provider_name: str, original):
