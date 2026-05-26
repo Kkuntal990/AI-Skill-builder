@@ -42,26 +42,29 @@ def _is_null_response(output) -> bool:
     return False
 
 
-def _apply_provider_routing(model_kwargs: dict) -> None:
-    """For deepseek/* models, pin OpenRouter to DeepInfra.
+# For deepseek/* on OpenRouter, no single provider serves both AIDE
+# call types (probed 2026-05-25):
+#
+#   call type        working providers
+#   ---------------  ---------------------------------------------
+#   tool_choice      DeepInfra (ONLY)
+#   free-form draft  Novita, AtlasCloud, GMICloud, Venice
+#
+# DeepInfra content-filters the AIDE Kaggle-grandmaster system prompt
+# (~7 KB) and returns a 1-token `null` in ~1.5s — pre-filter rejection,
+# not the model. The four free-form providers don't filter but 404 on
+# tool_choice with "No endpoints found that support the provided
+# tool_choice value". Alibaba/Parasail/AkashML/SiliconFlow/Morph/
+# StreamLake/Venice were each ruled out for one reason or the other.
+#
+# So we split routing per call type below. Non-deepseek models stay on
+# OpenRouter's default routing.
+_DEEPSEEK_TOOL_CHOICE_PROVIDERS = ["DeepInfra"]
+_DEEPSEEK_FREEFORM_PROVIDERS = ["Novita", "AtlasCloud", "GMICloud", "Venice"]
 
-    Of the 13 providers serving deepseek-v4-flash, DeepInfra is the ONLY
-    one that supports AIDE's full call pattern (probed amusing
-    2026-05-25): free-form completion AND tool_choice=required (used by
-    AIDE's feedback grader for the is_bug / metric schema).
 
-    Other providers fail in specific ways:
-      - Alibaba: 400 on tool_choice "in thinking mode" (mvp-008)
-      - Novita/Parasail/SiliconFlow: 404 "No endpoints found that support
-        the provided tool_choice value"
-      - Morph/StreamLake: occasional 1-token "null" completions
-        (mvp-006/-007 — pre-filter behavior at ~0.7s)
-      - DeepSeek (own): account privacy filter blocks training-data
-        providers; provider.allow_training is not a valid OpenRouter key
-
-    Non-deepseek models are untouched so a future switch to gpt-4o-mini
-    or claude-haiku-4-5 still routes normally.
-    """
+def _apply_provider_routing(model_kwargs: dict, has_func_spec: bool) -> None:
+    """Inject deepseek/* provider routing based on call type."""
     model = model_kwargs.get("model") or ""
     if not model.startswith("deepseek/"):
         return
@@ -69,7 +72,12 @@ def _apply_provider_routing(model_kwargs: dict) -> None:
     if not isinstance(eb, dict):
         return  # caller passed something exotic; don't overwrite
     provider = eb.setdefault("provider", {})
-    provider.setdefault("only", ["DeepInfra"])
+    if "only" in provider:
+        return  # caller already pinned; respect it
+    if has_func_spec:
+        provider["only"] = list(_DEEPSEEK_TOOL_CHOICE_PROVIDERS)
+    else:
+        provider["only"] = list(_DEEPSEEK_FREEFORM_PROVIDERS)
 
 
 def _make_logged(provider_name: str, original):
@@ -78,7 +86,7 @@ def _make_logged(provider_name: str, original):
     """
 
     def _logged(system_message=None, user_message=None, func_spec=None, **model_kwargs):
-        _apply_provider_routing(model_kwargs)
+        _apply_provider_routing(model_kwargs, has_func_spec=func_spec is not None)
         for attempt in (1, 2):
             started = time.time()
             output, req_time, in_tok, out_tok, info = original(
