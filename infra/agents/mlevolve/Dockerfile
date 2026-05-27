@@ -59,11 +59,20 @@ RUN pip install --no-cache-dir -r /opt/mlevolve-requirements.txt
 # The launcher cds into /workspace/mlevolve before invoking run.py.
 COPY infra/agents/mlevolve/upstream /workspace/mlevolve
 
-# ----- Our sidecar + entrypoint ------------------------------------------
+# ----- Our sidecar + entrypoint + analyzer -------------------------------
 COPY infra/agents/mlevolve/mlevolve_sidecar /workspace/mlevolve_sidecar
 COPY infra/agents/mlevolve/run_mlevolve.py /workspace/run_mlevolve.py
 COPY infra/agents/mlevolve/entrypoint.sh /workspace/entrypoint.sh
 COPY infra/agents/mlevolve/config.yaml /workspace/mlevolve_config.yaml
+
+# Universal analyzer (adapter_mlevolve, stage_classifier, state_predicates).
+# Entrypoint invokes via `python -m mleval.analyzer.X` after MLEvolve exits,
+# so the mleval package must be on PYTHONPATH. We copy the source as-is
+# (no pip install -e because we don't ship a pyproject.toml in this image
+# layer; analyzer is pure-Python, no compiled extensions, so copying is
+# enough).
+COPY src/mleval /workspace/mleval
+ENV PYTHONPATH=/workspace:${PYTHONPATH:-}
 
 # ----- Build-time regression guard: mlebench MUST NOT be importable ------
 # C3 spike claim is that the mle-bench coupling is fully bypassable. If a
@@ -74,19 +83,20 @@ RUN python -c "import importlib.util; \
         'mlebench was pulled in by a transitive dep — investigate before shipping'; \
     print('OK: mlebench not present')"
 
-# ----- Build-time smoke: MLEvolve imports cleanly with our sidecar -------
-# Catches "we forgot to install package X that MLEvolve imports at module
-# load" before we burn a trajectory's image-pull cycle on the cluster.
-# We import the same modules run.py does at startup, but in a directory
-# where MLEvolve's `from config import load_cfg` (relative-style with
-# config on path) resolves.
-RUN cd /workspace/mlevolve && python -c "\
-import sys; sys.path.insert(0, '/workspace'); \
-import mlevolve_sidecar; \
-from engine.executor import Interpreter; \
-from engine.search_node import Journal; \
-from engine.agent_search import AgentSearch; \
-print('OK: MLEvolve + sidecar import cleanly')"
+# ----- Build-time smoke: imports must work in the SAME environment as the
+# entrypoint, not in an ad-hoc `python -c` shell.
+#
+# Earlier version of this smoke ran `cd /workspace/mlevolve && python -c
+# "..."` which made MLEvolve's `llm/` package cwd-resolvable AND a false
+# negative — it passed even though the actual entrypoint's
+# `python /workspace/run_mlevolve.py` failed at module import time
+# because sys.path[0] is the script's dir (`/workspace`), not cwd.
+#
+# Now: invoke the real entrypoint Python file with a dummy `main`
+# replacement (so we don't actually launch MLEvolve, just verify imports).
+# This catches sidecar-import-order bugs at build time.
+COPY infra/agents/mlevolve/_smoke_imports.py /workspace/_smoke_imports.py
+RUN python /workspace/_smoke_imports.py
 
 RUN chmod +x /workspace/entrypoint.sh
 

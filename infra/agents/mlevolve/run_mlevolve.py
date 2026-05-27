@@ -18,19 +18,34 @@ import sys
 import traceback
 from pathlib import Path
 
-# Sidecar must import BEFORE MLEvolve so monkey-patches take effect.
-# Order encoded in mlevolve_sidecar/__init__.py docstring.
-sys.path.insert(0, "/workspace")  # so `import mlevolve_sidecar` resolves
-import mlevolve_sidecar  # noqa: F401
-
-# MLEvolve's import path expects we're at its repo root.
+# Path setup must happen BEFORE the sidecar import. The sidecar's
+# prompt_logger does `import llm.openai` at module load, which only
+# resolves if /workspace/mlevolve is on sys.path (llm is a top-level
+# package inside MLEvolve's repo). Set up BOTH:
+#   /workspace          → so `import mlevolve_sidecar` resolves
+#   /workspace/mlevolve → so `import llm.openai` (which the sidecar does
+#                          at its own import time) resolves
+# Also chdir here so MLEvolve's later `from config import Config`
+# (relative to its repo root) works.
+#
+# Mistake-not-to-repeat: the build-time smoke in the Dockerfile uses
+# `python -c` from inside /workspace/mlevolve, which makes llm
+# cwd-resolvable. The actual entrypoint uses
+# `python /workspace/run_mlevolve.py`, which sets sys.path[0] to
+# /workspace (the script's directory), NOT cwd. Two different import
+# environments; the smoke was a false negative until this ordering fix.
 MLEVOLVE_ROOT = Path("/workspace/mlevolve")
 if not MLEVOLVE_ROOT.is_dir():
     print(f"[run_mlevolve] FATAL: MLEvolve not found at {MLEVOLVE_ROOT}", file=sys.stderr)
     sys.exit(2)
 
-os.chdir(MLEVOLVE_ROOT)
 sys.path.insert(0, str(MLEVOLVE_ROOT))
+sys.path.insert(0, "/workspace")
+os.chdir(MLEVOLVE_ROOT)
+
+# Sidecar must import BEFORE MLEvolve so monkey-patches take effect.
+# Order encoded in mlevolve_sidecar/__init__.py docstring.
+import mlevolve_sidecar  # noqa: F401, E402
 
 
 def main() -> int:
