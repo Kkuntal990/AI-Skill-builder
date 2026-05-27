@@ -33,6 +33,10 @@ TRAJECTORY_ID="${MLEVAL_TRAJECTORY_ID:?MLEVAL_TRAJECTORY_ID required}"
 RUN_ID="${MLEVAL_RUN_ID:?MLEVAL_RUN_ID required}"
 INSTRUCTION_PATH="${MLEVAL_TASK_INSTRUCTION_PATH:?MLEVAL_TASK_INSTRUCTION_PATH required}"
 DATA_DIR="${MLEVAL_TASK_DATA_DIR:?MLEVAL_TASK_DATA_DIR required}"
+# Required even though config.yaml has a default — empty model name silently
+# breaks MLEvolve's per-stage dispatch. Caught here, not after a 5-min image
+# pull and a wasted run.
+MLEVAL_LLM_MODEL="${MLEVAL_LLM_MODEL:?MLEVAL_LLM_MODEL required}"
 TIME_LIMIT_SECONDS="${TIME_LIMIT_SECONDS:-1800}"
 STEP_LIMIT="${STEP_LIMIT:-5}"
 LLM_TIMEOUT_SEC="${MLEVAL_LLM_TIMEOUT_SEC:-120}"
@@ -40,7 +44,13 @@ OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}"
 
 # MLEvolve reads OPENAI_API_KEY; map MLEVAL_LLM_API_KEY into it if set.
 export OPENAI_API_KEY="${MLEVAL_LLM_API_KEY:-${OPENAI_API_KEY:-}}"
-export OPENAI_BASE_URL
+export OPENAI_BASE_URL MLEVAL_LLM_MODEL
+
+# prompt_logger reads MLEVAL_PROMPTS_LOG at import time; without this it
+# resolves to ``./prompts.jsonl`` against cwd (/workspace/mlevolve), which
+# would silently lose every prompt. Job manifest sets this too, but the
+# helper-pod smoke path goes through the entrypoint, so set it here.
+export MLEVAL_PROMPTS_LOG="${MLEVAL_PROMPTS_LOG:-$OUT_DIR/prompts.jsonl}"
 
 mkdir -p "$OUT_DIR" "$OUT_DIR/agent_logs"
 

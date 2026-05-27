@@ -52,7 +52,7 @@ _ENV_LINE = re.compile(r"^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$")
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
-    """Tiny .env parser — KEY=VALUE lines, no quote handling, no exports."""
+    """Tiny .env parser — KEY=VALUE lines, strips matched surrounding quotes."""
     if not path.is_file():
         return {}
     out: dict[str, str] = {}
@@ -62,7 +62,13 @@ def _load_dotenv(path: Path) -> dict[str, str]:
         m = _ENV_LINE.match(line)
         if not m:
             continue
-        out[m.group(1)] = m.group(2)
+        value = m.group(2)
+        # Strip a matched pair of surrounding quotes. Without this,
+        # MLEVAL_LLM_MODEL="deepseek/..." renders as the literal quoted
+        # string into the Job manifest and the OpenAI client rejects it.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        out[m.group(1)] = value
     return out
 
 

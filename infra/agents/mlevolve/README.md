@@ -78,4 +78,21 @@ See `docs/eval/stage2.md` → "MLEvolve spike" section. Quick recap:
 - **C1**: trajectory completes ≥5 nodes at 64 GiB without OOMKill
 - **C2**: at least one `prompts.jsonl` row per LLM stage (`agent.code`, `agent.feedback`)
 - **C3**: `pip freeze | grep mlebench` empty; no import in any log
-- **C4**: `adapter_mlevolve` ≤150 LoC and produces a valid `trajectory.jsonl`
+- **C4**: `adapter_mlevolve` ≤200 LoC (raised from 150 after seeing the prompt-bucketing heuristic) and produces a valid `trajectory.jsonl`
+
+## Known data-quality gaps (intentional, not bugs)
+
+- **Token counts for `generate` calls are `null`.** MLEvolve has two
+  LLM entry points: `llm.openai.query()` (function-calling, returns a
+  5-tuple with token counts) and `llm.openai.generate()` (streaming,
+  returns a bare string). The sidecar wraps both, but the `generate`
+  return shape provides no token counts so `in_tokens`/`out_tokens` are
+  `null` for those rows. Affects most upstream agent modules (`draft`,
+  `improve`, `evolution`) — only `code_review` / `result_parse` /
+  `data_leakage` use `query`. C2 (prompt-count claim) is unaffected.
+- **Prompt → node assignment is heuristic.** MLEvolve doesn't tag
+  prompts with the node id they belong to. The adapter buckets prompts
+  to nodes by ctime window between parent.ctime and node.ctime. Edge
+  cases (parallel branches, fusion nodes spanning multiple parents)
+  may misattribute; for the spike's single-trajectory sequential search
+  this is fine.

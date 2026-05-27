@@ -26,6 +26,18 @@ Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `
 
 **Verdict pending**. See `infra/agents/mlevolve/README.md` for the launch recipe.
 
+**Known measurement caveats for the spike output**:
+- `prompts.jsonl` tokens are recorded only for `llm.openai.query()` calls
+  (the function-calling path). `llm.openai.generate()` (the streaming
+  path used by `draft_agent`, `improve_agent`, `evolution_agent`, etc.)
+  returns a bare string with no token-count metadata, so
+  `in_tokens`/`out_tokens` will be `null` for those rows and the
+  per-trajectory `llm_total_*_tokens` aggregate undercounts. C2 (prompt
+  COUNT logging) is unaffected; only the cost-derivation accuracy is.
+- `MLEVAL_PROMPTS_LOG` must be set before MLEvolve imports — the
+  entrypoint exports it, but if you ever run `run_mlevolve.py` directly
+  from a shell without the entrypoint wrapper, set it manually.
+
 ---
 
 > **Note on the rest of this document.** Sections below this banner describe
