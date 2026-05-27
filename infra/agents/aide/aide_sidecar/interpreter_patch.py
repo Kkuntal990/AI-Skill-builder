@@ -184,6 +184,25 @@ def _patched_run_session(self, *args, **kwargs):
     except OSError:
         # already a session leader or no permission — best-effort
         pass
+    # Force spawn so any multiprocessing the LLM-generated code starts
+    # later (DataLoader workers, datasets.map workers) doesn't inherit
+    # CUDA context from this child via fork. mvp-016/017 OOMed because
+    # DeepSeek-v4-flash consistently generated DataLoader(num_workers>0)
+    # or dataset.map(num_proc>0) after model.to('cuda'), and the forked
+    # workers wedged on CUDA driver state. With spawn, the worker starts
+    # fresh: no inherited CUDA context, no re-init crash.
+    #
+    # Safe to call here: this runs once at child startup, before any
+    # LLM-generated code executes any multiprocessing primitives.
+    # force=True overrides any prior set_start_method that AIDE or
+    # imports may have left in place.
+    try:
+        import multiprocessing as _mp
+        _mp.set_start_method("spawn", force=True)
+    except (RuntimeError, ValueError):
+        # Another set_start_method beat us to it or the platform refused;
+        # the cleanup_session patch still catches the resulting wedge.
+        pass
     return _original_run_session(self, *args, **kwargs)
 
 

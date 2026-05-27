@@ -51,20 +51,21 @@ spec:
           #   Accelerator(fp16) fp32 master + fp16 working     ~+13 GiB
           #   torch.compile Dynamo/Inductor trace workspace    ~+20 GiB transient
           #   CUDA reserved + cuDNN workspaces + Python heap   ~+10 GiB
-          # mvp-013 OOMKilled at 64 GiB during compile workspace expansion
-          # (4th draft was the first to clear the peft ImportError). Bumped
-          # to 128 GiB for mvp-015 to give the entrypoint memory sampler
-          # room to capture the true peak without re-OOMing; controlled
-          # pods (Jobs) bypass NRP's 32 GiB controllerless cap.
+          # mvp-016 ran 421s before OOM at 64 GiB with measured +7.4 GiB/min
+          # sustained creep (cleanup_session patch let AIDE survive to draft
+          # 2 but leaked dataset.map fork workers from draft 1 kept growing
+          # the cgroup memory). 96 GiB buys ~7 more minutes of headroom at
+          # the observed slope — enough to see if subsequent drafts trigger
+          # the same fork-after-CUDA pattern or if AIDE learns to avoid it.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "128Gi"
+              memory: "96Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "128Gi"
+              memory: "96Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
