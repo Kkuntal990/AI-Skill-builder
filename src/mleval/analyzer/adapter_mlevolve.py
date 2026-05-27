@@ -6,9 +6,9 @@ documented in ``infra/agents/_interface.md``. Designed to be small
 metric histories, fusion lineage) can grow without breaking the schema.
 
 Inputs (under MLEVAL_OUTPUT_DIR):
-    mlevolve_runs/<ts>_<exp>/journal.json   — MLEvolve search graph
-    mlevolve_runs/<ts>_<exp>/metric.txt     — best final metric (optional)
-    prompts.jsonl                            — per LLM call (our sidecar)
+    mlevolve_runs/<ts>_<exp>/logs/journal.json   — MLEvolve search graph
+    mlevolve_runs/<ts>_<exp>/logs/metric.txt     — best final metric (optional)
+    prompts.jsonl                                 — per LLM call (our sidecar)
 
 Output:
     trajectory.jsonl                         — one record per node, in
@@ -42,8 +42,10 @@ SCHEMA_VERSION = "1.0"
 def _read_journal(runs_dir: Path) -> tuple[dict[str, Any], Path] | None:
     if not runs_dir.is_dir():
         return None
-    # MLEvolve writes runs/<ts>_<exp>/journal.json; we pick the newest.
-    candidates = sorted(runs_dir.glob("*/journal.json"), key=lambda p: p.stat().st_mtime)
+    # MLEvolve writes runs/<ts>_<exp>/logs/journal.json; we pick the newest.
+    # (Path verified empirically on commit 94854f9 spike — the upstream's
+    # run.py creates the logs/ subdir before writing.)
+    candidates = sorted(runs_dir.glob("*/logs/journal.json"), key=lambda p: p.stat().st_mtime)
     if not candidates:
         return None
     path = candidates[-1]

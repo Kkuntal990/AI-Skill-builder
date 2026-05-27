@@ -19,18 +19,31 @@ Given a inference script inference.py, execute it to see the current generation 
 
 ## Framework integration notes (not part of the upstream task)
 
-- The starter `inference.py` is at `$MLEVAL_TASK_DATA_DIR/inference.py`.
-- Your final modified script must end with a single print of the form
-  ``Average per token generation time:  <float>`` (this is what the starter
-  already prints — preserving that line is sufficient). The judge parses
-  this line as the trajectory's metric; lower is better.
+- The starter `inference.py` is at `./input/inference.py` (the agent's
+  working directory layout is `./input/` for read-only task files,
+  `./working/` for scratch). You should copy or modify it as your solution.
+- Your final solution code must run the inference and print TWO lines as the
+  very last output:
+    ``Average per token generation time:  <float>``
+    ``Final Validation Score: <float>``
+  Both should hold the **same** number (per-token generation time in
+  seconds; **lower is better**). The first line is the upstream MLAgentBench
+  metric format; the second is what this harness parses as the trajectory's
+  validation score. The starter already prints the first line; you just
+  need to also print the second.
+- This is a **latency benchmark**, NOT a classification task. There is no
+  train/val split, no submission.csv, no test set. The single dataset
+  (`wikitext-103-v1` test split, 100 batches of 4) is your benchmark
+  workload; running it and measuring per-token latency *is* the evaluation.
 - The starter already uses `huggyllama/llama-7b` (a Meta-license-compliant
   mirror with identical weights to the now-removed
   `decapoda-research/llama-7b-hf`). The unused
   `prepare_model_for_int8_training` import has also been removed from the
   starter since `peft` renamed it. The rest of the upstream task is
   verbatim.
-- No CSV submission is required for this task; only the printed metric.
+- GPU: this run uses an **NVIDIA A10 (24 GB)**, not the A100 mentioned in
+  the upstream task. Llama-7B fp16 is ~14 GB → fits with batch_size=4, but
+  do NOT raise the batch size assuming A100 memory.
 
 ---
 

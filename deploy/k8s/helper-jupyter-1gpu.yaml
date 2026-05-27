@@ -116,6 +116,10 @@ spec:
               key: openrouter-api-key
               optional: true
 
+  # Pin to a specific GPU product (see .env for valid GPU_PRODUCT values).
+  nodeSelector:
+    nvidia.com/gpu.product: ${GPU_PRODUCT}
+
   tolerations:
     - key: nautilus.io/reservation
       operator: Exists

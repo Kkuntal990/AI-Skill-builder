@@ -20,7 +20,8 @@ export
 IMAGE_REGISTRY ?= ghcr.io/kkuntal990
 IMAGE_NAME     ?= mleval-agent-mlevolve
 IMAGE_TAG      ?= dev
-GPU_TYPE       ?= nvidia.com/rtxa6000
+GPU_TYPE       ?= nvidia.com/gpu
+GPU_PRODUCT    ?= NVIDIA-A10
 IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .PHONY: install fmt lint typecheck test check clean \
@@ -44,6 +45,7 @@ config:
 	@echo "IMAGE             = $(IMAGE)"
 	@echo "K8S_NAMESPACE     = $${K8S_NAMESPACE:-<unset>}"
 	@echo "GPU_TYPE          = $(GPU_TYPE)"
+	@echo "GPU_PRODUCT       = $(GPU_PRODUCT)"
 	@echo "MLEVAL_LLM_MODEL  = $${MLEVAL_LLM_MODEL:-<unset>}"
 	@echo "MLEVAL_RUN_ID     = $${MLEVAL_RUN_ID:-<unset>}"
 	@echo "DEFAULT_SEED      = $${DEFAULT_SEED:-<unset>}"
