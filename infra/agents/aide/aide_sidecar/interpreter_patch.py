@@ -29,13 +29,17 @@ huge model weights) to keep the PVC under control.
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
+import signal
 import shutil
 from pathlib import Path
 
 import aide.interpreter as _interp
 
 from . import skill_inject as _skill_inject
+
+_logger = logging.getLogger(__name__)
 
 _OUTPUT_DIR = Path(os.environ.get("MLEVAL_OUTPUT_DIR", "."))
 _SNAPSHOT_ROOT = _OUTPUT_DIR / "working_dirs"
@@ -134,3 +138,97 @@ def _wrapped_run(self, code, *args, **kwargs):
 
 
 _interp.Interpreter.run = _wrapped_run
+
+
+# ---------------------------------------------------------------------------
+# cleanup_session + _run_session patches
+# ---------------------------------------------------------------------------
+# Upstream `Interpreter.cleanup_session` (verified at SHA 40dcf28) ends with
+# an unguarded `self.process.close()` in its finally clause. Python's
+# multiprocessing.Process.close() raises `ValueError: Cannot close a process
+# while it is still running` whenever is_alive() is True — and the doc
+# behavior is intentional (CPython issue #94661 is open-with-no-fix).
+#
+# That ValueError bubbles uncaught through `agent.step → run.run`, killing
+# the entire trajectory after a single LLM-generated draft. We hit this on
+# mvp-015-job: a draft used DataLoader(num_workers=2) AFTER model.to(cuda).
+# The forked worker tried to re-init CUDA, hung, and ignored SIGKILL because
+# the CUDA driver pins forked-child contexts. AIDE's escalation only signals
+# the immediate child pid (os.kill, not killpg), so the wedged DataLoader
+# grandchildren survive — keeping the parent alive — and close() raises.
+#
+# Two-part fix, both monkey-patched here so we don't fork AIDE:
+#   1. cleanup_session: swallow ValueError on close() and drop the process
+#      reference so the agent loop can spawn a fresh interpreter for the
+#      next draft. Adds an os.killpg escalation between AIDE's
+#      process.kill() and the close() attempt.
+#   2. _run_session: call os.setsid() at child entry so the child becomes
+#      its own session leader. Without this, the child inherits AIDE's
+#      PGID and killpg(getpgid(child_pid)) would kill AIDE itself. The
+#      guard `pgid != os.getpgid(0)` below double-checks before signalling.
+#
+# References: Bihui-Jin/aideml is the most-defensive AIDE fork on github
+# (full try/except cleanup, is_alive re-check). AutoMind adds re-terminate
+# but still doesn't wrap close(). Inspect AI / OpenDevin / AIRA-dojo all
+# isolate at the container/kernel level instead — a larger refactor we
+# defer until this surgical fix proves insufficient.
+
+
+_original_cleanup_session = _interp.Interpreter.cleanup_session
+_original_run_session = _interp.Interpreter._run_session
+
+
+def _patched_run_session(self, *args, **kwargs):
+    try:
+        os.setsid()
+    except OSError:
+        # already a session leader or no permission — best-effort
+        pass
+    return _original_run_session(self, *args, **kwargs)
+
+
+def _safe_cleanup_session(self) -> None:
+    proc = getattr(self, "process", None)
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.join(timeout=0.5)
+        if proc.exitcode is None:
+            proc.kill()
+            proc.join(timeout=0.5)
+        if proc.exitcode is None and proc.pid:
+            try:
+                pgid = os.getpgid(proc.pid)
+            except (ProcessLookupError, PermissionError, OSError):
+                pgid = None
+            # Don't signal our own group — _patched_run_session above should
+            # have given the child its own session, but stay defensive.
+            if pgid and pgid != os.getpgid(0):
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            proc.join(timeout=1.0)
+    except Exception as e:  # noqa: BLE001
+        _logger.error("cleanup_session: escalation error: %s", e)
+    finally:
+        try:
+            proc.close()
+        except ValueError:
+            # Child still alive after killpg — most likely CUDA-pinned. Drop
+            # the reference and continue; the next draft gets a fresh
+            # interpreter. The leaked subprocess holds some GPU memory until
+            # the pod ends, which is the cost of trajectory survival.
+            _logger.warning(
+                "cleanup_session: process still alive after killpg; "
+                "leaking subprocess pid=%s to keep trajectory alive",
+                getattr(proc, "pid", "?"),
+            )
+        except Exception as e:  # noqa: BLE001
+            _logger.error("cleanup_session: unexpected close() error: %s", e)
+        self.process = None
+
+
+_interp.Interpreter._run_session = _patched_run_session
+_interp.Interpreter.cleanup_session = _safe_cleanup_session

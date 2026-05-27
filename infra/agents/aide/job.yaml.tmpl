@@ -53,18 +53,18 @@ spec:
           #   CUDA reserved + cuDNN workspaces + Python heap   ~+10 GiB
           # mvp-013 OOMKilled at 64 GiB during compile workspace expansion
           # (4th draft was the first to clear the peft ImportError). Bumped
-          # to 96 GiB for headroom; controlled pods (Jobs) bypass NRP's
-          # 32 GiB controllerless cap. If 96 GiB still OOMs, we instrument
-          # the entrypoint with a memory sampler instead of guessing.
+          # to 128 GiB for mvp-015 to give the entrypoint memory sampler
+          # room to capture the true peak without re-OOMing; controlled
+          # pods (Jobs) bypass NRP's 32 GiB controllerless cap.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "96Gi"
+              memory: "128Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "96Gi"
+              memory: "128Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
