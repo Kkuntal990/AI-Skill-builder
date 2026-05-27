@@ -57,3 +57,15 @@ google-genai>=1.0
 humanize
 rank-bm25
 shutup
+
+# Caught by the Dockerfile build-time smoke. Assumed present in vllm/vllm-openai
+# base; they're not. Listed explicitly here so future contributors don't have
+# to re-discover via failed smoke imports:
+#   omegaconf  — MLEvolve's config loader (config/__init__.py:10)
+#   jsonschema — function-spec validation (utils/, agents/)
+#   rich       — console output (run.py status spinner, journal pretty-print)
+#   pandas     — submission CSV manipulation (agents/result_parse_agent.py)
+omegaconf
+jsonschema
+rich
+pandas
