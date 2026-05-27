@@ -29,9 +29,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# System tools we use in the entrypoint + diagnostics
+# System tools we use in the entrypoint + diagnostics.
+# Also: remove python3-blinker — the vllm/vllm-openai base ships it as a
+# distutils-installed system package, and pip refuses to uninstall those
+# ("Cannot uninstall blinker 1.4 — distutils installed project"). MLEvolve's
+# requirements_base.txt pins blinker==1.9.0 which would trip that check.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash curl jq git gettext-base procps tini && \
+    apt-get remove -y python3-blinker || true && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
