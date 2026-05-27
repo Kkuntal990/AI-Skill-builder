@@ -1,0 +1,59 @@
+# MLEvolve runtime requirements — curated minimal set.
+#
+# Build philosophy: follow MLE-Bench's environment/requirements.txt model.
+# Hand-curate a small set of high-level packages we actually need; pin
+# version-sensitive ones; let pip resolve transitives ONCE in this same
+# base image at build time. No --no-deps gymnastics, no upstream
+# kitchen-sink lockfile, no nvcc in the image, no compile-from-source
+# packages.
+#
+# Source: enumerated by grep'ing every `^(import|from) X` line in
+# /workspace/mlevolve/{agents,engine,llm,utils,config,run.py}. That gave
+# us 22 third-party top-level imports. After filtering out modules our
+# base image already provides via vllm/vllm-openai:v0.9.2 (torch, numpy,
+# pandas, openai, requests, httpx, rich, jsonschema, omegaconf — all
+# transitives of vllm or transformers), the new packages we need are
+# below.
+#
+# Version pins:
+# - google-genai: pinned for SDK stability. MLEvolve's upstream
+#   requirements_base.txt had no pin; we use the same major as their
+#   imports suggest (>=1.0).
+# - faiss-cpu (NOT faiss-gpu): the global memory layer needs FAISS but
+#   we disable it via use_global_memory: false in config.yaml. Include
+#   anyway so that if a future cell enables it, it doesn't crash on
+#   ImportError. -cpu variant ships prebuilt wheels with no CUDA
+#   compile step (-gpu requires matching nvcc → exactly what bit us
+#   with the kitchen-sink approach).
+# - dataclasses-json: hyphenated pip name, underscored Python import
+#   (`dataclasses_json`). MLEvolve's SearchNode serialization depends
+#   on this for the journal.json schema.
+#
+# DELIBERATELY OMITTED (despite being in MLEvolve's import graph):
+# - mlebench: only imported by engine/validation/format_server.py,
+#   which we never load (use_grading_server: false). Verified absent
+#   at build time via the assertion at the bottom of the Dockerfile.
+# - black: used by MLEvolve to auto-format LLM-generated code before
+#   exec. If absent, MLEvolve catches ImportError and skips formatting
+#   (verified: the import is wrapped in try/except in interpreter.py).
+#   Skipping black saves ~30 MB; revisit if formatting matters for a
+#   future eval cell.
+#
+# Regen recipe (if MLEvolve upstream adds new top-level imports):
+#   docker run --rm -v $PWD:/work vllm/vllm-openai:v0.9.2 bash -c '
+#     cd /work && \
+#     grep -rhE "^(import|from) [a-zA-Z]" infra/agents/mlevolve/upstream/{agents,engine,llm,utils,config,run.py} \
+#       | awk "{print \$2}" | awk -F. "{print \$1}" | sort -u'
+# Diff against this file; add anything new.
+
+backoff
+coolname
+dataclasses-json
+faiss-cpu
+flask
+funcy
+genson
+google-genai>=1.0
+humanize
+rank-bm25
+shutup
