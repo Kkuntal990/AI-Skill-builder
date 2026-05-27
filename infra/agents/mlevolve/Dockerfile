@@ -45,12 +45,20 @@ COPY infra/agents/mlevolve/upstream /workspace/mlevolve
 # Install MLEvolve's pinned deps. base + ml + domain are 3 separate lockfiles
 # upstream; install all three (no --no-deps; let pip resolve transitives so
 # we don't get stuck on the same lockfile-vs-runtime drift that bit us with
-# AIDE). Strip mlebench out of any requirements line (it's not in upstream's
-# files anyway, but defensive).
+# AIDE).
+#
+# Strip these lines from upstream requirements before install:
+#   - mlebench       — defensive; not in their files but pinned out in case
+#                      a future version adds it (our C3 spike asserts absence)
+#   - streamlit      — leftover in req_base.txt:154 (no import streamlit in
+#                      MLEvolve source; grep -rn confirms); pinned at 1.40.2
+#                      which caps pillow<12, conflicting with the same file's
+#                      pillow==12.0.0 on line 297. Dropping streamlit lets
+#                      pip resolve cleanly without downgrading pillow.
 RUN pip install --no-cache-dir --upgrade pip && \
-    grep -v -i "mlebench" /workspace/mlevolve/requirements_base.txt > /tmp/req_base.txt && \
-    grep -v -i "mlebench" /workspace/mlevolve/requirements_ml.txt > /tmp/req_ml.txt && \
-    grep -v -i "mlebench" /workspace/mlevolve/requirements_domain.txt > /tmp/req_domain.txt && \
+    grep -vE "^(mlebench|streamlit)([=<>!~]|$)" /workspace/mlevolve/requirements_base.txt > /tmp/req_base.txt && \
+    grep -vE "^(mlebench|streamlit)([=<>!~]|$)" /workspace/mlevolve/requirements_ml.txt > /tmp/req_ml.txt && \
+    grep -vE "^(mlebench|streamlit)([=<>!~]|$)" /workspace/mlevolve/requirements_domain.txt > /tmp/req_domain.txt && \
     pip install --no-cache-dir -r /tmp/req_base.txt && \
     pip install --no-cache-dir -r /tmp/req_ml.txt && \
     pip install --no-cache-dir -r /tmp/req_domain.txt && \
