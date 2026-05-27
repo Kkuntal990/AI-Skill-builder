@@ -16,9 +16,12 @@ infra/skills/<skill-name>/
 
 1. The orchestrator passes `--skill-path /results/skills/<name>/SKILL.md`.
 2. The Job's `MLEVAL_SKILL_PATH` env is set to that path (or empty for `without_skill`).
-3. `aide_sidecar.skill_inject` monkey-patches `aide.utils.config.load_task_desc`
-   to splice the SKILL.md content into AIDE's task description before any prompt is built.
-4. AIDE's code-gen and judge prompts both see the skill.
+3. The agent plugin's skill-injection step splices SKILL.md (plus
+   sibling `references/*.md`) into the task description that the agent
+   sees. On the MLEvolve branch this is
+   `mlevolve_sidecar/skill_inject.py`, invoked from `entrypoint.sh`
+   before the agent starts (MLEvolve has no per-call hook to monkey-patch).
+4. The agent's code-gen and judge prompts both see the spliced skill.
 
 ## Staging skills onto the PVC
 

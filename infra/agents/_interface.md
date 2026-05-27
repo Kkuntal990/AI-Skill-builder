@@ -27,27 +27,33 @@ output files — never invokes the agent directly.
 
 The post-trajectory work (`adapter`, `stage_classifier`, `state_predicates`)
 lives in `src/mleval/analyzer/` and runs in the container after the agent
-terminates — the entrypoint invokes `python -m mleval.analyzer.adapter_aide`
-etc. Plugins for new agents add a sibling module (e.g.,
-`src/mleval/analyzer/adapter_mlevolve.py`) when their native log format
-differs enough to need a separate adapter.
+terminates — the entrypoint invokes `python -m mleval.analyzer.adapter_<name>`
+etc. Plugins for new agents add a sibling module when their native log
+format differs enough to need a separate adapter.
 
-The skill-injection mechanism is plugin-specific. AIDE uses
-`aide_sidecar/skill_inject.py` (monkey-patches `aide.utils.config.load_task_desc`).
-A future agent without a clean Python hook could ship `inject_skill.patch`
-applied at build time. Either is acceptable as long as the
+The skill-injection mechanism is plugin-specific. MLEvolve, having no
+clean per-call Python hook (`load_task_desc` reads `desc_file` as one
+blob), splices the skill into `description.md` from
+`mlevolve_sidecar/skill_inject.py` invoked from `entrypoint.sh` BEFORE
+the agent starts. A future agent with a runtime hook could monkey-patch
+its config loader instead. Either is acceptable as long as the
 `MLEVAL_SKILL_PATH` env var contract from §2 is honored.
 
-The reference AIDE plugin (see [`infra/agents/aide/`](aide/)) ships:
+The reference plugin on this branch is MLEvolve (see [`infra/agents/mlevolve/`](mlevolve/)):
 
 ```
-infra/agents/aide/
+infra/agents/mlevolve/
 ├── Dockerfile, entrypoint.sh    # contract requirements
-├── run_aide.py                  # shim: loads sidecar patches, calls aide.run.run
+├── run_mlevolve.py              # shim: loads sidecar patches, calls MLEvolve's run()
 ├── job.yaml.tmpl                # envsubst-rendered per-trajectory Job
-├── aide_sidecar/                # monkey-patches: seeds, backend wrapper, skill inject, interpreter
+├── config.yaml                  # spike profile (use_grading_server: false, no FAISS)
+├── upstream/                    # git submodule pinned to InternScience/MLEvolve@26bde89
+├── mlevolve_sidecar/            # monkey-patches: seed pin, OpenAI api_key env, prompt logger
 └── README.md
 ```
+
+History: an earlier reference plugin was AIDE (WecoAI/aideml). Removed
+during the `mlevolve-smoke` branch — see `docs/eval/stage2.md` for why.
 
 ---
 

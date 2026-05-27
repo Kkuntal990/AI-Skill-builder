@@ -18,20 +18,19 @@ export
 # Sensible defaults so non-deploy targets work without .env. .env overrides
 # these via `include` above.
 IMAGE_REGISTRY ?= ghcr.io/kkuntal990
-IMAGE_NAME     ?= mleval-agent
+IMAGE_NAME     ?= mleval-agent-mlevolve
 IMAGE_TAG      ?= dev
 GPU_TYPE       ?= nvidia.com/rtxa6000
-AIDE_REPO      ?= https://github.com/WecoAI/aideml.git
-AIDE_REF       ?= main
 IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .PHONY: install fmt lint typecheck test check clean \
-        docker-agent docker-push \
+        docker-mlevolve docker-mlevolve-push \
         config _require_env _require_ns _require_api_key _require_ghcr_token \
         k8s-secret k8s-ghcr-pull-secret k8s-apply-pvc \
         k8s-apply-helper k8s-delete-helper \
         ab-plan ab-apply ab-wait \
-        analyze-trajectory aggregate-run
+        analyze-trajectory aggregate-run \
+        mlevolve-submodule-init
 
 # ---- environment ---------------------------------------------------------
 
@@ -45,8 +44,6 @@ config:
 	@echo "IMAGE             = $(IMAGE)"
 	@echo "K8S_NAMESPACE     = $${K8S_NAMESPACE:-<unset>}"
 	@echo "GPU_TYPE          = $(GPU_TYPE)"
-	@echo "AIDE_REPO         = $(AIDE_REPO)"
-	@echo "AIDE_REF          = $(AIDE_REF)"
 	@echo "MLEVAL_LLM_MODEL  = $${MLEVAL_LLM_MODEL:-<unset>}"
 	@echo "MLEVAL_RUN_ID     = $${MLEVAL_RUN_ID:-<unset>}"
 	@echo "DEFAULT_SEED      = $${DEFAULT_SEED:-<unset>}"
@@ -96,17 +93,16 @@ check: lint typecheck test
 
 # ---- containers ----------------------------------------------------------
 
-# Default agent plugin is AIDE. To build a different plugin override AGENT:
-#   make AGENT=mlevolve docker-agent
-AGENT ?= aide
+# Single-agent on this branch: MLEvolve. AIDE removed during the
+# mlevolve-smoke spike (see docs/eval/stage2.md).
 
-docker-agent:
-	docker build \
-	    --build-arg AIDE_REPO=$(AIDE_REPO) \
-	    --build-arg AIDE_REF=$(AIDE_REF) \
-	    -f infra/agents/$(AGENT)/Dockerfile -t $(IMAGE) .
+mlevolve-submodule-init:
+	git submodule update --init --recursive infra/agents/mlevolve/upstream
 
-docker-push:
+docker-mlevolve: mlevolve-submodule-init
+	docker build -f infra/agents/mlevolve/Dockerfile -t $(IMAGE) .
+
+docker-mlevolve-push:
 	docker push $(IMAGE)
 
 # ---- kubernetes ----------------------------------------------------------
@@ -173,8 +169,8 @@ pip-warm: _require_ns
 TASK         ?= _template
 SEEDS        ?= 0 1
 SKILL_PATH   ?=
-TIME_LIMIT   ?= 3600
-STEP_LIMIT   ?= 20
+TIME_LIMIT   ?= 1800
+STEP_LIMIT   ?= 5
 PROFILE      ?= gpu
 LLM_TIMEOUT  ?= 120
 
@@ -211,7 +207,7 @@ ab-wait: _require_ns _require_api_key
 
 analyze-trajectory:
 	@test -n "$(DIR)" || { echo "ERROR: pass DIR=./path/to/trajectory" >&2; exit 1; }
-	python3 -m mleval.analyzer.adapter_aide $(DIR)
+	python3 -m mleval.analyzer.adapter_mlevolve $(DIR)
 	python3 -m mleval.analyzer.stage_classifier $(DIR)
 	python3 -m mleval.analyzer.state_predicates $(DIR)
 

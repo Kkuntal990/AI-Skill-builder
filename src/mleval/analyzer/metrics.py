@@ -1,18 +1,27 @@
 """Derived metrics over a single trajectory directory.
 
-All functions read the raw artifacts that ``backend_wrapper`` /
-``interpreter_patch`` / ``adapter_aide`` already wrote to disk. Nothing here
-runs during the agent — these are pure post-hoc derivations called from
-``aggregate.py`` (locally, on Mac) after ``kubectl cp`` pulls a sweep.
+All functions read raw artifacts the agent's sidecar + adapter wrote to
+disk. Nothing here runs during the agent — pure post-hoc derivations
+called from ``aggregate.py`` (locally, on Mac) after ``kubectl cp``
+pulls a sweep.
+
+Status on mlevolve-smoke branch: this module was originally written
+against AIDE's journal.json shape (per-node ``parent``/``is_buggy``/
+``metric.value``/``exec_time``). Most of those fields still exist in
+MLEvolve's schema (mapped through ``adapter_mlevolve``), but a few
+metrics (``redundant_loops``, ``self_correction_rate``,
+``time_to_first_valid_submission``) need re-derivation for MLEvolve's
+MCGS topology before they're trustworthy. They will be revisited after
+the spike validates the architectural choice (see ``docs/eval/stage2.md``).
 
 Inputs available per trajectory dir:
 
     manifest.json            – run-level metadata (cell, task, llm_model)
-    trajectory.jsonl         – one record per AIDE node (from adapter)
+    trajectory.jsonl         – one record per node (from adapter)
     state.json               – generic + per-task predicate booleans
     prompts.jsonl            – raw per-LLM-call records (req_time, tokens)
-    code/op_NNN.py           – per-step generated code (from adapter)
-    working_dirs/op_NNN/     – per-step working_dir snapshot (from interpreter_patch)
+    mlevolve_runs/<ts>/      – MLEvolve's native runs root (journal.json,
+                               workspaces with submission.csv etc.)
     aide_logs/**/journal.json – AIDE's native journal (per-node metric, parent edges)
 
 Each function returns ``None`` rather than raising when its input is absent —

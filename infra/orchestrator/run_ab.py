@@ -1,9 +1,12 @@
 """Orchestrate paired A/B Jobs across (task × cell × seed).
 
 Reads `.env` for cluster config (registry, namespace, GPU, secrets), reads
-CLI args for the sweep design, renders `infra/agents/aide/job.yaml.tmpl`
+CLI args for the sweep design, renders `infra/agents/mlevolve/job.yaml.tmpl`
 per trajectory via envsubst-style substitution, kubectl-applies each Job,
 waits for completion, and optionally pulls results off the PVC.
+
+Single-agent on this branch: MLEvolve. AIDE was removed during the
+mlevolve-smoke spike (see docs/eval/stage2.md for the pivot rationale).
 
 Two-phase use:
 
@@ -36,9 +39,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Spike: only the GPU profile exists for MLEvolve. CPU profile re-introduced
+# if/when a tabular task lands on this branch.
 JOB_TEMPLATES = {
-    "gpu": REPO_ROOT / "infra/agents/aide/job.yaml.tmpl",
-    "cpu": REPO_ROOT / "infra/agents/aide/job_cpu.yaml.tmpl",
+    "gpu": REPO_ROOT / "infra/agents/mlevolve/job.yaml.tmpl",
 }
 
 
@@ -224,13 +228,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--skill-path", default="", help="In-pod path to SKILL.md (only used when cell=with_skill)")
     p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap")
-    p.add_argument("--step-limit", type=int, default=20, help="AIDE max steps per trajectory")
+    p.add_argument("--step-limit", type=int, default=5, help="Agent max steps per trajectory (MLEvolve agent.steps)")
     p.add_argument("--llm-timeout-sec", type=int, default=120, help="Per-LLM-request HTTP timeout (read).")
     p.add_argument(
         "--profile",
-        choices=["cpu", "gpu"],
+        choices=["gpu"],
         default="gpu",
-        help="Job profile. 'gpu' = 1×rtxa6000 + 4cpu/16Gi (PEFT). 'cpu' = 1cpu/2Gi NRP-exempt (tabular pilots).",
+        help="Job profile. Only 'gpu' available on the mlevolve-smoke branch.",
     )
     p.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     p.add_argument("--namespace", default=None, help="Override K8S_NAMESPACE from .env")

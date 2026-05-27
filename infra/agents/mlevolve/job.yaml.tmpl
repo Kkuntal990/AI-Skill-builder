@@ -1,13 +1,20 @@
-# AIDE trajectory Job template. Rendered by `envsubst` per (task × cell × seed).
-# DO NOT `kubectl apply -f` directly — apply via the orchestrator or
-# `make k8s-apply-job-aide` which substitutes env vars from .env + flags.
+# MLEvolve trajectory Job template. Rendered by `envsubst` per (task × cell × seed).
+# DO NOT `kubectl apply -f` directly — apply via the orchestrator which
+# substitutes env vars from .env + flags.
 #
-# Required env at render time (top of orchestrator/run_ab.py wires these):
+# Required env at render time:
 #   IMAGE_REGISTRY IMAGE_NAME IMAGE_TAG GPU_TYPE
 #   MLEVAL_RUN_ID MLEVAL_TRAJECTORY_ID MLEVAL_LLM_MODEL
 #   TASK CELL SEED TIME_LIMIT_SECONDS STEP_LIMIT
 #   ACTIVE_DEADLINE_SECONDS                 (== TIME_LIMIT_SECONDS + slack)
 #   MLEVAL_SKILL_PATH                       (empty for without_skill cell)
+#
+# Differences vs the deleted AIDE template:
+#   - image: ghcr.io/.../mleval-agent-mlevolve:dev (separate image)
+#   - memory: 64Gi (MLEvolve's subprocess model should hold here; if not,
+#     spike C1 fails and we know within one trajectory)
+#   - no AIDE-specific env (OPENAI_BASE_URL is still set — same OpenRouter
+#     wrapper as before — but no GENERATE_REPORT, no MLEVAL_*_REQS_PATH)
 
 apiVersion: batch/v1
 kind: Job
@@ -15,7 +22,7 @@ metadata:
   name: ${MLEVAL_TRAJECTORY_ID}
   labels:
     app: mleval
-    agent: aide
+    agent: mlevolve
     run_id: "${MLEVAL_RUN_ID}"
     task: "${TASK}"
     cell: "${CELL}"
@@ -28,15 +35,15 @@ spec:
     metadata:
       labels:
         app: mleval
-        agent: aide
+        agent: mlevolve
         run_id: "${MLEVAL_RUN_ID}"
         task: "${TASK}"
         cell: "${CELL}"
         seed: "${SEED}"
     spec:
       restartPolicy: Never
-      # 90s grace gives the entrypoint SIGTERM-trap room to write manifest +
-      # run analyzer chain (adapter -> classifier -> predicates).
+      # 90s grace gives the entrypoint SIGTERM-trap room to write the
+      # manifest + run adapter_mlevolve.
       terminationGracePeriodSeconds: 90
       imagePullSecrets:
         - name: ghcr-pull
@@ -44,28 +51,19 @@ spec:
         - name: agent
           image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
           imagePullPolicy: Always
-          # Per NRP policy: limit must be within 20% of request. We use
-          # request == limit for full compliance.
-          # Sized for llama-inference with AIDE-driven optimizations:
-          #   from_pretrained transient fp32 load              ~26 GiB
-          #   Accelerator(fp16) fp32 master + fp16 working     ~+13 GiB
-          #   torch.compile Dynamo/Inductor trace workspace    ~+20 GiB transient
-          #   CUDA reserved + cuDNN workspaces + Python heap   ~+10 GiB
-          # mvp-016 ran 421s before OOM at 64 GiB with measured +7.4 GiB/min
-          # sustained creep (cleanup_session patch let AIDE survive to draft
-          # 2 but leaked dataset.map fork workers from draft 1 kept growing
-          # the cgroup memory). 96 GiB buys ~7 more minutes of headroom at
-          # the observed slope — enough to see if subsequent drafts trigger
-          # the same fork-after-CUDA pattern or if AIDE learns to avoid it.
+          # Sized for llama-inference assuming MLEvolve's subprocess model
+          # avoids the leaked-worker memory creep that bit AIDE. If C1 fails
+          # we'll see the OOM here and re-evaluate; if C1 passes we can drop
+          # further.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "96Gi"
+              memory: "64Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "96Gi"
+              memory: "64Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -95,16 +93,11 @@ spec:
               value: "/results/data/${TASK}/data"
             - name: MLEVAL_SKILL_PATH
               value: "${MLEVAL_SKILL_PATH}"
-            - name: MLEVAL_TASK_REQS_PATH
-              value: "${MLEVAL_TASK_REQS_PATH}"
-            - name: MLEVAL_SKILL_REQS_PATH
-              value: "${MLEVAL_SKILL_REQS_PATH}"
             - name: MLEVAL_LLM_TIMEOUT_SEC
               value: "${MLEVAL_LLM_TIMEOUT_SEC}"
-            - name: GENERATE_REPORT
-              value: "false"
+            - name: MLEVAL_PROMPTS_LOG
+              value: "/results/${MLEVAL_RUN_ID}/${MLEVAL_TRAJECTORY_ID}/prompts.jsonl"
 
-            # Route AIDE's openai backend at OpenRouter (see entrypoint comment).
             - name: OPENAI_BASE_URL
               value: "https://openrouter.ai/api/v1"
             - name: MLEVAL_LLM_API_KEY
@@ -129,10 +122,6 @@ spec:
                   key: hf-token
                   optional: true
 
-            # HF cache on PVC so model weights are downloaded once per sweep,
-            # not once per trajectory. Use `make hf-warm MODEL=<name>` to pre-
-            # populate it before launching A/B Jobs (avoids parallel-download
-            # races between the first cohort of pods).
             - name: HF_HOME
               value: "/results/.hf-cache/hf"
             - name: TRANSFORMERS_CACHE
@@ -174,10 +163,8 @@ spec:
           persistentVolumeClaim:
             claimName: mleval-results
         - name: dev-shm
-          # Disk-backed (not medium: Memory) — memory-backed shm counts against
-          # the pod's memory limit, silently shaving ~8 GiB off effective RAM.
-          # PyTorch DataLoader workers in AIDE-generated code rarely need huge
-          # shm; if a future task fails with "Bus error" or "No space left on
-          # device" in /dev/shm, bump sizeLimit or revisit medium: Memory.
+          # Disk-backed (not medium: Memory) — memory-backed shm counts
+          # against pod memory limit. MLEvolve subprocesses share /dev/shm
+          # via torch DataLoader workers when num_workers>0.
           emptyDir:
             sizeLimit: 8Gi

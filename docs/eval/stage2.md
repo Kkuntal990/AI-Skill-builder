@@ -1,8 +1,43 @@
-# Stage 2 — Skill-effect A/B framework (v0.3, AIDE pivot)
+# Stage 2 — Skill-effect A/B framework (v0.4, MLEvolve spike)
 
 Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `MLE-Agent` alone, and *where* does the help come from? Reusable for any `(agent, skill, task)` triple.
 
-> **History.** v0.2 (Apr 2026) targeted MLEvolve as the fixed agent on MLE-Bench tasks. Discovery in May 2026: MLEvolve hard-couples to the MLE-Bench registry (its grading-server sidecar imports `mlebench.registry` + `validate_submission`), so it can't run our custom-skill A/B tasks without registering each as an MLE-Bench competition. v0.3 pivots to AIDE (WecoAI), which is task-agnostic by design and self-scores via LLM judge. MLEvolve is retained as a v0.4 secondary track for MLE-Bench tasks only.
+> **History.**
+> - **v0.2 (Apr 2026)** targeted MLEvolve. Original ditch: its grading-server sidecar imported `mlebench.registry` + `validate_submission`, blocking custom-skill A/B without registering each task as an MLE-Bench competition.
+> - **v0.3 (May 2026)** pivoted to AIDE (WecoAI). Worked end-to-end on tabular tasks; broke repeatedly on GPU tasks (`llama-inference`): 5 OOMs in a row (mvp-014→mvp-018) traced to fork-after-CUDA in LLM-generated `DataLoader(num_workers>0)` / `dataset.map(num_proc>0)` after `model.to('cuda')`. AIDE's `multiprocessing.Process(fork)` model leaks unkillable CUDA-pinned workers; cleanup_session patches survive but +7.4 to +22.5 GiB/min memory creep OOMs the pod within minutes. AIDE was [designed and validated on Kaggle tabular](https://arxiv.org/abs/2502.13138); GPU users (MLE-Bench, AIRA-dojo) wrap it in nested isolation. Our setup didn't and can't (no DinD/Apptainer on Nautilus).
+> - **v0.4 (May 2026)** re-evaluates MLEvolve. Re-check found the original blocker is bypassable: [`use_grading_server: false`](https://github.com/InternScience/MLEvolve/blob/26bde89/engine/validation/quality_check.py#L219) short-circuits the entire mlebench import path. Architecturally relevant: MLEvolve's `engine/executor.py` uses `subprocess.Popen` per node, with the explicit docstring [*"avoids CUDA/fork issues"*](https://github.com/InternScience/MLEvolve/blob/26bde89/engine/executor.py). The `mlevolve-smoke` branch runs the spike (this document's last section).
+
+## MLEvolve spike — current track
+
+**Branch**: `mlevolve-smoke` (forked from `b5c7120`, AIDE work intact on `main` until spike verdict).
+
+**Goal**: validate four binary claims to decide whether to port v0.4 to MLEvolve permanently.
+
+| # | Claim | Pass criterion |
+|---|---|---|
+| C1 | MLEvolve's subprocess-per-step model avoids the AIDE OOM | One full trajectory (5+ nodes) on llama-inference at 64 GiB without OOMKill |
+| C2 | DeepSeek-via-OpenRouter wrapper plugs into MLEvolve's `llm.code`/`llm.feedback` | At least one successful LLM round-trip per stage, captured in `prompts.jsonl` |
+| C3 | `use_grading_server: false` actually short-circuits the mle-bench coupling | `pip freeze \| grep mlebench` empty; `format_server.py` never imports |
+| C4 | `journal.json` → `trajectory.jsonl` adapter stays small | ≤ 200 LoC; produces a record compatible with existing `state_predicates.py` |
+
+**Scope**: 1 task (`llama-inference`), 1 seed, 1 cell (`without_skill`), 1 trajectory, helper-pod-only (no Job until spike verdict).
+
+**Image**: `ghcr.io/kkuntal990/mleval-agent-mlevolve:dev`. Base `vllm/vllm-openai:v0.9.2`. MLEvolve vendored as submodule pinned to `InternScience/MLEvolve@26bde89`. `mlebench` deliberately NOT installed (Dockerfile asserts absence at build time as a regression guard).
+
+**Verdict pending**. See `infra/agents/mlevolve/README.md` for the launch recipe.
+
+---
+
+> **Note on the rest of this document.** Sections below this banner describe
+> the v0.3 (AIDE-era) framework. They remain accurate for the universal
+> pieces (experimental design, taxonomy, three-layer metric stack,
+> reproducibility framework, infrastructure) — those are agent-agnostic
+> by design and apply to the MLEvolve track too. The AIDE-specific
+> mechanics (gaps + bridges table, `aide_sidecar/*` references, `journal.json`
+> field semantics, RNG seed sources) are retained as historical context;
+> the analogous MLEvolve mechanics live in `infra/agents/mlevolve/README.md`.
+>
+> A full rewrite happens after the spike verdict — premature now.
 
 ## Experimental design
 

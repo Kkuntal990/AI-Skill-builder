@@ -12,8 +12,8 @@ the agent should print
 
     Validation <metric>: <value>
 
-as the last line of its submission script. AIDE's judge reads this line
-to assign `metric.value`.
+as the last line of its submission script. The agent's judge / metric
+extractor reads this line to assign `metric.value`.
 
 The final submission CSV must be written to `./working/submission.csv`
 in the agent's working directory with the columns:

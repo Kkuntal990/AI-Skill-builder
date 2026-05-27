@@ -1,0 +1,133 @@
+# MLEvolve runtime config — spike profile.
+#
+# Rendered by entrypoint.sh via `envsubst` before each trajectory, then
+# copied over /workspace/mlevolve/config/config.yaml so MLEvolve's
+# load_cfg() picks it up.
+#
+# Key spike-mode decisions vs upstream defaults:
+#   - use_grading_server: false      → mle-bench import never triggers
+#   - use_coldstart: false           → no domain classifier
+#   - agent.use_global_memory: false → no FAISS, no embedding model
+#   - parallel_search_num: 1         → no parallel branches (sequential)
+#   - num_drafts: 1                  → ONE draft per node (vs 5 upstream)
+#   - num_gpus: 1                    → matches our pod request
+
+data_dir: ${PUBLIC_DIR}/input
+dataset_dir: ${DATASET_DIR}
+desc_file: ${PUBLIC_DIR}/description.md
+goal: null
+eval: null
+exp_name: ${EXP_ID}
+exp_id: ${EXP_ID}
+
+log_dir: ${RUNS_DIR}
+log_level: INFO
+workspace_dir: ${RUNS_DIR}
+preprocess_data: True
+copy_data: False
+
+# Resources (must match the K8s pod spec; cpu_number must be <= pod CPU)
+start_cpu_id: 0
+cpu_number: 2
+
+torch_hub_dir: /results/.hf-cache/torch
+pretrain_model_dir: /results/.hf-cache/hf
+
+exec:
+  timeout: ${TIME_LIMIT_SECONDS}
+  agent_file_name: runfile.py
+
+agent:
+  # Basic
+  steps: ${STEP_LIMIT}
+  time_limit: ${TIME_LIMIT_SECONDS}
+  initial_drafts: 1
+  seed: 0
+  data_preview: True
+
+  # LLM — both stages route to our OpenAI-compatible sidecar (OpenRouter).
+  # api_key="" lets the sidecar fall back to OPENAI_API_KEY env var.
+  code:
+    model: ${MLEVAL_LLM_MODEL}
+    temp: 0
+    base_url: ${OPENAI_BASE_URL}
+    api_key: ""
+  feedback:
+    model: ${MLEVAL_LLM_MODEL}
+    temp: 0
+    base_url: ${OPENAI_BASE_URL}
+    api_key: ""
+
+  check_data_leakage: False
+  use_diff_mode: True
+
+  # Branch strategy — disabled for spike (single trajectory)
+  fusion_vs_evolution_prob: 0.0
+  branch_fusion_trigger_prob: 0.0
+  max_fusion_drafts: 0
+
+  # Global memory — disabled (no FAISS, no embedding model)
+  use_global_memory: False
+  memory_similarity_threshold: 0.7
+  memory_embedding_device: cpu
+  memory_embedding_model_path: ""
+
+  search:
+    parallel_search_num: 1
+    num_gpus: 1
+
+    num_drafts: 1
+    num_bugs: 1
+    num_improves: 2
+    topk_max_improves: 3
+
+    max_debug_depth: 5
+    back_debug_depth: 2
+    debug_prob: 1
+
+    metric_improvement_threshold: 0.0001
+    max_improve_failure: 3
+
+    branch_stagnation_threshold: 3
+    topk_stagnation_threshold: 6
+    stagnation_window: 4
+    top_candidates_size: 5
+
+    explore_switch_start: 0.5
+    explore_switch_end: 0.7
+    min_exploration_weight: 0.2
+
+    topk_early_k: 3
+    topk_early_max_per_branch: 2
+    topk_late_k: 2
+    topk_late_max_per_branch: 1
+
+    force_backprop_late_threshold: 0.80
+    force_backprop_late_prob: 0.5
+    force_backprop_mid_threshold: 0.4
+    force_backprop_mid_modulo: 3
+    recent_best_window: 4
+
+    fusion_min_time_hours: 999
+    fusion_max_time_hours: 999
+    fusion_min_successful_nodes: 2
+    fusion_min_branches: 2
+
+  decay:
+    exploration_constant: 1.414
+    lower_bound: 0.5
+    alpha: 0.01
+    phase_ratios: [0.3, 0.7]
+
+# Coldstart — disabled (we don't want the domain classifier loading; our
+# task isn't in their JSON taxonomy anyway).
+coldstart:
+  use_coldstart: False
+  task_json_path: "engine/coldstart/competition_tag_classified.json"
+  model_json_path: "engine/coldstart/models_guidance_classified.json"
+  description: ""
+
+# Grading-server escape hatch — the critical knob that lets us run without
+# the mle-bench registry import (verified at config/__init__.py:148 and
+# engine/validation/quality_check.py:219).
+use_grading_server: False

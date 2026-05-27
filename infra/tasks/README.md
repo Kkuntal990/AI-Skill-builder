@@ -4,7 +4,7 @@ Each task lives in `infra/tasks/<task-name>/` and provides:
 
 | File | Required | Purpose |
 |---|---|---|
-| `instruction.md` | yes | AIDE `desc_file` — natural-language goal + eval criterion + data description |
+| `instruction.md` | yes | Agent `desc_file` — natural-language goal + eval criterion + data description |
 | `data/` | yes | Read-only mount inside the pod at `/results/data/<task>/data/` (staged separately) |
 | `predicates.py` | optional | `PREDICATES: dict[str, Callable[[Path], bool]]` — task-specific assertions |
 | `README.md` | optional | How to stage the data, where it came from, license notes |
@@ -15,10 +15,12 @@ Each task lives in `infra/tasks/<task-name>/` and provides:
 2. The Job pod mounts the PVC at `/results`. Task data must already be at
    `/results/data/<task>/{instruction.md, data/}` — staged via `kubectl cp`
    or an initContainer (see `docs/eval/ops.md`).
-3. `entrypoint.sh` invokes AIDE pointing `desc_file` at `/results/data/<task>/instruction.md`
-   and `data_dir` at `/results/data/<task>/data`.
-4. After AIDE finishes, the analyzer chain runs (`adapter_aide` → `stage_classifier` → `state_predicates`).
-5. `state_predicates` looks for `infra/tasks/<task>/predicates.py` (via `MLEVAL_TASK_INSTRUCTION_PATH`'s parent dir on the PVC).
+3. `entrypoint.sh` builds the agent's expected dataset layout from
+   `/results/data/<task>/instruction.md` and `/results/data/<task>/data/`.
+4. After the agent finishes, the analyzer chain runs
+   (`adapter_<agent>` → `stage_classifier` → `state_predicates`).
+5. `state_predicates` looks for `infra/tasks/<task>/predicates.py` (via
+   `MLEVAL_TASK_INSTRUCTION_PATH`'s parent dir on the PVC).
 
 ## Staging task data onto the PVC
 
@@ -51,5 +53,5 @@ $EDITOR infra/tasks/<your-task>/instruction.md
 $EDITOR infra/tasks/<your-task>/predicates.py
 ```
 
-`instruction.md` follows AIDE's free-form `desc_file` format. The minimal
+`instruction.md` follows the agent's free-form `desc_file` format. The minimal
 template has `## Goal`, `## Evaluation`, `## Data description` sections.
