@@ -56,14 +56,22 @@ COPY infra/agents/mlevolve/upstream /workspace/mlevolve
 #   - mlebench       — defensive; not in their files but pinned out in case
 #                      a future version adds it (our C3 spike asserts absence)
 #   - streamlit      — leftover in req_base.txt:154 (no import streamlit in
-#                      MLEvolve source; grep -rn confirms); pinned at 1.40.2
-#                      which caps pillow<12, conflicting with the same file's
-#                      pillow==12.0.0 on line 297. Dropping streamlit lets
-#                      pip resolve cleanly without downgrading pillow.
+#                      MLEvolve source); pinned at 1.40.2 caps pillow<12,
+#                      conflicting with the same file's pillow==12.0.0.
+#   - autogluon(.*)  — 7 lines in req_ml.txt (autogluon, autogluon.common,
+#                      .core, .features, .multimodal, .tabular, .timeseries).
+#                      autogluon-common 1.4.0 pins pyarrow<21, datasets 4.1.1
+#                      pins pyarrow>=21 — upstream lockfile is internally
+#                      inconsistent. autogluon is never imported in MLEvolve
+#                      source (it's a library option for LLM-generated code
+#                      to use, on tabular tasks). For the llama-inference
+#                      spike: irrelevant. If/when we port to tabular tasks
+#                      post-spike, fix properly (downgrade datasets or
+#                      ditch autogluon).
 RUN pip install --no-cache-dir --upgrade pip && \
-    grep -vE "^(mlebench|streamlit)([=<>!~]|$)" /workspace/mlevolve/requirements_base.txt > /tmp/req_base.txt && \
-    grep -vE "^(mlebench|streamlit)([=<>!~]|$)" /workspace/mlevolve/requirements_ml.txt > /tmp/req_ml.txt && \
-    grep -vE "^(mlebench|streamlit)([=<>!~]|$)" /workspace/mlevolve/requirements_domain.txt > /tmp/req_domain.txt && \
+    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?)([=<>!~]|$)" /workspace/mlevolve/requirements_base.txt > /tmp/req_base.txt && \
+    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?)([=<>!~]|$)" /workspace/mlevolve/requirements_ml.txt > /tmp/req_ml.txt && \
+    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?)([=<>!~]|$)" /workspace/mlevolve/requirements_domain.txt > /tmp/req_domain.txt && \
     pip install --no-cache-dir -r /tmp/req_base.txt && \
     pip install --no-cache-dir -r /tmp/req_ml.txt && \
     pip install --no-cache-dir -r /tmp/req_domain.txt && \
