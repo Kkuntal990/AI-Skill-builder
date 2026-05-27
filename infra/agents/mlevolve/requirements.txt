@@ -33,11 +33,9 @@
 # - mlebench: only imported by engine/validation/format_server.py,
 #   which we never load (use_grading_server: false). Verified absent
 #   at build time via the assertion at the bottom of the Dockerfile.
-# - black: used by MLEvolve to auto-format LLM-generated code before
-#   exec. If absent, MLEvolve catches ImportError and skips formatting
-#   (verified: the import is wrapped in try/except in interpreter.py).
-#   Skipping black saves ~30 MB; revisit if formatting matters for a
-#   future eval cell.
+#   (Originally also tried to omit `black` here; build-time smoke
+#   caught that utils/response.py:4 imports it unconditionally — not
+#   try/except-wrapped as I'd assumed. Now included below.)
 #
 # Regen recipe (if MLEvolve upstream adds new top-level imports):
 #   docker run --rm -v $PWD:/work vllm/vllm-openai:v0.9.2 bash -c '
@@ -47,6 +45,7 @@
 # Diff against this file; add anything new.
 
 backoff
+black
 coolname
 dataclasses-json
 faiss-cpu
