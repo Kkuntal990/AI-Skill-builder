@@ -68,10 +68,15 @@ COPY infra/agents/mlevolve/upstream /workspace/mlevolve
 #                      spike: irrelevant. If/when we port to tabular tasks
 #                      post-spike, fix properly (downgrade datasets or
 #                      ditch autogluon).
+# umap==0.1.1 is also stripped — it's a typo'd duplicate of umap-learn
+# (both appear in requirements_domain.txt; umap-learn is the package
+# MLEvolve actually uses; umap==0.1.1 has no wheel for Python 3.12,
+# breaking the entire install). Anchored regex on package name only,
+# so umap-learn is NOT matched.
 RUN pip install --no-cache-dir --upgrade pip && \
-    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?)([=<>!~]|$)" /workspace/mlevolve/requirements_base.txt > /tmp/req_base.txt && \
-    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?)([=<>!~]|$)" /workspace/mlevolve/requirements_ml.txt > /tmp/req_ml.txt && \
-    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?)([=<>!~]|$)" /workspace/mlevolve/requirements_domain.txt > /tmp/req_domain.txt && \
+    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?|umap)([=<>!~]|$)" /workspace/mlevolve/requirements_base.txt > /tmp/req_base.txt && \
+    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?|umap)([=<>!~]|$)" /workspace/mlevolve/requirements_ml.txt > /tmp/req_ml.txt && \
+    grep -vE "^(mlebench|streamlit|autogluon([._-].*)?|umap)([=<>!~]|$)" /workspace/mlevolve/requirements_domain.txt > /tmp/req_domain.txt && \
     pip install --no-cache-dir -r /tmp/req_base.txt && \
     pip install --no-cache-dir -r /tmp/req_ml.txt && \
     pip install --no-cache-dir -r /tmp/req_domain.txt && \
