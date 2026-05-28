@@ -56,6 +56,7 @@ from __future__ import annotations
 import logging
 
 from .overlay_schema import Overlay, load_overlay
+from . import skill_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,23 @@ def _patched_build_chat_prompt(model_name, introduction, user_prompt, assistant_
         # about the original "Now let's begin..." phrasing; the user_prompt
         # already contains the task description.
         introduction = _OVERLAY.persona_identity
+
+    # Skill catalog + retrieval (Path A, docs/eval/skill-retrieval-design.md).
+    # The skill index is built once at import time from MLEVAL_SKILL_PATH.
+    # When present we (1) append the L1 catalog to the introduction so the
+    # model always knows what skills are available, and (2) retrieve top-k
+    # chunks against the user_prompt for draft/improve/debug stages, with
+    # threshold gating so idle turns stay clean.
+    idx = skill_retriever.current_index()
+    if idx is not None:
+        introduction = introduction.rstrip() + "\n\n" + idx.catalog_text()
+        stage = skill_retriever.detect_stage(user_prompt)
+        if stage in skill_retriever.INJECTION_STAGES:
+            chunks = idx.search(user_prompt)
+            if chunks:
+                block = skill_retriever.render_chunks(chunks)
+                user_prompt = skill_retriever.inject_into_user_prompt(user_prompt, block)
+
     return _orig_build_chat_prompt(model_name, introduction, user_prompt, assistant_prefix)
 
 

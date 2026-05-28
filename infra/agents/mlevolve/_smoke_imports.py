@@ -88,4 +88,56 @@ assert isinstance(sample, dict) and "Kaggle" not in sample["system"], \
 prompt_overlay.reload(None)
 assert prompt_overlay.current_overlay().is_empty, "Reset to upstream-default failed"
 
-print("OK: run_mlevolve.py + MLEvolve + mleval analyzer + prompt_overlay all import cleanly")
+# -----------------------------------------------------------------------------
+# Skill-retriever regression guards. Path A architecture
+# (docs/eval/skill-retrieval-design.md): the sidecar builds a BM25 index over
+# SKILL.md + references/*.md at import time, and prompt_overlay's wrapper
+# injects L1 catalog + retrieved chunks. These checks catch the most likely
+# regressions: chunker producing empty output, retriever returning nothing for
+# an obviously relevant query, or stage-detection heuristic missing the draft
+# marker (would silently skip injection in production).
+# -----------------------------------------------------------------------------
+from mlevolve_sidecar import skill_retriever  # noqa: E402
+
+# Use the peft-tuning skill bundled in the image as a fixture. If absent we
+# skip these assertions (don't fail the build of an image that doesn't ship a
+# skill — separate concern).
+_SKILL_FIXTURE = "/results/data/peft-tuning"  # PVC path used at runtime
+_FALLBACK_FIXTURE = "/workspace/skills/peft-tuning"  # if baked into image
+import pathlib as _pl  # noqa: E402
+
+_fixture = next(
+    (p for p in (_SKILL_FIXTURE, _FALLBACK_FIXTURE) if _pl.Path(p).is_dir()),
+    None,
+)
+if _fixture is None:
+    print("WARN: no peft-tuning skill fixture found at runtime PVC or /workspace/skills — skipping skill_retriever smoke")
+else:
+    idx = skill_retriever.reload(_fixture)
+    assert idx is not None, f"skill_retriever.reload({_fixture}) returned None"
+    assert len(idx) >= 3, f"expected ≥3 chunks from peft-tuning, got {len(idx)}"
+    assert "peft-tuning" in idx.skill_names, f"skill_name missing: {idx.skill_names}"
+
+    # Catalog rendering: non-empty, contains the skill name
+    cat = idx.catalog_text()
+    assert "peft-tuning" in cat, "catalog_text() does not mention peft-tuning"
+    assert "```yaml" in cat, "catalog_text() not in YAML form"
+
+    # Stage detection: draft marker triggers, generic prompt does not
+    assert skill_retriever.detect_stage(
+        "Solution sketch guideline\nFine-tune Qwen2.5-3B on SAMSum using LoRA..."
+    ) == "draft"
+    assert skill_retriever.detect_stage("hello world") is None
+
+    # Retrieval: a clearly-relevant query returns at least one chunk
+    chunks = idx.search(
+        "fine-tune qwen2.5 with LoRA target_modules for attention layers"
+    )
+    assert len(chunks) >= 1, "retrieval returned 0 chunks for a clearly-relevant query"
+    assert all(c.score > 0 for c in chunks), "retrieved chunks have zero score"
+
+    # Reset for production (the prompt_overlay wrapper consults the current_index)
+    skill_retriever.reload(None)
+    assert skill_retriever.current_index() is None, "skill_retriever reload(None) did not reset"
+
+print("OK: run_mlevolve.py + MLEvolve + mleval analyzer + prompt_overlay + skill_retriever all import cleanly")

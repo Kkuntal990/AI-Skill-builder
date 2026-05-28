@@ -97,14 +97,17 @@ if [ -f "$OVERLAY_SRC" ]; then
     echo "[entrypoint] prompt overlay: $OVERLAY_DEST"
 fi
 
-# Optional skill: splice into description.md (MLEvolve's analogue of AIDE's
-# skill_inject monkey-patch — done at the file level because MLEvolve's
-# load_task_desc reads desc_file as a single blob).
+# Optional skill: just export MLEVAL_SKILL_PATH for the sidecar's
+# skill_retriever (Path A, docs/eval/skill-retrieval-design.md). The retriever
+# reads it at import time, builds a BM25 index over SKILL.md + references/*.md,
+# and prompt_overlay's wrapper injects an L1 catalog into the persona +
+# top-k=3 chunks per draft/improve/debug turn — only when retrieval score
+# crosses a threshold. No file-level splice into description.md (the old
+# approach put 80 KB of fenced markdown into system_message and made the LLM
+# mimic the format → spike-004 SyntaxError cascade).
 if [ -n "${MLEVAL_SKILL_PATH:-}" ] && [ -e "$MLEVAL_SKILL_PATH" ]; then
-    python3 /workspace/mlevolve_sidecar/skill_inject.py \
-        --skill-path "$MLEVAL_SKILL_PATH" \
-        --description "$PUBLIC_DIR/description.md" \
-        || echo "[entrypoint] skill_inject failed; continuing with bare description"
+    export MLEVAL_SKILL_PATH
+    echo "[entrypoint] skill: $MLEVAL_SKILL_PATH (consumed by sidecar skill_retriever)"
 fi
 
 # -------- Render config + overwrite MLEvolve's default ------------------
