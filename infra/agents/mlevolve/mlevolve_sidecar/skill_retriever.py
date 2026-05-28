@@ -385,25 +385,44 @@ class SkillIndex:
         return out
 
     def catalog_text(self) -> str:
-        """Render the L1 catalog as an Anthropic-style YAML block.
+        """Render the L1 catalog + response-format directive.
 
         Always emitted (idle state) so the model knows what skills exist
         even when retrieval is empty.
+
+        IMPORTANT: no ``` code fences in the output. Spike-005 confirmed
+        that even a single ```yaml fence at the top of the system message
+        is enough to prime DeepSeek-Flash into starting its code response
+        with ```python (50% fence-at-start rate vs 16% baseline). We
+        render as plain indented text instead, and prepend an explicit
+        response-format directive that competes with mimicry pressure.
         """
-        lines = ["## Available skills", "", "```yaml"]
+        lines = [
+            "## Response format",
+            "",
+            "Your response MUST be plain Python source code. Do NOT begin your"
+            " response with a markdown code-block fence (the three-backtick"
+            " sequence followed by the language tag). Do NOT end your response"
+            " with a closing fence either. The downstream parser writes your"
+            " response directly to runfile.py; a leading fence-character"
+            " sequence causes SyntaxError on line 1. Start your response with"
+            " an `import` statement or a `#`-prefixed comment, never a"
+            " backtick.",
+            "",
+            "## Available skills",
+            "",
+        ]
         for name in self.skill_names:
             fm = self.frontmatter.get(name) or {}
             description = (fm.get("description") or _derive_description(name, self.chunks)).strip()
             triggers = fm.get("triggers") or []
-            lines.append(f"- name: {name}")
-            # Indent description block under |
-            lines.append(f"  description: |")
+            lines.append(f"- **{name}**")
             for d in description.splitlines() or [""]:
-                lines.append(f"    {d}")
+                lines.append(f"  {d}")
             if triggers:
                 trig_str = ", ".join(triggers)
-                lines.append(f"  triggers: [{trig_str}]")
-        lines.append("```")
+                lines.append(f"  triggers: {trig_str}")
+            lines.append("")
         return "\n".join(lines)
 
 
@@ -534,17 +553,22 @@ def render_chunks(chunks: list[Chunk]) -> str:
 
     Body fences are preserved (the skill is authoritative reference). The
     wrapping framing tells the LLM this is REFERENCE, not output template
-    — reduces the format-mimicry pressure that broke spike-004.
+    — but spike-005 confirmed soft framing alone is insufficient to
+    counter mimicry; the catalog's response-format directive in the
+    system prompt does the heavy lifting now. This block reinforces.
     """
     if not chunks:
         return ""
     lines = [
         "",
-        "# Skill Reference",
+        "# Skill Reference (READ-ONLY — DO NOT COPY THIS FORMAT)",
         "",
-        "*The following reference material is retrieved from the skill library. "
-        "Use it to inform your solution. DO NOT mimic its markdown formatting in "
-        "your output — your response should be Python code, not documentation.*",
+        "The snippets below are RETRIEVED REFERENCE MATERIAL — they exist only"
+        " to inform your solution. They use markdown fenced code-blocks because"
+        " that's how the source documentation is written. **Your response MUST"
+        " NOT be wrapped in those code-block fences.** Write plain Python source"
+        " code that the parser can run directly — start with `import` or `#`,"
+        " never with a backtick.",
         "",
     ]
     for c in chunks:
