@@ -68,3 +68,14 @@ omegaconf
 jsonschema
 rich
 pandas
+
+# PEFT task family — needed by SAMSum / GSM8K / BoolQ tasks (added 2026-05).
+# All pure-Python wheels (no nvcc, no compile-from-source); ~30 MB total.
+# accelerate + datasets come transitively via transformers (vllm base ships
+# transformers); peft + trl explicit because vllm doesn't depend on them
+# (vllm has its own LoRA inference path that doesn't use peft for training).
+# evaluate + rouge_score for summarization metrics.
+peft>=0.10
+trl>=0.9
+evaluate
+rouge_score

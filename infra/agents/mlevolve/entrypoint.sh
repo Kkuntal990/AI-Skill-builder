@@ -76,6 +76,19 @@ for entry in "$DATA_DIR"/*; do
 done
 cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
 
+# Optional per-task prompt overlay — if a `prompt_overlay.yaml` lives
+# next to the instruction file, copy it into OUT_DIR and export
+# MLEVOLVE_PROMPT_OVERLAY so the sidecar's prompt_overlay module reads
+# it at import time. See mlevolve_sidecar/README.md for the schema.
+TASK_DIR_HOST="$(dirname "$INSTRUCTION_PATH")"
+OVERLAY_SRC="$TASK_DIR_HOST/prompt_overlay.yaml"
+if [ -f "$OVERLAY_SRC" ]; then
+    OVERLAY_DEST="$OUT_DIR/_prompt_overlay.yaml"
+    cp -f "$OVERLAY_SRC" "$OVERLAY_DEST"
+    export MLEVOLVE_PROMPT_OVERLAY="$OVERLAY_DEST"
+    echo "[entrypoint] prompt overlay: $OVERLAY_DEST"
+fi
+
 # Optional skill: splice into description.md (MLEvolve's analogue of AIDE's
 # skill_inject monkey-patch — done at the file level because MLEvolve's
 # load_task_desc reads desc_file as a single blob).
