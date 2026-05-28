@@ -425,6 +425,8 @@ def _derive_description(skill_name: str, chunks: list[Chunk]) -> str:
 def load_skill_index(skill_path: str | None = None) -> SkillIndex | None:
     """Build a SkillIndex from a path. Path may be:
 
+      * A SKILL.md file path (orchestrator's current contract: passes the
+        file, parent dir IS the skill dir) → use parent as skill dir
       * A single skill directory containing SKILL.md
       * A parent containing multiple skill subdirs (library mode)
       * Unset / nonexistent → returns None (caller treats as "no skill")
@@ -436,6 +438,11 @@ def load_skill_index(skill_path: str | None = None) -> SkillIndex | None:
     if not root.exists():
         logger.warning("[skill_retriever] %s does not exist; no index built", root)
         return None
+
+    # If pointed at a SKILL.md file, walk up to its parent (orchestrator
+    # contract: --skill-path is the file path, not the dir).
+    if root.is_file() and root.name == "SKILL.md":
+        root = root.parent
 
     skill_dirs: list[Path] = []
     if (root / "SKILL.md").is_file():
