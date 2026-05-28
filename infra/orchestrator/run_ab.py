@@ -101,6 +101,12 @@ class Trajectory:
     time_limit_sec: int
     step_limit: int
     llm_timeout_sec: int = 120
+    # Per-exec subprocess cap. Decoupled from time_limit_sec so a single
+    # training pass can't consume the entire trajectory budget. Default
+    # is computed by entrypoint.sh as time_limit_sec / 2 when unset; pass
+    # this explicitly when you need a specific per-exec window (e.g.
+    # SAMSum needs ~40 min to finish 1 epoch of QLoRA + eval on A6000).
+    exec_timeout_sec: int = 0  # 0 → entrypoint default (time_limit_sec/2)
 
     @property
     def trajectory_id(self) -> str:
@@ -143,6 +149,10 @@ class Trajectory:
                 "MLEVAL_TASK_REQS_PATH": self.task_reqs_path,
                 "MLEVAL_SKILL_REQS_PATH": self.skill_reqs_path,
                 "MLEVAL_LLM_TIMEOUT_SEC": str(self.llm_timeout_sec),
+                # Empty string → entrypoint computes time_limit_sec / 2
+                "MLEVAL_EXEC_TIMEOUT_SEC": (
+                    str(self.exec_timeout_sec) if self.exec_timeout_sec > 0 else ""
+                ),
             }
         )
         return out
@@ -159,7 +169,14 @@ class Plan:
     skill_path: str = ""
     trajectories: list[Trajectory] = field(default_factory=list)
 
-    def build(self, llm_model: str, time_limit_sec: int, step_limit: int, llm_timeout_sec: int = 120) -> None:
+    def build(
+        self,
+        llm_model: str,
+        time_limit_sec: int,
+        step_limit: int,
+        llm_timeout_sec: int = 120,
+        exec_timeout_sec: int = 0,
+    ) -> None:
         for cell in self.cells:
             for seed in self.seeds:
                 self.trajectories.append(
@@ -173,6 +190,7 @@ class Plan:
                         time_limit_sec=time_limit_sec,
                         step_limit=step_limit,
                         llm_timeout_sec=llm_timeout_sec,
+                        exec_timeout_sec=exec_timeout_sec,
                     )
                 )
 
@@ -233,9 +251,10 @@ def main(argv: list[str] | None = None) -> int:
         choices=["with_skill", "without_skill"],
     )
     p.add_argument("--skill-path", default="", help="In-pod path to SKILL.md (only used when cell=with_skill)")
-    p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap")
-    p.add_argument("--step-limit", type=int, default=5, help="Agent max steps per trajectory (MLEvolve agent.steps)")
+    p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap (graceful — entrypoint watchdog kills agent PGID then runs analyzer/manifest).")
+    p.add_argument("--step-limit", type=int, default=5, help="Agent max steps per trajectory (MLEvolve agent.steps; the only LOOP exit since agent.time_limit is soft).")
     p.add_argument("--llm-timeout-sec", type=int, default=120, help="Per-LLM-request HTTP timeout (read).")
+    p.add_argument("--exec-timeout-sec", type=int, default=0, help="Per-exec subprocess kill (MLEvolve exec.timeout). 0 → entrypoint default = time_limit_sec/2.")
     p.add_argument(
         "--profile",
         choices=["gpu"],
@@ -271,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         time_limit_sec=args.time_limit_sec,
         step_limit=args.step_limit,
         llm_timeout_sec=args.llm_timeout_sec,
+        exec_timeout_sec=args.exec_timeout_sec,
     )
 
     template_path = JOB_TEMPLATES[args.profile]

@@ -95,6 +95,9 @@ spec:
               value: "${MLEVAL_SKILL_PATH}"
             - name: MLEVAL_LLM_TIMEOUT_SEC
               value: "${MLEVAL_LLM_TIMEOUT_SEC}"
+            # Empty string lets entrypoint.sh default to TIME_LIMIT_SECONDS / 2.
+            - name: MLEVAL_EXEC_TIMEOUT_SEC
+              value: "${MLEVAL_EXEC_TIMEOUT_SEC}"
             - name: MLEVAL_PROMPTS_LOG
               value: "/results/${MLEVAL_RUN_ID}/${MLEVAL_TRAJECTORY_ID}/prompts.jsonl"
 
