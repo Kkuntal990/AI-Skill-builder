@@ -1,6 +1,13 @@
-# Interactive Jupyter pod for testing harness code against a real Nautilus
-# GPU node. Mirrors ~/svcl-projects/vlm-self-reflection/k8s/jupyter-1gpu-test.yaml
-# but reduces to a single RTX A6000 and uses the mleval-agent image.
+# Interactive debug pod for running the MLEvolve agent step-by-step against
+# a real Nautilus GPU. Reuses the production mleval-agent image but swaps
+# the entrypoint for `sleep infinity` so we can `kubectl exec` in and drive
+# `run_mlevolve.py` (or arbitrary Python) manually before committing to a
+# full Job.
+#
+# Originally a Jupyter pod (pre-2026-05-28); switched to plain sleep because:
+#  (a) the curated mlevolve-agent image no longer bundles jupyter (~200 MB saved)
+#  (b) for debugging the agent itself we want a shell with the same env vars +
+#      PVC mounts the Job would see, not a notebook UI
 #
 # !!! DO NOT `kubectl apply -f` this file directly. !!!
 # The image, registry, tag, and GPU type are envsubst placeholders that only
@@ -8,8 +15,7 @@
 # string `${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}` as the image and
 # produce a confusing ErrImagePull.
 #
-# Access: `kubectl port-forward pod/mleval-jupyter-1gpu 8888:8888`
-# Token:  `mleval-dev` (matches the --NotebookApp.token below).
+# Access: `kubectl -n ecepxie exec -it mleval-jupyter-1gpu -- bash`
 
 apiVersion: v1
 kind: Pod
@@ -29,13 +35,12 @@ spec:
       # at apply time (see `make k8s-apply-helper`).
       image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
       imagePullPolicy: Always
-      command:
-        - jupyter
-        - lab
-        - --ip=0.0.0.0
-        - --no-browser
-        - --allow-root
-        - --NotebookApp.token=mleval-dev
+      # Plain sleep — exec in with `kubectl exec -it ... -- bash` to drive
+      # `python3 /workspace/run_mlevolve.py` interactively, or invoke the
+      # agent's generated code directly to debug task-level failures
+      # without re-launching a Job (which would mean ~5 min image pull
+      # again on a fresh node).
+      command: ["sleep", "infinity"]
 
       resources:
         # NRP admission webhook caps controllerless pods at 32 GiB / 16 CPU.

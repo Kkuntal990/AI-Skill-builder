@@ -41,6 +41,14 @@ TIME_LIMIT_SECONDS="${TIME_LIMIT_SECONDS:-1800}"
 STEP_LIMIT="${STEP_LIMIT:-5}"
 LLM_TIMEOUT_SEC="${MLEVAL_LLM_TIMEOUT_SEC:-120}"
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}"
+# Per-exec subprocess timeout (MLEvolve's `exec.timeout`). DECOUPLED from
+# TIME_LIMIT_SECONDS so a single training exec can't consume the whole
+# trajectory budget — defaults to TIME_LIMIT_SECONDS / 2 (one full
+# attempt + one debug retry within the wall budget). For tasks that need
+# a full training+eval pass in a single exec (e.g. SAMSum at 40 min),
+# pass MLEVAL_EXEC_TIMEOUT_SEC explicitly with TIME_LIMIT_SECONDS at
+# least 2x larger.
+MLEVAL_EXEC_TIMEOUT_SEC="${MLEVAL_EXEC_TIMEOUT_SEC:-$((TIME_LIMIT_SECONDS / 2))}"
 
 # MLEvolve reads OPENAI_API_KEY; map MLEVAL_LLM_API_KEY into it if set.
 export OPENAI_API_KEY="${MLEVAL_LLM_API_KEY:-${OPENAI_API_KEY:-}}"
@@ -55,8 +63,8 @@ export MLEVAL_PROMPTS_LOG="${MLEVAL_PROMPTS_LOG:-$OUT_DIR/prompts.jsonl}"
 mkdir -p "$OUT_DIR" "$OUT_DIR/agent_logs"
 
 echo "[entrypoint] run_id=$RUN_ID trajectory_id=$TRAJECTORY_ID"
-echo "[entrypoint] task=$TASK cell=$CELL seed=$SEED time=${TIME_LIMIT_SECONDS}s steps=${STEP_LIMIT}"
-echo "[entrypoint] llm=${MLEVAL_LLM_MODEL} timeout=${LLM_TIMEOUT_SEC}s base=${OPENAI_BASE_URL}"
+echo "[entrypoint] task=$TASK cell=$CELL seed=$SEED steps=${STEP_LIMIT}"
+echo "[entrypoint] wall_cap=${TIME_LIMIT_SECONDS}s (graceful) | per-exec=${MLEVAL_EXEC_TIMEOUT_SEC}s | llm=${MLEVAL_LLM_MODEL} llm_timeout=${LLM_TIMEOUT_SEC}s base=${OPENAI_BASE_URL}"
 
 pip freeze > "$OUT_DIR/pip_freeze.txt" 2>/dev/null || true
 
@@ -107,7 +115,7 @@ RUNS_DIR="$OUT_DIR/mlevolve_runs"
 mkdir -p "$RUNS_DIR"
 
 export EXP_ID DATASET_DIR PUBLIC_DIR RUNS_DIR \
-       STEP_LIMIT TIME_LIMIT_SECONDS LLM_TIMEOUT_SEC \
+       STEP_LIMIT TIME_LIMIT_SECONDS MLEVAL_EXEC_TIMEOUT_SEC LLM_TIMEOUT_SEC \
        MLEVAL_LLM_MODEL OPENAI_BASE_URL TRAJECTORY_ID
 envsubst < /workspace/mlevolve_config.yaml > "$RUN_CFG"
 cp -f "$RUN_CFG" /workspace/mlevolve/config/config.yaml
@@ -144,6 +152,33 @@ echo "[entrypoint] mlevolve PID=$AGENT_PID PGID=$AGENT_PGID"
 ) &
 SAMPLER_PID=$!
 
+# Wall-clock watchdog — graceful soft kill of the agent PGID after
+# TIME_LIMIT_SECONDS. MLEvolve's `agent.time_limit` is consulted by the
+# search loop for branching decisions but does NOT gate the main loop
+# (verified at upstream run.py:137 — the `while completed < total_steps`
+# check has no time clause). Without this watchdog, the only wall-clock
+# cap is the K8s activeDeadlineSeconds, which SIGKILLs the pod and skips
+# post-run analyzer + manifest write.
+#
+# The watchdog sends SIGTERM to the agent's process group, then SIGKILL
+# after a 60s grace. The entrypoint's existing SIGTERM trap forwards to
+# PGID, but the watchdog runs in parallel so it works whether the trap
+# fires or not. Analyzer + manifest then run as normal because the wait
+# below returns and we continue to the post-run section.
+(
+    sleep "$TIME_LIMIT_SECONDS"
+    if kill -0 "$AGENT_PID" 2>/dev/null; then
+        echo "[entrypoint] WALL CAP ($TIME_LIMIT_SECONDS sec) reached — SIGTERM to PGID=$AGENT_PGID"
+        kill -TERM -"$AGENT_PGID" 2>/dev/null || true
+        sleep 60
+        if kill -0 "$AGENT_PID" 2>/dev/null; then
+            echo "[entrypoint] WALL CAP — SIGKILL after 60s grace"
+            kill -KILL -"$AGENT_PGID" 2>/dev/null || true
+        fi
+    fi
+) &
+WATCHDOG_PID=$!
+
 _term() {
     echo "[entrypoint] received signal, forwarding to mlevolve PGID=$AGENT_PGID"
     kill -TERM -"$AGENT_PGID" 2>/dev/null || kill -TERM "$AGENT_PID" 2>/dev/null || true
@@ -153,6 +188,7 @@ trap _term TERM INT
 wait "$AGENT_PID"
 INNER_EXIT=$?
 kill "$SAMPLER_PID" 2>/dev/null || true
+kill "$WATCHDOG_PID" 2>/dev/null || true
 
 echo "[entrypoint] mlevolve exited with $INNER_EXIT"
 

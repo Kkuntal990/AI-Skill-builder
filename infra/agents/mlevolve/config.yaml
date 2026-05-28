@@ -38,7 +38,10 @@ torch_hub_dir: /results/.hf-cache/torch
 pretrain_model_dir: /results/.hf-cache/hf
 
 exec:
-  timeout: ${TIME_LIMIT_SECONDS}
+  # Per-exec subprocess timeout. Decoupled from agent.time_limit so a
+  # single training pass can't consume the entire trajectory's wall
+  # budget. Default in entrypoint.sh is TIME_LIMIT_SECONDS / 2.
+  timeout: ${MLEVAL_EXEC_TIMEOUT_SEC}
   agent_file_name: runfile.py
 
 agent:
