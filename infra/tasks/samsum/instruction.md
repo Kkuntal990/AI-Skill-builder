@@ -1,89 +1,89 @@
 <!--
 Provenance: SAMSum (Samsung-built dialogue summarization benchmark).
-Dataset: https://huggingface.co/datasets/samsum (Apache-2.0).
+Dataset: https://huggingface.co/datasets/knkarthick/samsum (mirror of
+the original `samsum` dataset, which Samsung de-listed from HF Hub).
 Paper: "SAMSum Corpus: A Human-annotated Dialogue Dataset for
 Abstractive Summarization" (Gliwa et al., 2019).
 
-This task is harness-staged for cheap PEFT smoke testing: fine-tune
-a 3B+ LLM with LoRA to summarize chat-style dialogues, then evaluate
-ROUGE-L on the test split. ~10 MB dataset, ~15-25 min on a single
-A100/A6000, deterministic metric for paired-seed A/B.
+This task is harness-staged for cheap PEFT smoke testing on a single
+GPU. ~10 MB dataset, single A100/A6000, deterministic metric.
 
-The dataset is hosted on HuggingFace Hub. The agent uses
-``datasets.load_dataset('samsum')`` to fetch it; the HF cache lives at
-``/results/.hf-cache/hf`` on PVC so subsequent trajectories don't
-re-download.
+The recipe below is intentionally OPEN — we specify only the dataset,
+model, prompt template, and output contract. Choosing PEFT method,
+LoRA hyperparameters, training schedule, and inference strategy is
+left to the agent (this is what we're evaluating).
 -->
 
 ## Task
 
-Fine-tune `meta-llama/Llama-3.2-3B-Instruct` on the **SAMSum** dialogue
-summarization dataset using **LoRA** (PEFT). Train for a small number of
-steps (one epoch is enough; cap iterations if needed to fit the budget),
-then evaluate **ROUGE-L** on the test split. Print the final ROUGE-L F1
-score as the last line of stdout.
+Fine-tune a pre-trained 3B+ instruction-tuned LLM on the SAMSum
+dialogue summarization dataset. The agent should choose a parameter-
+efficient method (LoRA / QLoRA / adapter) — full fine-tuning will not
+fit a 3B model on the available GPU memory budget. After training,
+evaluate the fine-tuned model on the test split and print ROUGE-L F1.
 
-## Evaluation
+## Data
 
-ROUGE-L F1 score (higher is better) on the SAMSum **test** split. The
-score parser reads the last line of stdout, expecting exactly:
-
-    Final Validation Score: <float>
-
-where `<float>` is the ROUGE-L F1 in `[0.0, 1.0]`. A reasonable baseline
-of LoRA-fine-tuned Llama-3.2-3B on SAMSum is around 0.40–0.45.
-
-## Data description
-
-- **Dataset**: HuggingFace Hub `samsum` (loaded via
-  `datasets.load_dataset('samsum')`). Pre-split into:
-  - `train` — 14,732 dialogue/summary pairs
-  - `validation` — 818 pairs (use during training for early stopping if you wish)
+- **Dataset slug**: `knkarthick/samsum` on HuggingFace Hub.
+- **Loader**: `datasets.load_dataset("knkarthick/samsum")` returns a
+  `DatasetDict` with pre-built splits.
+- **Splits** (already provided — DO NOT do your own train/test split):
+  - `train` — 14,731 dialogue/summary pairs
+  - `validation` — 818 pairs (optional, for training monitoring)
   - `test` — 819 pairs (use for the final ROUGE-L)
-- Each example has two fields: `dialogue` (multi-turn chat string) and
-  `summary` (short paraphrase). No labels are hidden; this is a fully open
-  benchmark with public test labels.
-- **DO NOT do any train/test split yourself** — the HF splits are
-  authoritative.
-- **DO NOT use the validation split for the final score** — use `test`.
+- **Fields**: each example has `dialogue` (multi-turn chat string) and
+  `summary` (short paraphrase).
 
 ## Model
 
-- **Backbone**: `meta-llama/Llama-3.2-3B-Instruct`.
-- LoRA recipe (suggested but free to tweak): `r=16`, `alpha=32`,
-  `target_modules=["q_proj","k_proj","v_proj","o_proj"]`, dropout 0.05.
-- Use **fp16 or bf16** to fit the model in the GPU's memory budget
-  (the spike runs on an RTX A6000 with 48 GB). Full fine-tune of a 3B
-  model with optimizer state would not fit; LoRA brings the trainable
-  parameter count down to ~30 MB and fits comfortably.
+- **Backbone**: `Qwen/Qwen2.5-3B-Instruct` (3.1 B params, no gating).
+- The HF cache is at `/results/.hf-cache/hf` on the mounted PVC, so
+  the model weights persist across trajectories — only the first
+  trajectory pays the download cost.
 
-## Training recipe (suggested)
+## Prompt template
 
-- Library: `trl.SFTTrainer` with `peft.LoraConfig`.
-- Prompt template: `"Summarize the following dialogue:\n{dialogue}\nSummary:\n{summary}"`
-  (or any equivalent — the loss should only be on the `summary` portion
-  when possible, but a simpler whole-sequence loss also works for the
-  smoke).
-- Hyperparams: 1 epoch, lr `2e-4` with cosine schedule, batch size 4,
-  gradient accumulation 4, max_seq_length 1024.
+For both training (SFT) and inference, format each example as:
 
-## ROUGE computation
+    Summarize the following dialogue:
+    {dialogue}
+    Summary:
+    {summary}
 
-After training, run inference on the test split with the LoRA adapter
-loaded. For each test example, generate a summary (max_new_tokens ≈ 100),
-strip the prompt, then compute ROUGE-L F1 against the gold summary using
-either the `evaluate` library (`evaluate.load('rouge')`) or `rouge_score`
-directly. Report the **mean ROUGE-L F1** across the test set.
+At inference time, generate after the `Summary:\n` cue and decode
+until end-of-sequence (or a sensible max-new-token cap that you pick).
+
+## Evaluation
+
+- **Metric**: mean ROUGE-L F1 over ALL 819 examples in the `test`
+  split.
+- **Library**: either `evaluate.load("rouge")` or `rouge_score` —
+  both are pre-installed in the image. Use stemmer enabled.
+- **DO NOT use the `validation` split for the final reported metric**
+  — only `test`.
 
 ## Output contract
 
-The very last line of stdout must be:
+The very last line of stdout MUST be exactly:
 
-    Final Validation Score: <rouge_l_f1>
+    Final Validation Score: <float>
 
-where `<rouge_l_f1>` is a float in `[0.0, 1.0]`. The harness parses this
-line to extract the trajectory's metric value. There is no submission
-file; do not write any CSV.
+where `<float>` is the ROUGE-L F1 in `[0.0, 1.0]`. The harness parses
+this line as the trajectory's metric value. Higher is better.
 
-The agent should save its final runnable script as `runfile.py` in the
-working directory.
+There is NO submission file. Save the runnable script as `runfile.py`
+in the working directory.
+
+## What the agent decides
+
+- PEFT method (LoRA, QLoRA, prefix tuning, adapter, …) — but it must
+  be parameter-efficient, not full fine-tune.
+- LoRA / adapter hyperparameters (rank, alpha, dropout, target modules).
+- Trainer choice (`trl.SFTTrainer`, `transformers.Trainer`, custom).
+- Training hyperparameters (lr, schedule, batch size, grad-accum,
+  epochs, max_seq_length).
+- Precision (fp16 / bf16 / 4-bit quant). Note: full bf16 of a 3 B
+  model + optimizer states + KV cache will be tight on a 48 GB GPU —
+  PEFT brings memory well below this, and 4-bit quant brings it lower.
+- Inference strategy (greedy vs sampled, max_new_tokens, batching).
+- Any choice not explicitly mandated above.
