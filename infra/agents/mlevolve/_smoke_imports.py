@@ -121,7 +121,10 @@ else:
     # Catalog rendering: non-empty, contains the skill name
     cat = idx.catalog_text()
     assert "peft-tuning" in cat, "catalog_text() does not mention peft-tuning"
-    assert "```yaml" in cat, "catalog_text() not in YAML form"
+    # Catalog MUST NOT contain backtick fences (spike-006 fix — primed LLM mimicry)
+    assert "```" not in cat, "catalog_text() leaked backtick fences — fence-priming will return"
+    # Should still include the response-format directive
+    assert "Response format" in cat, "catalog_text() missing Response format header"
 
     # Stage detection: draft marker triggers, generic prompt does not
     assert skill_retriever.detect_stage(
@@ -140,4 +143,50 @@ else:
     skill_retriever.reload(None)
     assert skill_retriever.current_index() is None, "skill_retriever reload(None) did not reset"
 
-print("OK: run_mlevolve.py + MLEvolve + mleval analyzer + prompt_overlay + skill_retriever all import cleanly")
+# -----------------------------------------------------------------------------
+# Env-overlay regression guards (spike-009 → spike-010 fix). Verifies that
+# the get_prompt_environment monkey-patch is wired with dual-bind AND reads
+# from the env-var-controlled path. Uses a tmpfile fixture so this works at
+# build time when /opt/agent/installed_packages.txt doesn't yet exist.
+# -----------------------------------------------------------------------------
+import os as _os  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+from mlevolve_sidecar import env_overlay  # noqa: E402
+import agents.prompts.environment as _env_mod  # noqa: E402
+
+# 1. Dual-bind invariant
+assert agents.prompts.get_prompt_environment is env_overlay._patched_get_prompt_environment, \
+    "DUAL-BIND broken: agents.prompts.get_prompt_environment is not the patched fn"
+assert _env_mod.get_prompt_environment is env_overlay._patched_get_prompt_environment, \
+    "DUAL-BIND broken: agents.prompts.environment.get_prompt_environment is not the patched fn"
+
+# 2. Round-trip with a tmpfile fixture — verify the file is actually read
+with _tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as _tf:
+    _tf.write("peft==0.19.1\ntrl==1.5.1\ntransformers==5.9.0\n")
+    _fixture_path = _tf.name
+_orig_env_path = _os.environ.get(env_overlay.PATH_ENV_VAR)
+_os.environ[env_overlay.PATH_ENV_VAR] = _fixture_path
+try:
+    result = agents.prompts.get_prompt_environment()
+    assert isinstance(result, dict) and "Installed Packages" in result, \
+        f"get_prompt_environment() shape changed: {result!r}"
+    body = result["Installed Packages"]
+    assert "peft==0.19.1" in body, f"pinned versions not in body: {body[:300]!r}"
+    assert "trl==1.5.1" in body, "trl version missing from body"
+    assert "all packages are already installed" not in body.lower(), \
+        "upstream lie still present — env_overlay didn't replace"
+finally:
+    _os.unlink(_fixture_path)
+    if _orig_env_path is None:
+        _os.environ.pop(env_overlay.PATH_ENV_VAR, None)
+    else:
+        _os.environ[env_overlay.PATH_ENV_VAR] = _orig_env_path
+
+# 3. Graceful fallback when the file is missing
+_os.environ[env_overlay.PATH_ENV_VAR] = "/this/path/does/not/exist"
+result_missing = agents.prompts.get_prompt_environment()
+assert "missing" in result_missing["Installed Packages"].lower(), \
+    "fallback message missing when file absent"
+_os.environ.pop(env_overlay.PATH_ENV_VAR, None)
+
+print("OK: run_mlevolve.py + MLEvolve + mleval analyzer + prompt_overlay + skill_retriever + env_overlay all import cleanly")

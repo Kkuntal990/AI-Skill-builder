@@ -10,7 +10,13 @@ LLM call or RNG-using code runs. Order matters:
     4. skill_retriever     — builds the BM25 skill index from
                               $MLEVAL_SKILL_PATH at import time (no-op
                               when unset). Consumed by prompt_overlay.
-    5. prompt_overlay      — replaces hardcoded persona / impl_guideline /
+    5. env_overlay         — replaces MLEvolve's hardcoded
+                              get_prompt_environment with the actual
+                              pinned pip-freeze of relevant libs. Reads
+                              $MLEVAL_INSTALLED_PACKAGES_PATH (default
+                              /opt/agent/installed_packages.txt) which
+                              the entrypoint writes before agent runs.
+    6. prompt_overlay      — replaces hardcoded persona / impl_guideline /
                               reviewer "submission.csv" fact from the
                               per-task YAML at $MLEVOLVE_PROMPT_OVERLAY,
                               and (when skill_retriever has an index)
@@ -28,4 +34,5 @@ from . import seed                # noqa: F401
 from . import openai_apikey_env   # noqa: F401
 from . import prompt_logger       # noqa: F401
 from . import skill_retriever     # noqa: F401
+from . import env_overlay         # noqa: F401
 from . import prompt_overlay      # noqa: F401
