@@ -10,8 +10,15 @@
 #                                      "optimize the validation metric only"
 #                                      (https://github.com/e-strauss/MLEvolve-generic)
 #   - use_grading_server: false      → mle-bench import never triggers
-#   - use_coldstart: false           → no domain classifier
-#   - agent.use_global_memory: false → no FAISS, no embedding model
+#   - use_coldstart: false           → no domain classifier (would compete
+#                                      with our skill_retriever as a second
+#                                      knowledge-injection mechanism)
+#   - agent.use_global_memory: true  → intra-trajectory experiential memory
+#                                      (improve + debug retrieval). Per-pod
+#                                      output dir guarantees no cross-cell
+#                                      leak — verified at agent_search.py:91
+#                                      + entrypoint.sh:90. Embedding model
+#                                      pre-warmed on PVC at HF cache.
 #   - parallel_search_num: 1         → no parallel branches (sequential)
 #   - num_drafts: 1                  → ONE draft per node (vs 5 upstream)
 #   - num_gpus: 1                    → matches our pod request
@@ -47,6 +54,21 @@ exec:
 agent:
   # Basic
   steps: ${STEP_LIMIT}
+  # === time_limit is a HINT only ===
+  # The field name (`time_limit`) stays because upstream MLEvolve reads it
+  # in 4 files (engine/agent_search.py:166, engine/evaluation.py:62,
+  # engine/node_selection.py:168, agents/prompts/impl_guideline.py:10).
+  # Renaming would require forking 5 source files for cosmetic value.
+  #
+  # Semantically treat this as `time_limit_hint`:
+  #   - influences branching + exploration weights inside MLEvolve
+  #   - shown in agent prompts ("Time left ≈ ...")
+  #   - DOES NOT gate the search loop (verified at run.py:137 — the
+  #     `while completed < total_steps` loop has no time clause)
+  #
+  # The actual wall cap is enforced by the entrypoint watchdog using
+  # TIME_LIMIT_SECONDS. Pass the same value here so MLEvolve's prompts
+  # report the correct budget to the agent.
   time_limit: ${TIME_LIMIT_SECONDS}
   initial_drafts: 1
   seed: 0
@@ -73,11 +95,16 @@ agent:
   branch_fusion_trigger_prob: 0.0
   max_fusion_drafts: 0
 
-  # Global memory — disabled (no FAISS, no embedding model)
-  use_global_memory: False
+  # Global memory — enabled for MLEvolve's intended intra-trajectory
+  # experiential feedback. Memory writes after every successful node
+  # (result_parse_agent.py:376-451), reads at improve (planner) and debug
+  # stages. Per-trajectory output dir prevents any cross-A/B leak.
+  # BAAI/bge-base-en-v1.5 is MLEvolve's upstream default (~440 MB, pre-warmed
+  # on PVC). CPU inference — sentence-transformers default.
+  use_global_memory: True
   memory_similarity_threshold: 0.7
   memory_embedding_device: cpu
-  memory_embedding_model_path: ""
+  memory_embedding_model_path: "BAAI/bge-base-en-v1.5"
 
   search:
     parallel_search_num: 1

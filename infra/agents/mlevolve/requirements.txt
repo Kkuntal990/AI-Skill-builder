@@ -72,10 +72,25 @@ pandas
 # PEFT task family — needed by SAMSum / GSM8K / BoolQ tasks (added 2026-05).
 # All pure-Python wheels (no nvcc, no compile-from-source); ~30 MB total.
 # accelerate + datasets come transitively via transformers (vllm base ships
-# transformers); peft + trl explicit because vllm doesn't depend on them
-# (vllm has its own LoRA inference path that doesn't use peft for training).
-# evaluate + rouge_score for summarization metrics.
-peft>=0.10
-trl>=0.9
+# transformers); peft + trl + bitsandbytes explicit because vllm doesn't
+# depend on them (vllm has its own LoRA inference path that doesn't use
+# peft for training). evaluate + rouge_score for summarization metrics.
+#
+# Versions PINNED to mid-2024 — matches MLE-Bench's environment (where
+# MLEvolve was published) and the training-data prior of current LLMs.
+# Loose pins (>=0.10) resolve to latest at build time and caused spike-009:
+# trl 1.5.1 removed DataCollatorForCompletionOnlyLM, agent imported it from
+# its prior, ImportError cascade. Pinning here closes that loop without
+# advertising version specifics in the agent prompt.
+peft==0.12.0
+trl==0.9.6
+bitsandbytes==0.43.3
 evaluate
 rouge_score
+
+# Global memory (use_global_memory: true) — MLEvolve's intra-trajectory
+# experiential feedback system uses sentence-transformers for query
+# embeddings against a FAISS index. Default model is BAAI/bge-base-en-v1.5
+# (pre-warmed on PVC). Pinned to MLE-Bench's version for consistency
+# (3.0.1, released Aug 2024 — well within LLM training prior).
+sentence-transformers==3.0.1

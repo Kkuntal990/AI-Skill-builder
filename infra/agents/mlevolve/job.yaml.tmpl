@@ -51,23 +51,25 @@ spec:
         - name: agent
           image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
           imagePullPolicy: Always
-          # Right-sized after spike-007 observation: actual pod-level peak
+          # Sized after spike-008/010 observation: actual pod-level peak
           # during real QLoRA training of Qwen2.5-3B on SAMSum is ~2 GiB
           # (training subprocess RSS ~2.1 GB + agent overhead ~0.6 GB).
           # GPU mem peaks at ~13.6 GiB (within A6000's 48 GiB easily).
-          # 8 GiB gives ~4x headroom over observed peak; was previously
-          # 64 GiB (32x over) — wasted Nautilus quota for the 18-trajectory
-          # A/B sweep. Bump only if a future trajectory actually OOMs
-          # (would see OOMKilled in pod status / Killed in journal).
+          # Bumped 8 GiB → 16 GiB to accommodate use_global_memory: true
+          # — sentence-transformers (BAAI/bge-base-en-v1.5) loads ~400 MB
+          # into RAM at startup, plus FAISS index growth across the search.
+          # 16 GiB gives ~7x headroom over observed CPU peak. Drop to 12 GiB
+          # if a future profile shows steady-state well below 8 GiB.
+          # Bump further only if a trajectory actually OOMs.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "8Gi"
+              memory: "16Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "8Gi"
+              memory: "16Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:

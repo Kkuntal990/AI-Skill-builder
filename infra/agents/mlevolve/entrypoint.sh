@@ -66,20 +66,12 @@ echo "[entrypoint] run_id=$RUN_ID trajectory_id=$TRAJECTORY_ID"
 echo "[entrypoint] task=$TASK cell=$CELL seed=$SEED steps=${STEP_LIMIT}"
 echo "[entrypoint] wall_cap=${TIME_LIMIT_SECONDS}s (graceful) | per-exec=${MLEVAL_EXEC_TIMEOUT_SEC}s | llm=${MLEVAL_LLM_MODEL} llm_timeout=${LLM_TIMEOUT_SEC}s base=${OPENAI_BASE_URL}"
 
+# Full pip freeze saved to OUT_DIR for post-mortem analysis (which versions
+# the trajectory actually ran against). Not surfaced to the agent — env_overlay
+# now uses a contract-aligned static hint list; spike-009 protection comes
+# from requirements.txt pinning to mid-2024 versions that match the LLM's
+# training-data prior. See mlevolve_sidecar/env_overlay.py.
 pip freeze > "$OUT_DIR/pip_freeze.txt" 2>/dev/null || true
-
-# Dump a filtered, agent-relevant pinned list to the path env_overlay reads.
-# This replaces MLEvolve's hardcoded "all packages are already installed!" lie
-# in agents/prompts/environment.py with the actual versions. Spike-009 burned
-# 64 min on ImportError cascades because the agent assumed newer trl/peft APIs
-# existed. See mlevolve_sidecar/env_overlay.py for the patch surface.
-mkdir -p /opt/agent
-pip freeze 2>/dev/null \
-    | grep -iE "^(peft|trl|bitsandbytes|transformers|accelerate|evaluate|rouge[-_]score|datasets|torch|numpy|pandas|scikit-learn|scipy|sentencepiece|protobuf|tokenizers|safetensors|huggingface[-_]hub)==" \
-    > /opt/agent/installed_packages.txt \
-    || true
-export MLEVAL_INSTALLED_PACKAGES_PATH="/opt/agent/installed_packages.txt"
-echo "[entrypoint] installed pkgs (pinned): $(wc -l < /opt/agent/installed_packages.txt) libs -> $MLEVAL_INSTALLED_PACKAGES_PATH"
 
 # -------- Build MLEvolve's expected dataset layout ----------------------
 # MLEvolve assumes <dataset_dir>/<exp_id>/prepared/public/{input,description.md}.
