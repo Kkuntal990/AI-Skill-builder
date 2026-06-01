@@ -5,34 +5,37 @@ LLM call or RNG-using code runs. Order matters:
 
     1. seed                — pins random/numpy/torch from $SEED
     2. openai_apikey_env   — backfill api_key from $OPENAI_API_KEY
-    3. prompt_logger       — captures (system, user, output, tokens) per
-                              LLM call into $MLEVAL_PROMPTS_LOG
-    4. skill_retriever     — builds the BM25 skill index from
-                              $MLEVAL_SKILL_PATH at import time (no-op
-                              when unset). Consumed by prompt_overlay.
-    5. env_overlay         — replaces MLEvolve's hardcoded
-                              get_prompt_environment with the actual
-                              pinned pip-freeze of relevant libs. Reads
-                              $MLEVAL_INSTALLED_PACKAGES_PATH (default
-                              /opt/agent/installed_packages.txt) which
-                              the entrypoint writes before agent runs.
-    6. prompt_overlay      — replaces hardcoded persona / impl_guideline /
-                              reviewer "submission.csv" fact from the
-                              per-task YAML at $MLEVOLVE_PROMPT_OVERLAY,
-                              and (when skill_retriever has an index)
-                              appends the L1 catalog + injects retrieved
-                              chunks per turn.
+    3. prompt_logger       — captures (system, user, prompt, output, tokens)
+                              per LLM call into $MLEVAL_PROMPTS_LOG
+                              (NB: captures both ``query`` kwargs AND
+                              ``generate`` positional prompt — see prompt_logger.py)
+    4. skill_retriever     — loads skills from $MLEVAL_SKILL_PATHS (or
+                              $MLEVAL_SKILL_PATH singular for back-compat),
+                              patches ``get_prompt_environment`` to splice
+                              an "Available Skills" catalog and "Skill
+                              Reference" body into ``prompt["Instructions"]``.
+                              Reaches stepwise prompts via the dict-copy in
+                              ``stepwise_coder``.
 
-Each submodule applies its patch on import; the order matters because
-prompt_logger wraps the LLM call site whose import would otherwise have
-already cached the unpatched reference. prompt_overlay must run before
-``agents.*`` modules import their dependencies (run_mlevolve.py already
-imports this package first).
+Each submodule applies its patch on import. The order ensures
+prompt_logger wraps the LLM call site BEFORE MLEvolve's agent modules
+cache references to it, and skill_retriever patches
+get_prompt_environment BEFORE draft_agent.py imports it at module load.
+``run_mlevolve.py`` imports this package first so all patches install
+before any agent module loads.
+
+History note (spike-011): we previously also shipped:
+  - ``prompt_overlay`` — overrode persona / impl_guideline / code-review
+    via per-task YAML. Bypassed by MLEvolve's hardcoded stepwise generation
+    path (which doesn't route through ``build_chat_prompt_for_model``).
+  - ``env_overlay`` — replaced the upstream 15-package env hint. Decided
+    MLE-Bench parity (keep upstream's stock list) is the cleaner baseline.
+
+Both removed in favor of trusting the published MLEvolve config and
+limiting our patches to the minimum needed for the A/B treatment.
 """
 
 from . import seed                # noqa: F401
 from . import openai_apikey_env   # noqa: F401
 from . import prompt_logger       # noqa: F401
 from . import skill_retriever     # noqa: F401
-from . import env_overlay         # noqa: F401
-from . import prompt_overlay      # noqa: F401

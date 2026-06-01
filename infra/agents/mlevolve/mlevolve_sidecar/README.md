@@ -10,69 +10,64 @@ before any agent module captures the unpatched reference.
 |---|---|---|
 | `seed.py` | `random` / `numpy.random` / `torch.manual_seed` | Pin RNG from `$SEED` for paired-seed A/B |
 | `openai_apikey_env.py` | `openai.OpenAI(api_key=...)` | Backfill from `$OPENAI_API_KEY` when config has `api_key: ""` |
-| `prompt_logger.py` | `llm.openai.{query, generate}` | Capture per-call `{system, user, output, tokens, t_sec}` to `$MLEVAL_PROMPTS_LOG` |
-| `prompt_overlay.py` | 3 prompt surfaces (see below) | Per-task declarative overrides for tasks that don't fit MLEvolve's hardcoded Kaggle-shape contract |
-| `skill_inject.py` | description.md content | Splice a skill cookbook into the task brief for `with_skill` cells |
+| `prompt_logger.py` | `llm.openai.{query, generate}` | Capture per-call `{system, user, prompt, output, tokens, t_sec}` to `$MLEVAL_PROMPTS_LOG`. Captures BOTH the kwargs (`query`) and positional/kwarg `prompt` (used by `generate` — stepwise/diff/planner) — see spike-011 root-cause notes in source. |
+| `skill_retriever.py` | `agents.prompts.environment.get_prompt_environment` | Loads skill(s) from `$MLEVAL_SKILL_PATHS` (colon-separated; falls back to `$MLEVAL_SKILL_PATH` singular). Splices a two-tier (catalog + full body) skill block into `prompt["Instructions"]`. The dict slot is reached by both stepwise's StepAgent + MetaAgent (via `prompt_base["Instructions"]` copy) and the non-stepwise draft path. |
 
-## prompt_overlay
+## Design philosophy
 
-The three monkey-patches, with their dual-bind invariant:
+We deliberately limit our patches to the minimum needed for the A/B
+treatment. Earlier iterations also shipped `prompt_overlay.py` (per-task
+persona / impl_guideline / review override) and `env_overlay.py` (custom
+package hint list). Both were removed in favor of trusting MLEvolve's
+published configuration:
 
-| Patched surface | Where defined | Where re-exported | Why dual-bind |
-|---|---|---|---|
-| `build_chat_prompt_for_model` | `agents/planner/base_planner.py:104` | `agents/planner/__init__.py:14` | 7 agent files import via the package re-export. Patching only the defining submodule leaves the re-export pointing at the original. |
-| `get_impl_guideline_from_agent` | `agents/prompts/impl_guideline.py:8` | `agents/prompts/__init__.py:10` | 6 agent files import via the re-export. |
-| `get_code_review_guidelines` | `agents/prompts/validation_template_prompts.py:33` | (same module call site at line 29) | Single in-module call. Dual-bind not needed because the call resolves via the module's globals at call time. |
+- The "Kaggle Grandmaster" persona is generic ML expertise framing —
+  it does not push toward submission.csv on its own; that is gated by
+  the `no_submission_mode: True` flag in `config.yaml`.
+- The upstream 15-package env hint (xgboost, lightGBM, timm, etc.) is
+  irrelevant noise for our text tasks but harmless and symmetric across
+  cells.
 
-The build-time smoke (`_smoke_imports.py`) asserts the patch identity
-holds after import — this is the regression guard for upstream refactors.
+If a future task genuinely needs persona override or env list rewrite,
+re-introduce a narrowly scoped patch then — but the default position is
+to follow MLEvolve as published.
 
-### Activation
+## Skill injection — slot layout
 
-Set `MLEVOLVE_PROMPT_OVERLAY=/path/to/overlay.yaml`. If the env var is
-unset or the file is missing/malformed, the overlay falls through to
-upstream MLEvolve prompts (silent — with a warning log).
+When `MLEVAL_SKILL_PATHS` (or `MLEVAL_SKILL_PATH` singular) is set, the
+patched `get_prompt_environment` returns:
 
-### Schema
-
-See `overlays/peft_rouge.yaml` for the canonical example. Four optional
-keys:
-
-```yaml
-persona:
-  identity: str               # FULL replacement of upstream intro
-instructions:
-  what_to_produce: list[str]  # Becomes the "Implementation guideline" block
-  self_check: list[str]       # Becomes the "Self-Check" checklist
-review_facts:
-  output_location: str        # Splices over the hardcoded "submission.csv" line
+```python
+{
+    "Installed Packages": "...",   # upstream-untouched
+    "Available Skills":   "- **peft-tuning**: <description from frontmatter>\n- ...",
+    "Skill Reference":    "### Skill: peft-tuning\n\n<full SKILL.md body>\n\n#### references/...\n\n...",
+}
 ```
 
-Missing keys → upstream behavior for that surface. Wrong types → drop with
-warning, fall back to upstream.
+Both keys appear only when at least one skill loads. Multiple skills
+(Anthropic up-to-8 pattern) are supported by passing a colon-separated
+list; their bodies are concatenated under the same key.
 
-### How a task uses it
+## How a task uses it
 
-1. Create `infra/tasks/<task>/prompt_overlay.yaml`
-2. The entrypoint detects it next to `instruction.md` and exports
-   `MLEVOLVE_PROMPT_OVERLAY` automatically.
-3. Tasks WITHOUT an overlay get MLEvolve defaults (no behavior change for
-   Kaggle-shape tasks like `lmsys-chatbot-arena`).
+1. Stage the skill on the PVC (e.g. `/results/data/peft-tuning/`).
+2. The orchestrator's `--skill-path` (singular) populates
+   `MLEVAL_SKILL_PATH`. For multi-skill A/B, set
+   `MLEVAL_SKILL_PATHS=/path/one:/path/two` via env or template.
+3. Tasks WITHOUT a skill path get no `Available Skills` / `Skill Reference`
+   blocks — the upstream env dict passes through unchanged.
 
-### Known residuals (acceptable for MVP)
+## Known upstream behaviors we accept (not patched)
 
 - `agents/result_parse_agent.py:153` hardcodes "Kaggle grandmaster" for
-  the result parser. Pollutes `prompts.jsonl` but does not affect generated
-  code. Patch in a future iteration if it shows up in agent behavior.
-- `agents/coder/stepwise_coder.py:312` has its own inline persona used
-  in stepwise mode. Our config already disables stepwise; if we ever
-  enable it, this becomes the 4th surface.
+  the result parser. Pollutes `prompts.jsonl` cosmetically; does not
+  affect generated code.
+- `agents/coder/stepwise_coder.py:312` has its own inline persona for the
+  stepwise MetaAgent merge. Fires under `use_stepwise_generation=True`
+  (hardcoded in upstream `engine/agent_search.py:57`).
+- `agents/improve_agent.py:276` `_IMPROVE_DIFF_INTRODUCTION` is also Kaggle-
+  shaped. Fires in `use_diff_mode=True` (our config).
 
-### Out of scope for MVP
-
-- `omit_fragments` — skip hardcoded blocks (ROBUSTNESS, LEAKAGE_PREVENTION, etc.)
-- `stepwise_mode: false` toggle
-- `allowed_packages_extra`
-- per-step persona overrides
-
-Add when a task needs them; the YAML schema is loose (extra keys ignored).
+These are cosmetic — they don't change library choice or contract. If
+they ever start materially affecting agent behavior, add a narrow patch.

@@ -67,10 +67,11 @@ echo "[entrypoint] task=$TASK cell=$CELL seed=$SEED steps=${STEP_LIMIT}"
 echo "[entrypoint] wall_cap=${TIME_LIMIT_SECONDS}s (graceful) | per-exec=${MLEVAL_EXEC_TIMEOUT_SEC}s | llm=${MLEVAL_LLM_MODEL} llm_timeout=${LLM_TIMEOUT_SEC}s base=${OPENAI_BASE_URL}"
 
 # Full pip freeze saved to OUT_DIR for post-mortem analysis (which versions
-# the trajectory actually ran against). Not surfaced to the agent — env_overlay
-# now uses a contract-aligned static hint list; spike-009 protection comes
-# from requirements.txt pinning to mid-2024 versions that match the LLM's
-# training-data prior. See mlevolve_sidecar/env_overlay.py.
+# the trajectory actually ran against). Not surfaced to the agent — we
+# rely on upstream MLEvolve's stock 15-package env hint
+# (agents/prompts/environment.py) for prompt-level package guidance.
+# Spike-009 ImportError protection comes from requirements.txt pinning to
+# mid-2024 versions that match the LLM's training-data prior.
 pip freeze > "$OUT_DIR/pip_freeze.txt" 2>/dev/null || true
 
 # -------- Build MLEvolve's expected dataset layout ----------------------
@@ -89,30 +90,19 @@ for entry in "$DATA_DIR"/*; do
 done
 cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
 
-# Optional per-task prompt overlay — if a `prompt_overlay.yaml` lives
-# next to the instruction file, copy it into OUT_DIR and export
-# MLEVOLVE_PROMPT_OVERLAY so the sidecar's prompt_overlay module reads
-# it at import time. See mlevolve_sidecar/README.md for the schema.
-TASK_DIR_HOST="$(dirname "$INSTRUCTION_PATH")"
-OVERLAY_SRC="$TASK_DIR_HOST/prompt_overlay.yaml"
-if [ -f "$OVERLAY_SRC" ]; then
-    OVERLAY_DEST="$OUT_DIR/_prompt_overlay.yaml"
-    cp -f "$OVERLAY_SRC" "$OVERLAY_DEST"
-    export MLEVOLVE_PROMPT_OVERLAY="$OVERLAY_DEST"
-    echo "[entrypoint] prompt overlay: $OVERLAY_DEST"
-fi
-
-# Optional skill: just export MLEVAL_SKILL_PATH for the sidecar's
-# skill_retriever (Path A, docs/eval/skill-retrieval-design.md). The retriever
-# reads it at import time, builds a BM25 index over SKILL.md + references/*.md,
-# and prompt_overlay's wrapper injects an L1 catalog into the persona +
-# top-k=3 chunks per draft/improve/debug turn — only when retrieval score
-# crosses a threshold. No file-level splice into description.md (the old
-# approach put 80 KB of fenced markdown into system_message and made the LLM
-# mimic the format → spike-004 SyntaxError cascade).
-if [ -n "${MLEVAL_SKILL_PATH:-}" ] && [ -e "$MLEVAL_SKILL_PATH" ]; then
+# Optional skill(s): forward MLEVAL_SKILL_PATHS (preferred, colon-separated)
+# or MLEVAL_SKILL_PATH (singular, back-compat) to the sidecar's
+# skill_retriever. The retriever loads SKILL.md + references/*.md for each
+# resolved skill at import time and patches get_prompt_environment to splice
+# an L1 catalog + L2 full body into prompt["Instructions"]. This injection
+# slot is reached by both the regular draft path and the stepwise StepAgent
+# / MetaAgent (which copy prompt_base["Instructions"]).
+if [ -n "${MLEVAL_SKILL_PATHS:-}" ]; then
+    export MLEVAL_SKILL_PATHS
+    echo "[entrypoint] skill paths: $MLEVAL_SKILL_PATHS"
+elif [ -n "${MLEVAL_SKILL_PATH:-}" ] && [ -e "$MLEVAL_SKILL_PATH" ]; then
     export MLEVAL_SKILL_PATH
-    echo "[entrypoint] skill: $MLEVAL_SKILL_PATH (consumed by sidecar skill_retriever)"
+    echo "[entrypoint] skill: $MLEVAL_SKILL_PATH (singular, back-compat)"
 fi
 
 # -------- Render config + overwrite MLEvolve's default ------------------

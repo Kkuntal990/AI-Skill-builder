@@ -42,14 +42,34 @@ def _serialize_output(output) -> str:
         return str(output)
 
 
+def _capture_prompt(args: tuple, kwargs: dict):
+    """Return whatever payload the provider actually saw.
+
+    MLEvolve has two call styles:
+      - ``query(system_message=..., user_message=..., func_spec=..., ...)``
+        — used by code review, result parse, leakage check. kwargs-only.
+      - ``generate(prompt, cfg, temperature=..., ...)`` — used by stepwise
+        StepAgent + MetaAgent, diff improve, planner (the codegen hot path).
+        ``prompt`` is positional or kwarg, contains the full LLM input.
+
+    spike-011 root cause: the original wrapper only captured kwargs
+    ``system_message`` / ``user_message``, so ALL ``generate()`` calls
+    logged ``None`` for both fields → impossible to verify which patches
+    were actually firing. We now capture all three independently.
+    """
+    system_message = kwargs.get("system_message")
+    user_message = kwargs.get("user_message")
+    # Prompt: kwarg first, then positional[0] as fallback (generate() uses
+    # both styles depending on call site).
+    prompt = kwargs.get("prompt")
+    if prompt is None and args:
+        prompt = args[0]
+    return system_message, user_message, prompt
+
+
 def _wrap(provider_name: str, original):
     def _logged(*args, **kwargs):
-        # MLEvolve's signatures pass system_message and user_message as
-        # kwargs almost everywhere; the dispatcher rebuilds model_kwargs
-        # before calling the provider. We capture from kwargs since args
-        # are mostly tuples of unrelated config.
-        system_message = kwargs.get("system_message")
-        user_message = kwargs.get("user_message")
+        system_message, user_message, prompt = _capture_prompt(args, kwargs)
         func_spec = kwargs.get("func_spec")
         model = kwargs.get("model")
 
@@ -64,6 +84,7 @@ def _wrap(provider_name: str, original):
                 "model": model,
                 "system_message": system_message,
                 "user_message": user_message,
+                "prompt": _serialize_output(prompt) if prompt is not None else None,
                 "output": f"<EXCEPTION: {type(exc).__name__}: {exc}>",
                 "in_tokens": None,
                 "out_tokens": None,
@@ -89,6 +110,7 @@ def _wrap(provider_name: str, original):
             "model": model,
             "system_message": system_message,
             "user_message": user_message,
+            "prompt": _serialize_output(prompt) if prompt is not None else None,
             "output": _serialize_output(output),
             "in_tokens": in_tok,
             "out_tokens": out_tok,

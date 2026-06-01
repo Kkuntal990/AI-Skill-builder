@@ -153,10 +153,15 @@ agent:
     alpha: 0.01
     phase_ratios: [0.3, 0.7]
 
-# Coldstart — disabled (we don't want the domain classifier loading; our
-# task isn't in their JSON taxonomy anyway).
+# Coldstart — enabled to match MLEvolve's published config. The domain
+# classifier reads `cfg.exp_id` against the Kaggle competition tag JSON
+# (engine/coldstart/competition_tag_classified.json) and returns empty
+# for unknown tasks (verified: knowledge.py:18-22 graceful no-op). Our
+# SAMSum / GSM8K / BoolQ exp_ids are not in the taxonomy so coldstart
+# adds nothing to the prompt — but enabling matches MLE-Bench-style
+# baseline and avoids us silently diverging from the published config.
 coldstart:
-  use_coldstart: False
+  use_coldstart: True
   task_json_path: "engine/coldstart/competition_tag_classified.json"
   model_json_path: "engine/coldstart/models_guidance_classified.json"
   description: ""
