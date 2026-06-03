@@ -35,7 +35,9 @@ src/mleval/                       harness Python package (pip-installable)
 ├── _cli/                         `mleval` CLI (stub)
 └── analyzer/                     post-trajectory analyzer chain
     ├── adapter_aide.py             AIDE journal.json + prompts.jsonl -> trajectory.jsonl
-    ├── stage_classifier.py         AST -> 6x16 sub-stage labels (MVP; PyCG upgrade is task #62)
+    ├── adapter_mlevolve.py         MLEvolve journal.json + prompts.jsonl -> trajectory.jsonl (current agent)
+    ├── stage_classifier.py         AST -> 6x16 sub-stage labels; multi-label (all_sub_stages) + parse_error (MVP; PyCG upgrade #62)
+    ├── stage_metrics.py            3 per-sub-stage metrics: clean-reach · rework · failure-modes (co-location-proof)
     ├── state_predicates.py         generic + per-task assertions over outputs
     ├── pricing.py                  OpenRouter $/1M-token table (per-model in/out)
     ├── metrics.py                  per-trajectory derivations + cost-norm Lift + stage chi-sq

@@ -20,11 +20,25 @@ Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `
 | C3 | `use_grading_server: false` actually short-circuits the mle-bench coupling | `pip freeze \| grep mlebench` empty; `format_server.py` never imports |
 | C4 | `journal.json` → `trajectory.jsonl` adapter stays small | ≤ 200 LoC; produces a record compatible with existing `state_predicates.py` |
 
-**Scope**: 1 task (`llama-inference`), 1 seed, 1 cell (`without_skill`), 1 trajectory, helper-pod-only (no Job until spike verdict).
+**Scope (evolved)**: C1–C4 all passed on a real paired A/B. The current pilot task is `samsum` (dialogue summarization SFT), not `llama-inference` (that task is a script-optimization shape that doesn't fit MLEvolve's train/test+metric contract — see memory `project_mlevolve_contract`). Backbone `Qwen/Qwen2.5-3B-Instruct`; treatment is the unmodified `peft-tuning` skill. `samsum` seed-0 paired (spike-012) + seed-1 running.
 
-**Image**: `ghcr.io/kkuntal990/mleval-agent-mlevolve:dev`. Base `vllm/vllm-openai:v0.9.2`. MLEvolve vendored as submodule pinned to `InternScience/MLEvolve@26bde89`. `mlebench` deliberately NOT installed (Dockerfile asserts absence at build time as a regression guard).
+**Image**: `ghcr.io/kkuntal990/mleval-agent:dev`. Base `vllm/vllm-openai:v0.9.2`. MLEvolve vendored as submodule pinned to `e-strauss/MLEvolve-generic@26bde89`. `mlebench` deliberately NOT installed (Dockerfile asserts absence at build time as a regression guard). Built on amusing via the **build-mleval-image** skill; trajectory pods read task/skill data from the PVC, refreshed via the **refresh-mleval-pvc** skill.
 
-**Verdict pending**. See `infra/agents/mlevolve/README.md` for the launch recipe.
+**Verdict: validated** — MLEvolve is the current agent. See `infra/agents/mlevolve/README.md` for the launch recipe.
+
+### Per-sub-stage metrics (current — what we actually report at L2)
+
+The L2 "where did the skill help" question is answered by **three co-location-proof per-sub-stage metrics** in `src/mleval/analyzer/stage_metrics.py`, derived from existing `trajectory.jsonl` telemetry (no new instrumentation):
+
+| Metric | Definition (per sub-stage `s`) | Answers |
+|---|---|---|
+| **clean-reach** | clean nodes touching `s` ÷ all nodes touching `s` | did the agent get this stage right |
+| **rework** | re-attempts beyond the first (`touches − 1`) | where it thrashed |
+| **failure-modes** | `exc_type` distribution over buggy nodes touching `s` | which errors live where |
+
+These sit on the **multi-label** classifier: `stage_classifier.py` now emits `all_sub_stages` (every stage a node's code touches) + `parse_status` (`parse_error` flags diff-patch-corrupted code that carries no classifiable stage). The adapter is `adapter_mlevolve.py` (MLEvolve `journal.json` → universal `trajectory.jsonl`). The paired L1+L2 report is `scripts/l1_l2_compare.py` (emits the 3 tables + a `stage_metrics` JSON block).
+
+Why these three and not per-stage time/tokens: a node's script spans many sub-stages, so its `exec_time_sec`/tokens/`metric` cannot be attributed to one stage (co-location). Reachability/rework/failure-modes attribute cleanly because they need only the label-set + pass/fail status. True per-stage wall-clock (out-of-process `py-spy` sampling → AST line-range binning) and per-stage artifact predicates are designed but deferred — see the cross-domain research synthesis (tracing / process-mining / agentic-milestone literature) for the rationale. **Known gap**: `parse_error` nodes carry no labels, so per-stage rework goes blind when a cell thrashes via corrupted code — the report surfaces a trajectory-level `parse_error` count alongside.
 
 **Known measurement caveats for the spike output**:
 - `prompts.jsonl` tokens are recorded only for `llm.openai.query()` calls

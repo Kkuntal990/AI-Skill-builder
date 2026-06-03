@@ -23,7 +23,7 @@ When in doubt: shrink CPU/RAM to the exempt tier (1 CPU / 2 GiB) and drop the GP
 | Profile | Use when | Resources |
 |---|---|---|
 | `cpu` (default for pilots) | Task does NOT use CUDA (tabular, small NLP, smoke runs) | 1 CPU / 2 GiB, no GPU, opportunistic priority, anti-affinity to GPU nodes |
-| `gpu` (default for `make ab-*`) | Task fine-tunes / runs CUDA models | 1× rtxa6000 + 4 CPU / 16 GiB |
+| `gpu` (default for `make ab-*`) | Task fine-tunes / runs CUDA models | 1× rtxa6000 + 2 CPU / 8 GiB (right-sized from 16 GiB — observed CPU-RAM peak ~2.7 GB even with global memory on) |
 
 Override per-invocation: `make ab-plan PROFILE=cpu TASK=house-prices ...`.
 
@@ -48,12 +48,19 @@ kubectl -n "$K8S_NAMESPACE" get pvc mleval-results -o wide   # expect: Bound
 make k8s-secret              # OpenRouter + HF tokens from .env
 make k8s-ghcr-pull-secret    # GitHub PAT (read:packages, classic) for private image pull
 
-# 5. Build + push image (on amusing; see CLAUDE.md "Container image" section)
+# 5. Build + push image (on amusing). Use the build-mleval-image skill, or:
 ssh ad-kkokate@amusing.ucsd.edu
-cd ~/AI-Skill-builder && git pull
-make docker-agent && make docker-push
+cd ~/AI-Skill-builder && git checkout mlevolve-smoke && git pull && \
+  git submodule update --init --recursive infra/agents/mlevolve/upstream && \
+  set -a && source .env && set +a && \
+  make docker-mlevolve && make docker-mlevolve-push   # Dockerfile runs _smoke_imports.py
 exit
 ```
+
+**Reusable skills** (in `agents/ai-skill-builder/skills/`):
+- **build-mleval-image** — rebuild+push on amusing after an in-image change (sidecar, Dockerfile, requirements, entrypoint, `src/mleval/analyzer/*`).
+- **refresh-mleval-pvc** — sync task/skill data + warm HF cache onto the PVC after editing `infra/tasks/*` or `infra/skills/*` (runtime-mounted, NOT in the image).
+- **monitor-mleval-job** — adaptive-cadence background watch of a live A/B sweep; quiet unless an anomaly (crash, off-task agent, stall).
 
 ## Per-sweep setup
 

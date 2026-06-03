@@ -13,23 +13,23 @@ How we evaluate skills produced by `ai-skill-builder` and whether they make an M
 
 ## Stage 2 quick reference
 
-**MLE agent**: [MLEvolve](https://github.com/InternScience/MLEvolve) (fixed — #1 on MLE-Bench, 61.33% Any-Medal in 12 hr)
+**MLE agent**: [MLEvolve-generic](https://github.com/e-strauss/MLEvolve-generic) (fork of AutoMLGen's MCGS search, pinned `@26bde89`), LLM `deepseek/deepseek-v4-pro` via OpenRouter. The earlier AIDE track (v0.3) is parked on `main`; MLEvolve is the current agent (subprocess-per-node avoids AIDE's fork-after-CUDA OOM).
 
-**Task pool** (1 per benchmark, each with benchmark-anchored time budget):
+**Task pool** (contract-only PEFT fine-tuning tasks; same backbone `Qwen/Qwen2.5-3B-Instruct`, same unmodified `peft-tuning` skill as the treatment):
 
-| Task | Benchmark | Time budget | Why PEFT-relevant |
+| Task | Domain | Metric | Status |
 |---|---|---|---|
-| `jigsaw-toxic-comment-classification` | MLE-Dojo | **12 h** (MLEvolve SOTA config) | NLP fine-tuning is canonical PEFT use case |
-| `LLM-Merging` | MLRC-Bench | **5 h** (MLRC-Bench `MAX_HOURS=5`) | Adapter merging is *the* PEFT workflow |
-| `debug-trl-grpo` | SkillsBench | **1 h** CPU-only (SkillsBench hard cap) | TRL+GRPO post-training; LoRA-on-GRPO common |
+| `samsum` | dialogue summarization (SFT) | ROUGE-L F1 | ✅ seed 0 paired (spike-012); seed 1 running |
+| `gsm8k` | math reasoning (SFT) | exact-match accuracy | planned (instruction.md TBD) |
+| `boolq` | yes/no QA (SFT) | accuracy (on `validation` — test labels hidden) | planned (instruction.md TBD) |
 
-**Metrics** (3 layers):
+**Metrics**:
 
 | Layer | What it measures | How |
 |---|---|---|
-| **L1 outcome** | Did the skill solve the task better? | Native task metric + HumanRank% + paired Lift |
-| **L2 per-stage attribution** | *Where* in the 6-stage × 16-sub-stage pipeline did the skill help? | PyCG-Extended call-graph (0 tokens) + AST choice extractors (0 tokens) + state predicates (0 tokens) + evidence-grounded LLM judge (**default OFF**, +~3M tokens if enabled) |
-| **L3 trajectory cost** | Did the skill make agent slower / more expensive? | Wall-clock, tokens, error count, skill-citation rate |
+| **L1 outcome** | Did the skill solve the task better? | Native task metric (self-reported `Final Validation Score`) + paired Lift |
+| **L2 per-sub-stage** | *Where* in the 6×16 pipeline did the skill help? | 3 co-location-proof metrics from `stage_metrics.py` — **clean-reach** (did the stage run right), **rework** (re-attempts), **failure-modes** (`exc_type` per stage) — over the multi-label AST classifier. py-spy per-stage timing + state-predicate artifact checks deferred. |
+| **L3 trajectory cost** | Did the skill make the agent slower / more expensive? | Wall-clock, tokens, cost (`pricing.py`), error count |
 
 **Pipeline stages** (6 top-level, 16 sub-stages — see [stage2.md](./stage2.md) for full taxonomy):
 
@@ -67,8 +67,8 @@ Dollar cost computable on demand from current model pricing × measured tokens. 
 
 ## Current status
 
-- **Stage 1**: locked, in production. Test agent `main`, MCP sidecar capture active.
-- **Stage 2 (v0.2)**: architecture and methodology locked. Implementation tasks #61–#71 pending. Pilot is the next milestone.
+- **Stage 1**: locked, in production. Default test agent `main` for clean lift measurement; `skill-tester` for end-to-end MCP outcome plumbing. Four MCP signals captured: native tool calls, bash sidecar log, narration regex, outcome narration (Phase 1.5+ — recovers false negatives from OpenClaw's null-`toolSummary` bug on multi-step responses). Reply text preserved per trial for offline re-grading. See [stage1.md](./stage1.md).
+- **Stage 2 (v0.4, MLEvolve)**: harness validated end-to-end. `samsum` seed-0 paired A/B complete (spike-012) — with-skill reached ROUGE-L 0.4331 and kept the PEFT core valid; without-skill never scored and corrupted its code into parse-error nodes. Per-sub-stage metrics (`stage_metrics.py`) + L1+L2 report (`scripts/l1_l2_compare.py`) shipped. Seed 1 running; `gsm8k` + `boolq` instruction.md authoring next. Running results tracked in [peft-skill-eval-report.md](./peft-skill-eval-report.md).
 
 ## Schedule
 

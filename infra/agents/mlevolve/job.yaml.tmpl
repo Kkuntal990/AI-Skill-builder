@@ -55,21 +55,21 @@ spec:
           # during real QLoRA training of Qwen2.5-3B on SAMSum is ~2 GiB
           # (training subprocess RSS ~2.1 GB + agent overhead ~0.6 GB).
           # GPU mem peaks at ~13.6 GiB (within A6000's 48 GiB easily).
-          # Bumped 8 GiB → 16 GiB to accommodate use_global_memory: true
-          # — sentence-transformers (BAAI/bge-base-en-v1.5) loads ~400 MB
-          # into RAM at startup, plus FAISS index growth across the search.
-          # 16 GiB gives ~7x headroom over observed CPU peak. Drop to 12 GiB
-          # if a future profile shows steady-state well below 8 GiB.
-          # Bump further only if a trajectory actually OOMs.
+          # Right-sized to 8 GiB: observed CPU-RAM peak is ~2.7 GB (training
+          # subprocess RSS ~2.1 GB + agent overhead ~0.6 GB) even with
+          # use_global_memory: true (sentence-transformers BAAI/bge-base-en-v1.5
+          # ~400 MB + FAISS index). The 16 GiB bump (spike-012) was never
+          # approached — 8 GiB still gives ~3x headroom. Bump only if a
+          # trajectory actually OOMs.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "16Gi"
+              memory: "8Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "16Gi"
+              memory: "8Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
