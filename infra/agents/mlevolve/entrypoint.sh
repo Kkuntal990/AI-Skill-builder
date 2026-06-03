@@ -183,8 +183,28 @@ _term() {
 }
 trap _term TERM INT
 
-wait "$AGENT_PID"
-INNER_EXIT=$?
+# wait returns on signal interrupt (bash sets exit > 128 + signum) — restart
+# until the agent actually dies (or watchdog SIGKILLs it). Spike-012 lesson:
+# without this loop, the FIRST SIGTERM caused wait to return with $? = 143
+# while the agent was still mid-PyTorch-op; the analyzer chain then ran
+# while the agent was alive, race-conditioned, and never produced
+# trajectory.jsonl / manifest.json.
+while true; do
+    wait "$AGENT_PID" 2>/dev/null
+    INNER_EXIT=$?
+    # bash wait returns >128 on signal interrupt; if the agent is still alive
+    # (kill -0 succeeds), retry wait. If it's dead, fall through.
+    if ! kill -0 "$AGENT_PID" 2>/dev/null; then
+        break
+    fi
+    echo "[entrypoint] wait interrupted by signal (exit=$INNER_EXIT) but agent PID=$AGENT_PID still alive — retrying"
+done
+
+# Disable signal forwarding during cleanup so additional SIGTERMs from K8s
+# (or stray watchdog signals) cannot interrupt the analyzer chain. We have
+# K8s terminationGracePeriodSeconds=90 to finish manifest + trajectory.jsonl.
+trap '' TERM INT
+
 kill "$SAMPLER_PID" 2>/dev/null || true
 kill "$WATCHDOG_PID" 2>/dev/null || true
 

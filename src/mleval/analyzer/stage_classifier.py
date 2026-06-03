@@ -111,14 +111,23 @@ _RULES: list[Rule] = [
 ]
 
 
-def _extract(code: str) -> tuple[set[str], set[str]]:
-    """Return (top-level imports, callable names) found in the code."""
+def _extract(code: str) -> tuple[set[str], set[str], bool]:
+    """Return (imports, calls, parse_ok).
+
+    ``parse_ok=False`` distinguishes ``SyntaxError`` (e.g. diff-patch merge
+    conflict markers in the source) from "valid code, no rule matched"
+    (which the classify() caller maps to ``unknown``). spike-012's
+    without_skill cell showed 4 nodes with diff-patch-corrupted code —
+    flagging those as ``parse_error`` instead of ``unknown`` is the
+    difference between "agent picked nothing classifiable" and "agent
+    output unparsable garbage".
+    """
     imports: set[str] = set()
     calls: set[str] = set()
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return imports, calls
+        return imports, calls, False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -135,7 +144,7 @@ def _extract(code: str) -> tuple[set[str], set[str]]:
                 calls.add(func.id)
             elif isinstance(func, ast.Attribute):
                 calls.add(func.attr)
-    return imports, calls
+    return imports, calls, True
 
 
 def _import_matches(rule: Rule, imports: set[str]) -> bool:
@@ -145,33 +154,82 @@ def _import_matches(rule: Rule, imports: set[str]) -> bool:
 
 
 def classify(code: str) -> dict:
-    """Return ``{top_level, sub_stage, label, classifier_source, classifier_confidence, imports_top}``."""
-    imports, calls = _extract(code)
-    best: Rule | None = None
+    """Multi-label classification: walk ALL rules and report every match.
+
+    Output schema:
+      top_level / sub_stage / label / classifier_confidence  — the HIGHEST-priority
+        match (back-compat; consumers that want one canonical label use these).
+      all_matches: list of {top_level, sub_stage, label, confidence}, priority-ordered.
+      all_top_levels / all_sub_stages: convenience flat lists for aggregation
+        (each unique top_level / sub_stage that fired, in priority order).
+      parse_status: "ok" | "parse_error" — distinguishes broken code from
+        valid-but-uninteresting code.
+      imports_top: first 10 imports for debugging.
+    """
+    imports, calls, parse_ok = _extract(code)
+
+    if not parse_ok:
+        return {
+            "top_level": "-1",
+            "sub_stage": "parse_error",
+            "label": "parse_error",
+            "classifier_source": "ast_choice_extractor",
+            "classifier_confidence": 0.0,
+            "parse_status": "parse_error",
+            "imports_top": [],
+            "all_matches": [],
+            "all_top_levels": [],
+            "all_sub_stages": [],
+        }
+
+    matches: list[dict] = []
+    seen_pairs: set[tuple[str, str]] = set()
     for rule in sorted(_RULES, key=lambda r: -r.priority):
         if not _import_matches(rule, imports):
             continue
         if rule.call_any and not (rule.call_any & calls):
             continue
-        best = rule
-        break
+        pair = (rule.top_level, rule.sub_stage)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        matches.append({
+            "top_level": rule.top_level,
+            "sub_stage": rule.sub_stage,
+            "label": rule.label,
+            "confidence": rule.confidence,
+        })
 
-    if best is None:
+    if not matches:
+        # Code parsed cleanly but no rule fired — agent wrote valid Python
+        # that doesn't touch any classifier-known API (e.g. pure config
+        # script, pure helper functions, or a test stub).
         return {
             "top_level": "0",
             "sub_stage": "unknown",
             "label": "unknown",
             "classifier_source": "ast_choice_extractor",
             "classifier_confidence": 0.0,
+            "parse_status": "ok",
             "imports_top": sorted(imports)[:10],
+            "all_matches": [],
+            "all_top_levels": [],
+            "all_sub_stages": [],
         }
+
+    # Highest-priority match drives the canonical label fields.
+    best = matches[0]
     return {
-        "top_level": best.top_level,
-        "sub_stage": best.sub_stage,
-        "label": best.label,
+        "top_level": best["top_level"],
+        "sub_stage": best["sub_stage"],
+        "label": best["label"],
         "classifier_source": "ast_choice_extractor",
-        "classifier_confidence": best.confidence,
+        "classifier_confidence": best["confidence"],
+        "parse_status": "ok",
         "imports_top": sorted(imports)[:10],
+        "all_matches": matches,
+        "all_top_levels": list(dict.fromkeys(m["top_level"] for m in matches)),
+        "all_sub_stages": list(dict.fromkeys(m["sub_stage"] for m in matches)),
     }
 
 
@@ -183,19 +241,39 @@ def classify_trajectory(output_dir: Path) -> Path:
 
     records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     for rec in records:
-        code_path = rec.get("code", {}).get("emitted_path")
-        if not code_path:
+        # Schema evolution: adapter_mlevolve writes ``code`` as the raw source
+        # string (inline). Earlier AIDE adapter wrote a dict ``{"emitted_path":
+        # ...}``. Handle both so the classifier survives reruns on archived data.
+        code_field = rec.get("code")
+        if isinstance(code_field, dict):
+            code_path = code_field.get("emitted_path")
+            if not code_path:
+                continue
+            code = (output_dir / code_path).read_text()
+        elif isinstance(code_field, str) and code_field.strip():
+            code = code_field
+        else:
             continue
-        code = (output_dir / code_path).read_text()
         cls = classify(code)
-        rec["stage"] = {
+        # Preserve top-level node fields and add a "stage_classifier" sub-dict
+        # alongside the upstream ``stage`` label (a string from adapter_mlevolve).
+        # This avoids the AIDE-era convention of overwriting ``stage`` with a
+        # dict, which broke aggregate.py's str-comparison on the upstream label.
+        rec["stage_classifier"] = {
             "top_level": cls["top_level"],
             "sub_stage": cls["sub_stage"],
             "label": cls["label"],
             "classifier_source": cls["classifier_source"],
             "classifier_confidence": cls["classifier_confidence"],
+            "parse_status": cls.get("parse_status"),
+            "all_top_levels": cls.get("all_top_levels", []),
+            "all_sub_stages": cls.get("all_sub_stages", []),
+            "all_matches": cls.get("all_matches", []),
         }
-        rec["code"]["imports_top"] = cls["imports_top"]
+        if isinstance(rec.get("code"), dict):
+            rec["code"]["imports_top"] = cls["imports_top"]
+        else:
+            rec["imports_top"] = cls["imports_top"]
 
     with path.open("w") as f:
         for r in records:
