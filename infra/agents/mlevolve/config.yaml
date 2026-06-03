@@ -88,7 +88,19 @@ agent:
     api_key: ""
 
   check_data_leakage: False
-  use_diff_mode: True
+  # use_diff_mode governs how EDITS (debug/improve/evolve/fuse) are applied,
+  # NOT drafting (drafts always use stepwise whole-code). True = SEARCH/REPLACE
+  # diff patches; False = Base mode, regenerate the whole file each edit.
+  # Set False after spike-012: MLEvolve's diff applier (apply.py/patcher.py,
+  # strict=False, no ast/marker validation) silently writes corrupted files
+  # (stray ======= markers, duplicated blocks) when a patch half-applies. This
+  # killed the no-skill control 2-for-2 (seed-0 + seed-1) in a SyntaxError
+  # death-spiral. SEARCH/REPLACE adherence is model-dependent (cf. aider edit-
+  # format leaderboard); upstream's #1 MLE-bench run used gemini-3-pro + a 12h/
+  # hundreds-of-nodes budget that absorbs the occasional bad patch — our
+  # deepseek-v4-pro + tiny budget + sprawling code makes it fatal. Base mode
+  # sidesteps the applier entirely (costs more tokens/edit). Drafts unaffected.
+  use_diff_mode: False
 
   # Branch strategy — disabled for spike (single trajectory)
   fusion_vs_evolution_prob: 0.0
