@@ -112,6 +112,19 @@ else:
     assert n == 0, f"reload() with no env var returned {n} skills, expected 0"
 
 # -----------------------------------------------------------------------------
+# token_budget guard — the anti-truncation sidecar must have wrapped the
+# provider-level query/generate so the default max_tokens is raised (spike-012
+# corruption root cause was 16384-token truncation). Catches: import-order
+# regression, or upstream renaming llm.openai.query/generate.
+# -----------------------------------------------------------------------------
+import llm.openai as _openai_provider  # noqa: E402
+
+assert getattr(_openai_provider.query, "_token_budget_patched", False), \
+    "token_budget did not wrap llm.openai.query (max_tokens cap not raised)"
+assert getattr(_openai_provider.generate, "_token_budget_patched", False), \
+    "token_budget did not wrap llm.openai.generate (max_tokens cap not raised)"
+
+# -----------------------------------------------------------------------------
 # bitsandbytes import guard — the base image ships triton 3.3.1, which dropped
 # `triton.ops`. bnb 0.43.3 eagerly imported `triton.ops.matmul_perf_model` and
 # died at import, breaking every QLoRA/4-bit path (the spike-012 confound).

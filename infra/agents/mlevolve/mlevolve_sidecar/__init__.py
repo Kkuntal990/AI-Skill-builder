@@ -38,4 +38,5 @@ limiting our patches to the minimum needed for the A/B treatment.
 from . import seed                # noqa: F401
 from . import openai_apikey_env   # noqa: F401
 from . import prompt_logger       # noqa: F401
+from . import token_budget        # noqa: F401  — raises max_tokens default (anti-truncation); AFTER prompt_logger so it wraps outermost
 from . import skill_retriever     # noqa: F401
