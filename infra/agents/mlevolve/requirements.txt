@@ -84,7 +84,19 @@ pandas
 # advertising version specifics in the agent prompt.
 peft==0.12.0
 trl==0.9.6
-bitsandbytes==0.43.3
+# bitsandbytes EXCEPTION to the mid-2024 pin: the base image (vllm/vllm-openai
+# :v0.9.2) ships torch 2.7.1 + triton 3.3.1, and Triton 3.x DROPPED the
+# `triton.ops` submodule. The mid-2024 bnb 0.43.3 hard-imports
+# `triton.ops.matmul_perf_model` at package import time (bitsandbytes/triton/
+# int8_matmul_mixed_dequantize.py) → ModuleNotFoundError, so ANY bitsandbytes
+# path (QLoRA / load_in_4bit / 8-bit) dies at import. This silently confounded
+# the spike-012 paired A/B: the peft-tuning skill steers toward QLoRA, so the
+# with-skill cell burned debug nodes on a dead import the control never hit.
+# 0.46.1 (Jun 2025) drops the eager triton.ops import and supports torch 2.7.
+# The user-facing API (BitsAndBytesConfig, load_in_4bit) is unchanged from
+# 0.43, so the "match the LLM's API prior" rationale still holds. Guarded by an
+# import assertion in _smoke_imports.py so a regression fails the build.
+bitsandbytes==0.46.1
 evaluate
 rouge_score
 

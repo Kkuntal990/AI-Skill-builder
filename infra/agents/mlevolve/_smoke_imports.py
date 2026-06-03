@@ -112,6 +112,19 @@ else:
     assert n == 0, f"reload() with no env var returned {n} skills, expected 0"
 
 # -----------------------------------------------------------------------------
+# bitsandbytes import guard — the base image ships triton 3.3.1, which dropped
+# `triton.ops`. bnb 0.43.3 eagerly imported `triton.ops.matmul_perf_model` and
+# died at import, breaking every QLoRA/4-bit path (the spike-012 confound).
+# 0.46.1 fixes this; assert it imports AND that the 4-bit config the skill
+# recommends constructs (CPU-only construction, no CUDA needed at build time).
+# -----------------------------------------------------------------------------
+import bitsandbytes as _bnb  # noqa: F401,E402 — must import without triton.ops
+from transformers import BitsAndBytesConfig as _BnbCfg  # noqa: E402
+
+_bnb_cfg = _BnbCfg(load_in_4bit=True, bnb_4bit_quant_type="nf4")
+assert _bnb_cfg.load_in_4bit, "BitsAndBytesConfig(load_in_4bit=True) did not stick"
+
+# -----------------------------------------------------------------------------
 # prompt_logger regression — capture both query() kwargs and generate()
 # positional/kwarg prompt (spike-011 fix). The helper is small enough to
 # exercise directly with synthetic args.
