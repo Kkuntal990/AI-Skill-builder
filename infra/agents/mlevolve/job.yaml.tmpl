@@ -55,21 +55,23 @@ spec:
           # during real QLoRA training of Qwen2.5-3B on SAMSum is ~2 GiB
           # (training subprocess RSS ~2.1 GB + agent overhead ~0.6 GB).
           # GPU mem peaks at ~13.6 GiB (within A6000's 48 GiB easily).
-          # Right-sized to 8 GiB: observed CPU-RAM peak is ~2.7 GB (training
-          # subprocess RSS ~2.1 GB + agent overhead ~0.6 GB) even with
-          # use_global_memory: true (sentence-transformers BAAI/bge-base-en-v1.5
-          # ~400 MB + FAISS index). The 16 GiB bump (spike-012) was never
-          # approached — 8 GiB still gives ~3x headroom. Bump only if a
-          # trajectory actually OOMs.
+          # Sized to 16 GiB. The earlier 8 GiB right-size (based on a ~2.7 GB
+          # observed peak for *compact* trajectories) was too aggressive:
+          # spike-012 without-skill-s2 was OOMKilled (exit 137) at 8 GiB. The
+          # control cell tends to write memory-heavier code (e.g. dataset
+          # augmentation / eager tokenization of all 14.7k SAMSum examples +
+          # 3B-model eval generation), so an 8 GiB cap asymmetrically kills it
+          # and confounds the A/B. 16 GiB covers that heavy-code case while
+          # staying well under the GPU node's RAM.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "8Gi"
+              memory: "16Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "8Gi"
+              memory: "16Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
