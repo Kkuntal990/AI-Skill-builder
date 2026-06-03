@@ -59,6 +59,17 @@ RUN pip install --no-cache-dir -r /opt/mlevolve-requirements.txt
 # The launcher cds into /workspace/mlevolve before invoking run.py.
 COPY infra/agents/mlevolve/upstream /workspace/mlevolve
 
+# ----- De-Kaggle the vendored prompts ------------------------------------
+# MLEvolve hardcodes a "Kaggle Grandmaster competing on a leaderboard"
+# persona + a "data is in ./input / use sample_submission.csv" framing that
+# derails the agent on our contract-only (HF-loaded, no-submission) tasks.
+# no_submission_mode only gates output validation, not these prompts. This
+# patch neutralizes the competition framing in the image copy (the submodule
+# tree is reset by `git submodule update`, so we patch post-COPY). It asserts
+# every required nudge was found+replaced, so upstream drift fails the build.
+COPY infra/agents/mlevolve/patches/de_kaggle.py /workspace/de_kaggle.py
+RUN python /workspace/de_kaggle.py
+
 # ----- Our sidecar + entrypoint + analyzer -------------------------------
 COPY infra/agents/mlevolve/mlevolve_sidecar /workspace/mlevolve_sidecar
 COPY infra/agents/mlevolve/run_mlevolve.py /workspace/run_mlevolve.py
