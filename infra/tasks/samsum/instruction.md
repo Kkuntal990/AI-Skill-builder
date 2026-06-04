@@ -22,13 +22,17 @@ is open — that is what we are evaluating.
 
 1. **Task family** — abstractive dialogue summarization: dialogue text in →
    summary text out (a generative, text-to-text task).
-2. **Dataset** — `knkarthick/samsum` (splits are pre-built; do not call
-   `train_test_split`).
+2. **Dataset** — use ONLY `knkarthick/samsum` via HuggingFace `datasets`
+   (splits are pre-built; do not call `train_test_split`). Do **not**
+   substitute a placeholder or any other dataset (e.g. `iris` / sklearn toy
+   sets); the submission is scored against the real SAMSum `test` references.
 3. **Backbone** — `Qwen/Qwen2.5-3B-Instruct`.
 4. **Metric & output** — mean **ROUGE-L F1** over the 819 `test` examples.
-   You MUST (a) write a `submission.csv` of per-example predictions (see
-   Output contract) AND (b) print the last stdout line exactly as
-   `Final Validation Score: <float in [0,1]>`.
+   You MUST (a) write a `submission.csv` with columns `id,generated_summary`
+   and a row for **every** one of the 819 `test` ids (see Output contract) AND
+   (b) print the last stdout line exactly as `Final Validation Score: <float in
+   [0,1]>`. A submission with different columns, or that omits/duplicates ids,
+   or covers only a subset, scores **zero**.
 
 ## Resource budget
 
