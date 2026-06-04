@@ -30,6 +30,14 @@ is open — that is what we are evaluating.
    Output contract) AND (b) print the last stdout line exactly as
    `Final Validation Score: <float in [0,1]>`.
 
+## Resource budget
+
+Single GPU, with a bounded **per-run execution time limit** (you are shown the
+limit and the time/steps remaining each step). Program runtime — training AND
+the final test evaluation — counts toward that limit; a run that does not
+finish within it is killed and scores nothing. Make sure a full
+train-and-evaluate pass completes within the per-run limit.
+
 ## Task
 
 Fine-tune the pre-trained instruction-tuned causal LM specified below on

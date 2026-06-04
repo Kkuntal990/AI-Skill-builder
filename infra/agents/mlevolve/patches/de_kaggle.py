@@ -83,6 +83,21 @@ RULES = [
     ("agents/result_parse_agent.py",
      'exp_id = agent.cfg.exp_name.split("_")[2]',
      'exp_id = (agent.cfg.exp_name.split("_") + ["", "", ""])[2]', True, 2),
+    # --- time-budget signal accuracy ---
+    # Upstream hardcodes a "9 hours" execution budget in TWO agent-facing
+    # prompts, which contradicts the real per-exec cap (config.exec.timeout via
+    # MLEVAL_EXEC_TIMEOUT_SEC) and the accurate dynamic line in impl_guideline
+    # ("Max execution time per run = {naturaldelta(exec_timeout)}"). The agent
+    # believes it has 9h and plans a full-epoch run, then gets SIGKILLed at the
+    # real cap (spike-014: every node TimedOut). MLE-bench's own scaffold
+    # (agents/aide/additional_notes.txt) parameterizes this as ${TIME_LIMIT} and
+    # frames it as "program runtime counts toward this limit" — never a hardcoded
+    # number. Rewrite both to reference the real per-run limit instead of "9h".
+    ("agents/prompts/impl_guideline.py", "9 hours (hard limit)",
+     "the per-run execution time limit shown above (both training AND the final "
+     "evaluation must finish within it; program runtime counts toward it)", True, 1),
+    ("agents/prompts/validation_template_prompts.py", "9 hours available",
+     "bounded by the per-run execution time limit (training + evaluation must finish within it)", True, 1),
     # --- optional leftovers (best-effort; don't fail build if upstream shifts) ---
     ("agents/coder/stepwise_coder.py", "competition-winning Python code", "high-quality Python code", False, 0),
     ("agents/improve_agent.py", "As a Grandmaster, make MEANINGFUL improvements that boost leaderboard performance",
