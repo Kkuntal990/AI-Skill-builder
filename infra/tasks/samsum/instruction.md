@@ -9,16 +9,39 @@ This task is harness-staged for cheap dialogue-summarization smoke
 testing on a single GPU. ~10 MB dataset, single A100/A6000,
 deterministic metric.
 
-The recipe below is intentionally OPEN — we specify only the dataset,
-model, prompt template, and output contract. Method choice, library
-choice, training schedule, and inference strategy are all left to the
-agent (this is what we're evaluating).
+The CONTRACT below (task family, dataset, backbone, metric, output) is
+FIXED. The RECIPE is OPEN — method, library, training schedule, and
+inference strategy are left to the agent (this is what we're evaluating).
 -->
+
+## Hard contract — non-negotiable (read before writing any code)
+
+These four facts are FIXED. They are not a starting point to adapt from;
+any draft that violates one is wrong by construction, regardless of any
+example code you may have seen elsewhere (including in skills/references).
+
+1. **Task family** — abstractive dialogue **summarization**: text in →
+   summary text out. This is a **generative / sequence-to-sequence** task
+   on a **causal LM**. It is NOT a classification task.
+   - FORBIDDEN: `AutoModelForSequenceClassification` (or any
+     `*ForSequenceClassification` head), `num_labels=`, label/logit
+     classification, `accuracy_score` / accuracy as the metric.
+   - REQUIRED: load the backbone with `AutoModelForCausalLM` and train it
+     to generate the summary text.
+2. **Dataset** — the ONLY dataset is `knkarthick/samsum`. Do NOT load
+   `imdb`, `sst2`, `glue`, or any other dataset. If your code references
+   any HF slug other than `knkarthick/samsum`, you are off-task — stop.
+   The splits are pre-built; do NOT call `train_test_split`.
+3. **Backbone** — the ONLY model is `Qwen/Qwen2.5-3B-Instruct`.
+4. **Metric & output** — mean **ROUGE-L F1** over the 819 `test`
+   examples. You MUST (a) write a `submission.csv` of per-example
+   predictions (see Output contract) AND (b) print the last stdout line
+   exactly as `Final Validation Score: <float in [0,1]>`.
 
 ## Task
 
-Fine-tune the pre-trained instruction-tuned LLM specified below on the
-SAMSum dialogue summarization dataset. After training, evaluate the
+Fine-tune the pre-trained instruction-tuned causal LM specified below on
+the SAMSum dialogue summarization dataset. After training, evaluate the
 fine-tuned model on the test split and print ROUGE-L F1.
 
 ## Data
@@ -63,12 +86,32 @@ until end-of-sequence (or a sensible max-new-token cap that you pick).
 
 ## Output contract
 
-The very last line of stdout MUST be exactly:
+Produce BOTH of the following:
 
-    Final Validation Score: <float>
+1. **A submission file of per-example predictions** with exactly two
+   columns and a header row:
 
-where `<float>` is the ROUGE-L F1 in `[0.0, 1.0]`. The harness parses
-this line as the trajectory's metric value. Higher is better.
+       id,generated_summary
 
-There is NO submission file. Save the runnable script as `runfile.py`
-in the working directory.
+   One row for **every** example in the `test` split (all 819), where
+   `id` is the example's `id` field from the dataset and
+   `generated_summary` is your fine-tuned model's generated summary for
+   that test dialogue. Do not leave summaries empty and do not invent
+   ids — the id set must match the `test` split exactly. Save it to
+   `./submission/submission.csv`, creating the directory if needed:
+
+       import os
+       os.makedirs("submission", exist_ok=True)
+       df.to_csv("submission/submission.csv", index=False)
+
+   This file is graded independently against held-out reference summaries;
+   it — not your printed number — is the trajectory's official score.
+
+2. The very last line of stdout, exactly:
+
+       Final Validation Score: <float>
+
+   where `<float>` is your own ROUGE-L F1 estimate in `[0.0, 1.0]`. This
+   is your self-check and the search signal; higher is better.
+
+Save the runnable script as `runfile.py` in the working directory.

@@ -221,7 +221,8 @@ else:
 | QLoRA 4-bit quantization attempted | Yes | grep `BitsAndBytesConfig` |
 | SyntaxError count in execution | 0 (vs spike-004's 7) | verbose.log |
 | Best-solution.py non-empty | Yes | `stat` on PVC |
-| Final Validation Score parsed | Any non-null float | `journal.json` |
+| Self-reported metric parsed (search signal only) | Any non-null float | `journal.json` |
+| **Held-out grader score (trustworthy outcome)** | `valid:true`, non-null `score` | `held_out_score.json` (`mleval.grader` over preserved `submission.csv`) |
 
 ### Failure paths
 

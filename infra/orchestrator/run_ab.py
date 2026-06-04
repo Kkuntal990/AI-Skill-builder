@@ -96,6 +96,7 @@ class Trajectory:
     cell: str  # "with_skill" | "without_skill"
     seed: int
     skill_path: str
+    skill_library: str
     run_id: str
     llm_model: str
     time_limit_sec: int
@@ -146,6 +147,9 @@ class Trajectory:
                 # killed mvp-002 mid-AIDE before the 1800s soft cap fired.
                 "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 1200),
                 "MLEVAL_SKILL_PATH": self.skill_path if self.cell == "with_skill" else "",
+                # Library dir (preferred): all skills available, model selector
+                # routes. Empty for without_skill → zero skills → baseline.
+                "MLEVAL_SKILL_LIBRARY": self.skill_library if self.cell == "with_skill" else "",
                 "MLEVAL_TASK_REQS_PATH": self.task_reqs_path,
                 "MLEVAL_SKILL_REQS_PATH": self.skill_reqs_path,
                 "MLEVAL_LLM_TIMEOUT_SEC": str(self.llm_timeout_sec),
@@ -167,6 +171,7 @@ class Plan:
     namespace: str
     base_env: dict[str, str]
     skill_path: str = ""
+    skill_library: str = ""
     trajectories: list[Trajectory] = field(default_factory=list)
 
     def build(
@@ -185,6 +190,7 @@ class Plan:
                         cell=cell,
                         seed=seed,
                         skill_path=self.skill_path,
+                        skill_library=self.skill_library,
                         run_id=self.run_id,
                         llm_model=llm_model,
                         time_limit_sec=time_limit_sec,
@@ -250,7 +256,8 @@ def main(argv: list[str] | None = None) -> int:
         default=["with_skill", "without_skill"],
         choices=["with_skill", "without_skill"],
     )
-    p.add_argument("--skill-path", default="", help="In-pod path to SKILL.md (only used when cell=with_skill)")
+    p.add_argument("--skill-path", default="", help="In-pod path to a single SKILL.md (back-compat; only used when cell=with_skill)")
+    p.add_argument("--skill-library", default="", help="In-pod path to a skill LIBRARY dir (e.g. /results/skills); all skills available, model selector routes (only used when cell=with_skill)")
     p.add_argument("--time-limit-sec", type=int, default=3600, help="Per-trajectory wall-clock cap (graceful — entrypoint watchdog kills agent PGID then runs analyzer/manifest).")
     p.add_argument("--step-limit", type=int, default=5, help="Agent max steps per trajectory (MLEvolve agent.steps; the only LOOP exit since agent.time_limit is soft).")
     p.add_argument("--llm-timeout-sec", type=int, default=120, help="Per-LLM-request HTTP timeout (read).")
@@ -284,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         namespace=namespace,
         base_env=env,
         skill_path=args.skill_path,
+        skill_library=args.skill_library,
     )
     plan.build(
         llm_model=llm_model,
@@ -298,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  run_id={run_id}  namespace={namespace}  llm={llm_model}  profile={args.profile}")
     print(f"  template={template_path.relative_to(REPO_ROOT)}")
     for t in plan.trajectories:
-        skill = t.skill_path if t.cell == "with_skill" else "(none)"
+        skill = (t.skill_library or t.skill_path or "(none)") if t.cell == "with_skill" else "(none)"
         print(f"  - {t.trajectory_id}   cell={t.cell:14s}  seed={t.seed}  skill={skill}")
 
     if not args.apply:

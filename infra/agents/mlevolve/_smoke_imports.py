@@ -38,78 +38,81 @@ from mleval.analyzer import adapter_mlevolve  # noqa: F401,E402
 from mleval.analyzer import stage_classifier  # noqa: F401,E402
 
 # -----------------------------------------------------------------------------
-# skill_retriever regression guards (Anthropic two-tier injection — post
-# spike-011 simplification). Catches: dual-bind drift on
-# get_prompt_environment, frontmatter parsing regression, mis-resolved skill
-# paths. The fixture path matches the runtime PVC layout.
+# skill injection guards (Anthropic progressive disclosure — library + per-node
+# model selector). Catches: the per-agent rebind failing (re-export
+# propagation), the _-prefixed-dir skip regressing, frontmatter parsing drift,
+# the selector FunctionSpec going malformed, and the empty-library baseline
+# leaking a catalog.
 # -----------------------------------------------------------------------------
-import agents.prompts  # noqa: E402
-import agents.prompts.environment as _env_mod  # noqa: E402
-from mlevolve_sidecar import skill_retriever  # noqa: E402
-
-# 1. Patch target exists (catches upstream refactor)
-assert callable(agents.prompts.get_prompt_environment), \
-    "get_prompt_environment missing in agents.prompts — upstream refactored?"
-assert callable(_env_mod.get_prompt_environment), \
-    "get_prompt_environment missing in agents.prompts.environment"
-
-# 2. Dual-bind invariant — both module-level bindings point at OUR patched fn
-assert agents.prompts.get_prompt_environment is skill_retriever._patched_get_prompt_environment, \
-    "DUAL-BIND broken: agents.prompts.get_prompt_environment is not the patched fn"
-assert _env_mod.get_prompt_environment is skill_retriever._patched_get_prompt_environment, \
-    "DUAL-BIND broken: agents.prompts.environment.get_prompt_environment is not the patched fn"
-
-# 3. Patched get_prompt_environment returns upstream shape (dict with
-#    "Installed Packages" — when no skills loaded, identical to upstream)
-_env_result = agents.prompts.get_prompt_environment()
-assert isinstance(_env_result, dict) and "Installed Packages" in _env_result, \
-    f"get_prompt_environment() shape changed: {_env_result!r}"
-
-# 4. With no MLEVAL_SKILL_PATH(S) set at build time, the patched fn must
-#    NOT inject Available Skills / Skill Reference keys (no-op path)
-assert "Available Skills" not in _env_result, \
-    "skill_retriever leaked Available Skills with no env var set"
-assert "Skill Reference" not in _env_result, \
-    "skill_retriever leaked Skill Reference with no env var set"
-
-# 5. Fixture round-trip — load the peft-tuning skill from the runtime PVC
-#    path or a bundled fallback, then verify catalog + reference render
-_SKILL_FIXTURE = "/results/data/peft-tuning"
-_FALLBACK_FIXTURE = "/workspace/skills/peft-tuning"
+import tempfile as _tf0  # noqa: E402
 import pathlib as _pl  # noqa: E402
-_fixture = next(
-    (p for p in (_SKILL_FIXTURE, _FALLBACK_FIXTURE) if _pl.Path(p).is_dir()),
-    None,
-)
-if _fixture is None:
-    print(
-        "WARN: no peft-tuning skill fixture found at runtime PVC or "
-        "/workspace/skills — skipping skill_retriever fixture smoke"
+
+import agents.draft_agent as _draft  # noqa: E402
+import agents.improve_agent as _improve  # noqa: E402
+import agents.debug_agent as _debug  # noqa: E402
+import agents.evolution_agent as _evolution  # noqa: E402
+from mlevolve_sidecar import skill_retriever  # noqa: E402
+from mlevolve_sidecar import skill_injector  # noqa: E402
+
+# 1. Per-agent rebind fired for ALL FOUR codegen agents (the core fix vs the
+#    old draft-only gap). Patching the definition / package re-export does NOT
+#    change these module bindings — so this is the load-bearing assertion.
+for _mod in (_draft, _improve, _debug, _evolution):
+    assert getattr(_mod, "_mleval_skill_patched", False), \
+        f"skill_injector did not patch {_mod.__name__} (import hook missed it?)"
+    assert getattr(_mod.run, "_mleval_patched", False), \
+        f"{_mod.__name__}.run is not the skill-wrapped run"
+    assert getattr(_mod.get_impl_guideline_from_agent, "_mleval_patched", False), \
+        f"{_mod.__name__}.get_impl_guideline_from_agent is not the skill-wrapped fn"
+
+# 2. Selector FunctionSpec builds and renders to an OpenAI tool dict (catches a
+#    malformed json_schema at build time, before a cluster run).
+_spec = skill_injector._get_selector_spec()
+assert _spec.name == "select_skills", f"selector spec name changed: {_spec.name}"
+assert _spec.as_openai_tool_dict["function"]["name"] == "select_skills", \
+    "selector FunctionSpec.as_openai_tool_dict malformed"
+
+# 3. Empty-library baseline — with no skills loaded, the wrapped guideline fn
+#    must return the upstream list UNCHANGED (no catalog, no selector call).
+os.environ.pop("MLEVAL_SKILL_LIBRARY", None)
+os.environ.pop("MLEVAL_SKILL_PATHS", None)
+os.environ.pop("MLEVAL_SKILL_PATH", None)
+assert skill_retriever.reload() == 0, "expected 0 skills with no env var"
+assert skill_retriever.catalog_text() == "", "catalog should be empty with no skills"
+_baseline = {"Implementation guideline": ["original-line"]}
+_wrapped = skill_injector._wrap_impl_guideline(lambda _agent: _baseline)
+_out = _wrapped(object())  # stub agent; must not be touched when no skills
+assert _out["Implementation guideline"] == ["original-line"], \
+    f"empty-library path mutated the guideline: {_out}"
+
+# 4. Library round-trip — a synthetic library with a real skill dir and a
+#    _-prefixed dir that MUST be skipped; catalog lists the skill + its refs.
+with _tf0.TemporaryDirectory() as _libdir:
+    _lib = _pl.Path(_libdir)
+    _sk = _lib / "demo-skill"
+    (_sk / "references").mkdir(parents=True)
+    (_sk / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: a demo skill for smoke\n---\n\nBody here.\n"
     )
-else:
-    os.environ["MLEVAL_SKILL_PATHS"] = _fixture
-    n = skill_retriever.reload()
-    assert n >= 1, f"reload() returned {n} skills, expected >= 1"
+    (_sk / "references" / "guide.md").write_text("# Guide\nref content\n")
+    _hidden = _lib / "_hidden"
+    _hidden.mkdir()
+    (_hidden / "SKILL.md").write_text("---\nname: hidden\ndescription: skip me\n---\nx\n")
 
-    loaded = skill_retriever.loaded_skills()
-    assert any(s["name"] == "peft-tuning" for s in loaded), \
-        f"peft-tuning skill not in loaded set: {[s['name'] for s in loaded]}"
+    os.environ["MLEVAL_SKILL_LIBRARY"] = str(_lib)
+    _n = skill_retriever.reload()
+    assert _n == 1, f"library scan loaded {_n} skills, expected 1 (_hidden skipped)"
+    _loaded = skill_retriever.loaded_skills()
+    assert _loaded[0]["name"] == "demo-skill", f"unexpected load: {_loaded}"
+    assert _loaded[0]["reference_files"] == ["guide.md"], \
+        f"reference_files wrong: {_loaded[0]['reference_files']}"
+    assert "guide.md" in _loaded[0]["references"], "reference body not loaded"
+    _cat = skill_retriever.catalog_text()
+    assert "demo-skill" in _cat and "guide.md" in _cat, f"catalog missing entries: {_cat}"
+    assert "hidden" not in _cat, "_-prefixed dir leaked into catalog"
 
-    # With skill loaded, env dict gains the two new keys
-    _env_with_skill = agents.prompts.get_prompt_environment()
-    assert "Available Skills" in _env_with_skill, \
-        "Available Skills key missing after loading skill"
-    assert "Skill Reference" in _env_with_skill, \
-        "Skill Reference key missing after loading skill"
-    assert "peft-tuning" in _env_with_skill["Available Skills"], \
-        "peft-tuning name missing from catalog"
-    assert len(_env_with_skill["Skill Reference"]) > 500, \
-        "Skill Reference body suspiciously short — references not concatenated?"
-
-    # Reset for production
-    os.environ.pop("MLEVAL_SKILL_PATHS", None)
-    n = skill_retriever.reload()
-    assert n == 0, f"reload() with no env var returned {n} skills, expected 0"
+    os.environ.pop("MLEVAL_SKILL_LIBRARY", None)
+    assert skill_retriever.reload() == 0, "reset to 0 skills failed"
 
 # -----------------------------------------------------------------------------
 # token_budget guard — the anti-truncation sidecar must have wrapped the
@@ -161,7 +164,57 @@ _sm, _um, _p = prompt_logger._capture_prompt(
 )
 assert _p == "kwarg-prompt", f"generate(kwarg) capture broken: p={_p!r}"
 
+# -----------------------------------------------------------------------------
+# held-out grader guard — the trustworthy A/B metric path. The grader must
+# import and deterministically (a) score a perfect match as 1.0 and (b) REJECT
+# an id-set mismatch (the drift signature) rather than silently scoring it.
+# -----------------------------------------------------------------------------
+from mleval.grader import grade_predictions as _grade  # noqa: E402
+from mleval.grader import rouge_l_f as _rouge  # noqa: E402
+
+assert abs(_rouge("the cat sat", "the cat sat") - 1.0) < 1e-9, "rouge_l_f identity != 1.0"
+assert _rouge("alpha beta", "gamma delta") == 0.0, "rouge_l_f disjoint != 0.0"
+
+import csv as _csv  # noqa: E402
+import pathlib as _pl2  # noqa: E402
+import tempfile as _tf  # noqa: E402
+
+
+def _write_csv2(path, header, rows):
+    with open(path, "w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(header)
+        w.writerows(rows)
+
+
+with _tf.TemporaryDirectory() as _d:
+    _dp = _pl2.Path(_d)
+    _rows = [["1", "the cat sat"], ["2", "a dog ran"]]
+    _write_csv2(_dp / "refs.csv", ["id", "reference_summary"], _rows)
+    _write_csv2(_dp / "preds.csv", ["id", "generated_summary"], _rows)
+    _gr = _grade(_dp / "preds.csv", _dp / "refs.csv")
+    assert _gr.valid and abs(_gr.score - 1.0) < 1e-9, f"grader perfect-match failed: {_gr}"
+    _write_csv2(_dp / "drift.csv", ["id", "generated_summary"], [["0", "positive"], ["1", "neg"]])
+    _gd = _grade(_dp / "drift.csv", _dp / "refs.csv")
+    assert _gd.valid is False and _gd.score is None, f"grader failed to reject drift: {_gd}"
+
+# -----------------------------------------------------------------------------
+# de_kaggle split-safety guard — with no_submission_mode:False the result
+# parser runs _validate_format_with_retry, whose `exp_name.split("_")[2]` must
+# be the index-safe form the de_kaggle build patch installs (else IndexError on
+# our hyphenated exp_name, before the use_grading_server=False skip).
+# -----------------------------------------------------------------------------
+import inspect as _inspect  # noqa: E402
+
+import agents.result_parse_agent as _rpa  # noqa: E402
+
+_rpa_src = _inspect.getsource(_rpa)
+assert 'exp_name.split("_")[2]' not in _rpa_src, \
+    'de_kaggle split-safety patch did not apply: raw exp_name.split("_")[2] still present'
+assert 'exp_name.split("_") + ["", "", ""]' in _rpa_src, \
+    "de_kaggle split-safety patch missing the index-safe form"
+
 print(
     "OK: run_mlevolve.py + MLEvolve + mleval analyzer + skill_retriever "
-    "+ prompt_logger all import and behave correctly"
+    "+ prompt_logger + grader + de_kaggle split-safety all import and behave correctly"
 )

@@ -9,19 +9,25 @@ LLM call or RNG-using code runs. Order matters:
                               per LLM call into $MLEVAL_PROMPTS_LOG
                               (NB: captures both ``query`` kwargs AND
                               ``generate`` positional prompt — see prompt_logger.py)
-    4. skill_retriever     — loads skills from $MLEVAL_SKILL_PATHS (or
-                              $MLEVAL_SKILL_PATH singular for back-compat),
-                              patches ``get_prompt_environment`` to splice
-                              an "Available Skills" catalog and "Skill
-                              Reference" body into ``prompt["Instructions"]``.
-                              Reaches stepwise prompts via the dict-copy in
-                              ``stepwise_coder``.
+    4. skill_retriever     — LOADER. Reads a skill library from
+                              $MLEVAL_SKILL_LIBRARY (a dir; scans */SKILL.md,
+                              skips _-prefixed) or $MLEVAL_SKILL_PATHS /
+                              $MLEVAL_SKILL_PATH (back-compat). Exposes
+                              loaded_skills() + catalog_text(). No patching.
+    5. skill_injector      — PATCHER (Anthropic progressive disclosure). A
+                              sys.meta_path hook rebinds run +
+                              get_impl_guideline_from_agent on the 4 codegen
+                              agents (draft/improve/debug/evolution): Tier-0
+                              catalog into EVERY node, plus a per-node temp-0
+                              model selector that loads only the relevant
+                              skill(s)+references. Imports LAST so the library
+                              is populated and the hook is registered before
+                              MLEvolve loads any agent module.
 
-Each submodule applies its patch on import. The order ensures
-prompt_logger wraps the LLM call site BEFORE MLEvolve's agent modules
-cache references to it, and skill_retriever patches
-get_prompt_environment BEFORE draft_agent.py imports it at module load.
-``run_mlevolve.py`` imports this package first so all patches install
+Each submodule applies its patch on import. The order ensures prompt_logger
+wraps the LLM call site BEFORE MLEvolve's agent modules cache references to it,
+and skill_injector's import hook is registered BEFORE draft_agent.py et al.
+load. ``run_mlevolve.py`` imports this package first so all patches install
 before any agent module loads.
 
 History note (spike-011): we previously also shipped:
@@ -39,4 +45,5 @@ from . import seed                # noqa: F401
 from . import openai_apikey_env   # noqa: F401
 from . import prompt_logger       # noqa: F401
 from . import token_budget        # noqa: F401  — raises max_tokens default (anti-truncation); AFTER prompt_logger so it wraps outermost
-from . import skill_retriever     # noqa: F401
+from . import skill_retriever     # noqa: F401  — loads the skill library
+from . import skill_injector      # noqa: F401  — patches the 4 codegen agents (must be LAST)

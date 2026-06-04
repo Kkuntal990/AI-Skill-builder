@@ -5,10 +5,13 @@
 # load_cfg() picks it up.
 #
 # Key spike-mode decisions vs upstream defaults:
-#   - no_submission_mode: true       → fork's flag that skips submission.csv
-#                                      check + reframes prompts as
-#                                      "optimize the validation metric only"
-#                                      (https://github.com/e-strauss/MLEvolve-generic)
+#   - no_submission_mode: FALSE      → keep MLEvolve's native per-node
+#                                      submission machinery so the best node's
+#                                      predictions are preserved at
+#                                      best_submission/submission.csv for our
+#                                      held-out grader (mleval.grader). See the
+#                                      detailed rationale at the flag below.
+#                                      (fork: e-strauss/MLEvolve-generic)
 #   - use_grading_server: false      → mle-bench import never triggers
 #   - use_coldstart: false           → no domain classifier (would compete
 #                                      with our skill_retriever as a second
@@ -185,8 +188,28 @@ coldstart:
 # engine/validation/quality_check.py:219).
 use_grading_server: False
 
-# Fork-only flag: skip submission.csv requirement, swap prompt to
-# "optimize the validation metric only" + "print Final Validation Score:
-# {score} as last line". Required for our non-Kaggle tasks
-# (llama-inference is a latency benchmark, not a classification submission).
-no_submission_mode: True
+# Fork-only flag. When True it skips the submission.csv requirement and
+# swaps prompts to "optimize the validation metric only" + "print Final
+# Validation Score". We deliberately set it FALSE so MLEvolve's NATIVE
+# per-node submission machinery runs:
+#   - executor.isolate_submission_path rewrites the agent's `submission.csv`
+#     write to `submission/submission_<node_id>.csv` (node-keyed; the shared
+#     run_wd would otherwise clobber it across nodes).
+#   - save_best_solution copies the best node's predictions to
+#     `best_submission/submission.csv` — the EXACT best model's outputs, with
+#     no retraining.
+#   - validate_executed_node marks a node buggy if it produced no submission,
+#     natively enforcing "the agent must emit per-example predictions".
+#   - validate_submission_content_quality (local, task-agnostic) rejects
+#     empty/constant submissions.
+# Our held-out grader (mleval.grader) then scores best_submission/submission.csv
+# against held-out references — the trustworthy A/B metric. MLEvolve's own
+# journal metric stays the (gameable) self-reported tree-search signal.
+#
+# The mle-bench format-validation that False would normally trigger is ALREADY
+# neutralized: _validate_submission_with_retry short-circuits to valid when
+# use_grading_server=False (engine/validation/quality_check.py:219-221), so no
+# mlebench import and no competition sample_submission is needed. The only
+# residual coupling — `exp_name.split("_")[2]` in result_parse_agent.py:223,260
+# — is made index-safe by the de_kaggle build-time patch.
+no_submission_mode: False

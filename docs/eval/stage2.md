@@ -1,4 +1,4 @@
-# Stage 2 — Skill-effect A/B framework (v0.4, MLEvolve spike)
+# Stage 2 — Skill-effect A/B framework (v0.5, MLEvolve spike)
 
 Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `MLE-Agent` alone, and *where* does the help come from? Reusable for any `(agent, skill, task)` triple.
 
@@ -6,6 +6,7 @@ Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `
 > - **v0.2 (Apr 2026)** targeted MLEvolve. Original ditch: its grading-server sidecar imported `mlebench.registry` + `validate_submission`, blocking custom-skill A/B without registering each task as an MLE-Bench competition.
 > - **v0.3 (May 2026)** pivoted to AIDE (WecoAI). Worked end-to-end on tabular tasks; broke repeatedly on GPU tasks (`llama-inference`): 5 OOMs in a row (mvp-014→mvp-018) traced to fork-after-CUDA in LLM-generated `DataLoader(num_workers>0)` / `dataset.map(num_proc>0)` after `model.to('cuda')`. AIDE's `multiprocessing.Process(fork)` model leaks unkillable CUDA-pinned workers; cleanup_session patches survive but +7.4 to +22.5 GiB/min memory creep OOMs the pod within minutes. AIDE was [designed and validated on Kaggle tabular](https://arxiv.org/abs/2502.13138); GPU users (MLE-Bench, AIRA-dojo) wrap it in nested isolation. Our setup didn't and can't (no DinD/Apptainer on Nautilus).
 > - **v0.4 (May 2026)** re-evaluates MLEvolve. Re-check found the original blocker is bypassable: [`use_grading_server: false`](https://github.com/InternScience/MLEvolve/blob/26bde89/engine/validation/quality_check.py#L219) short-circuits the entire mlebench import path. Architecturally relevant: MLEvolve's `engine/executor.py` uses `subprocess.Popen` per node, with the explicit docstring [*"avoids CUDA/fork issues"*](https://github.com/InternScience/MLEvolve/blob/26bde89/engine/executor.py). The `mlevolve-smoke` branch runs the spike (this document's last section).
+> - **v0.5 (Jun 2026)** fixed the outcome contract. The spike-012 control drifted off-task (solved IMDB sentiment classification) yet printed a valid-looking `Final Validation Score` the harness believed — because the metric was a self-reported stdout scalar, the one thing no credible agent benchmark uses. Fix: flip `no_submission_mode: True → False` so MLEvolve natively preserves the best node's per-example predictions (`best_submission/submission.csv`), and add an independent held-out grader (`mleval.grader`) that recomputes the metric against held-out references post-run. Drift now scores `valid:false`/~0 and drops out of the lift. Kaggle persona + `./input` framing (a drift driver) neutralized at build time by `patches/de_kaggle.py`. See **Layer 1** below.
 
 ## MLEvolve spike — current track
 
@@ -128,16 +129,21 @@ Locked for the current pilot sequence. The harness-validation pilot (mvp-003, CP
 
 ## Layer 1 — outcome metrics
 
-Per-task native metric + paired Lift.
+Per-task metric + paired Lift, computed by an **independent held-out grader** — not the agent's self-report.
+
+**Two-level design** (faithful to mle-bench / AIDE):
+
+- *Search signal (gameable, internal):* MLEvolve ranks nodes by the agent's self-reported `Final Validation Score` (LLM-parsed from stdout into `metric.value`) and picks its best node — exactly as AIDE's `journal.get_best_node()` does. This drives the search but is **not** the reported outcome.
+- *Headline (trustworthy, external):* with `no_submission_mode: False`, MLEvolve preserves the best node's per-example predictions at `best_submission/submission.csv`. After the run, `entrypoint.sh` invokes `mleval.grader`, which recomputes the metric from that file against held-out references and writes `held_out_score.json`. `mleval.analyzer.aggregate` uses that as the trajectory's `best_metric` (self-reported value kept only as a drift diagnostic).
 
 | Metric | Source |
 |---|---|
-| Native (val MAE / AUC / accuracy / etc.) | AIDE's per-node `metric.value` (LLM judge extracts from `Validation <metric>: <value>` stdout line) |
+| Native held-out score (ROUGE-L / exact-match / accuracy) | `held_out_score.json` — `mleval.grader` over the agent's preserved `submission.csv` |
 | Lift = `score(with) − score(without)` paired | [ScienceAgentBench](https://arxiv.org/abs/2410.05080) pattern; `mleval.analyzer.aggregate` computes it |
 
 Headline: mean Lift over (tasks × seeds), 95% CI from paired-seed variance.
 
-Per-trajectory "best metric" = max (or min) over all node metrics (depending on `maximize` flag), matching AIDE's own `journal.get_best_node()` behavior.
+**Why external grading:** a self-reported scalar is gameable — a drifted trajectory (e.g. solving IMDB instead of SAMSum) can print a high number on the *wrong* task, which the old stdout-`Final Validation Score` contract accepted. The held-out grader keys on the real task's test ids and scores the output type, so drift lands as `valid:false` / ~0 and **drops out of the lift** instead of inflating it. This mirrors mle-bench: it grades one agent-selected `submission.csv` once against private answers and never feeds the agent a test score (the in-run server is format-only). The agent's self-selection of "best" is imperfect on purpose — the validation→test gap is an accepted benchmark property, not something we paper over with live test feedback.
 
 ## Layer 2a — sub-stage activity (MVP via AST imports/calls)
 

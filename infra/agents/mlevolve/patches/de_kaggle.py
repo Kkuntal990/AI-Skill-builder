@@ -2,18 +2,33 @@
 
 WHY: MLEvolve is a Kaggle/MLE-bench agent. Its prompts hardcode a
 "Kaggle Grandmaster competing to WIN on a leaderboard" persona AND a
-"data lives in ./input" + "use sample_submission.csv" framing. On our
-contract-only tasks (SAMSum etc., HF-loaded, no submission file) this
-derails the agent into writing generic Kaggle tabular code
-(`pd.read_csv("./input/train.csv")`, `submission.csv`, generic NN) →
-FileNotFoundError, never reaching the actual task. `no_submission_mode`
-only gates the OUTPUT-side validation, not these prompt-level nudges.
+"data lives in ./input / read sample_submission.csv" framing. On our
+contract-only tasks (SAMSum etc., HF-loaded) this derails the agent into
+writing generic Kaggle tabular code (`pd.read_csv("./input/train.csv")`,
+classification heads, generic NN) → off-task drift, never reaching the
+actual task.
 
-This patch neutralizes the competition framing image-wide. We run ONLY
-no-submission tasks, so it's safe to apply unconditionally. It edits the
-image copy at /workspace/mlevolve (upstream submodule files are reset by
-`git submodule update` on every build, so we cannot edit them durably;
-we patch the copied tree at build time instead).
+This patch neutralizes the *competition persona* and the *./input read*
+framing image-wide so the agent stays on the contract. Two notes on the
+OUTPUT side, which changed under the held-out-grader design:
+
+  - We DO want the agent to emit a per-example `submission.csv` now. We run
+    `no_submission_mode: False` so MLEvolve's native machinery preserves the
+    best node's predictions at `best_submission/submission.csv`, which our
+    independent held-out grader (``mleval.grader``) scores against held-out
+    references — the trustworthy A/B metric. So this patch only neutralizes
+    the Kaggle *persona* + *input-reading* nudges; it does NOT suppress
+    submission writing (the output contract is carried by instruction.md +
+    MLEvolve's own impl_guideline).
+  - `no_submission_mode: False` makes result_parse run a format-validation
+    path whose `exp_name.split("_")[2]` assumes an mle-bench competition id
+    and IndexErrors on our exp_name; one rule below makes that split
+    index-safe (the mle-bench grading call itself is already skipped via
+    `use_grading_server: False`).
+
+It edits the image copy at /workspace/mlevolve (upstream submodule files
+are reset by `git submodule update` on every build, so we cannot edit them
+durably; we patch the copied tree at build time instead).
 
 Each REQUIRED replacement asserts it applied (count >= min) so an upstream
 refactor FAILS THE BUILD loudly rather than silently leaving the nudge in.
@@ -53,6 +68,21 @@ RULES = [
     #     via update_data_preview) ---
     ("engine/agent_search.py", "self.data_preview = base_preview + submission_format_warning",
      "self.data_preview = base_preview  # de_kaggle: dropped submission_format_warning", True, 1),
+    # --- no_submission_mode:False compatibility ---
+    # We run with no_submission_mode:False so MLEvolve natively preserves each
+    # node's predictions (submission/submission_<id>.csv) and the best node's
+    # (best_submission/submission.csv) for our held-out grader. That path runs
+    # _validate_format_with_retry / _validate_format_simple, which start with
+    #   exp_id = agent.cfg.exp_name.split("_")[2]
+    # assuming an mle-bench competition id. Our exp_name has no such underscore
+    # structure, so [2] IndexErrors BEFORE the use_grading_server=False skip
+    # (quality_check.py:219). exp_id is unused once validation is skipped, so
+    # make the split index-safe. Two call sites (lines ~223 in the live
+    # _validate_format_with_retry, and ~260 in _validate_format_simple which
+    # is currently dead code but patched too so it can never regress).
+    ("agents/result_parse_agent.py",
+     'exp_id = agent.cfg.exp_name.split("_")[2]',
+     'exp_id = (agent.cfg.exp_name.split("_") + ["", "", ""])[2]', True, 2),
     # --- optional leftovers (best-effort; don't fail build if upstream shifts) ---
     ("agents/coder/stepwise_coder.py", "competition-winning Python code", "high-quality Python code", False, 0),
     ("agents/improve_agent.py", "As a Grandmaster, make MEANINGFUL improvements that boost leaderboard performance",

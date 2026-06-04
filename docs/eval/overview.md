@@ -20,14 +20,14 @@ How we evaluate skills produced by `ai-skill-builder` and whether they make an M
 | Task | Domain | Metric | Status |
 |---|---|---|---|
 | `samsum` | dialogue summarization (SFT) | ROUGE-L F1 | ✅ seed 0 paired (spike-012); seed 1 running |
-| `gsm8k` | math reasoning (SFT) | exact-match accuracy | planned (instruction.md TBD) |
-| `boolq` | yes/no QA (SFT) | accuracy (on `validation` — test labels hidden) | planned (instruction.md TBD) |
+| `gsm8k` | math reasoning (SFT) | exact-match accuracy | planned (instruction.md drafted; held-out grader entry + refs pending) |
+| `boolq` | yes/no QA (SFT) | accuracy (on `validation` — test labels hidden) | planned (instruction.md drafted; held-out grader entry + refs pending) |
 
 **Metrics**:
 
 | Layer | What it measures | How |
 |---|---|---|
-| **L1 outcome** | Did the skill solve the task better? | Native task metric (self-reported `Final Validation Score`) + paired Lift |
+| **L1 outcome** | Did the skill solve the task better? | **Independent held-out grader** (`mleval.grader` recomputes the metric from the agent's preserved `submission.csv` against held-out references) + paired Lift. The agent's self-reported `Final Validation Score` is the tree-search signal + drift diagnostic only, never the headline. |
 | **L2 per-sub-stage** | *Where* in the 6×16 pipeline did the skill help? | 3 co-location-proof metrics from `stage_metrics.py` — **clean-reach** (did the stage run right), **rework** (re-attempts), **failure-modes** (`exc_type` per stage) — over the multi-label AST classifier. py-spy per-stage timing + state-predicate artifact checks deferred. |
 | **L3 trajectory cost** | Did the skill make the agent slower / more expensive? | Wall-clock, tokens, cost (`pricing.py`), error count |
 

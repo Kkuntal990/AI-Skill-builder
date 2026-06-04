@@ -1,0 +1,3 @@
+# Intentionally empty — BoolQ is fetched at runtime via
+# `datasets.load_dataset('google/boolq')`. The HF cache lives at
+# /results/.hf-cache/hf on PVC so it persists across trajectories.

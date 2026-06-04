@@ -9,34 +9,58 @@ Follows Anthropic's vocabulary verbatim ([Demystifying evals for AI agents](http
 - **Grader** — logic that scores one aspect of the response. Three tiers in order of preference: **code-based → model-based → human**.
 - **Eval saturation** — when the skill passes ≥90% of solvable tasks. Trigger to add harder tasks.
 
-## Locked test agent: `main`
+## Test agent
 
-All Stage 1 A/B runs use the **`main` openclaw agent** as the test target. `main` is:
+`eval_skill.py` defaults to `--agent ai-skill-builder` (a CLI default, not the doc's recommendation). Choose based on what you're testing:
 
-- No workspace dir, no `SOUL.md` / `AGENTS.md` / personality injection
-- No baseline skills attached (zero `skills.entries[]` at boot)
-- Default model only (currently `openrouter/deepseek/deepseek-v4-pro`)
+| Agent | Bootstrap | mcporter ambient? | Best for |
+|---|---|---|---|
+| `main` | ~0K (no SOUL/IDENTITY/AGENTS files; no bundled skills) | No | Measuring the marginal lift of a skill in isolation. The cleanest A/B baseline. |
+| `skill-tester` | ~50K (OpenClaw system prompt + tools, plus the `mcporter` baseline skill) | **Yes** | Testing MCP-dependent skill features end-to-end — but see ambient-MCP confound below. |
+| `ai-skill-builder` | heavy — 18+ baseline skills | Yes | Avoid for skill A/B: baseline skills cover too much adjacent knowledge. |
 
-Rationale: `main` is the cleanest baseline. Other agents we tested (`ai-skill-builder` with 18 baseline skills, `skill-tester` with auto-regenerated personality prompts) muddied the signal — baseline skills already cover PEFT-adjacent knowledge, suppressing the marginal lift a new skill contributes.
+**The ambient-MCP confound** (discovered 2026-05-24): when the test agent has `mcporter` bundled (as `skill-tester` does), Context7 is reachable regardless of whether the skill is loaded. A test that asks the agent to fetch live docs will fire MCP in **both** the with-skill and without-skill cells. So an MCP-must-use prompt cannot directly measure whether *the skill* triggers MCP — it can only measure whether the skill teaches better workflow choreography around MCP calls. To A/B-test the *triggering* of MCP from skill instructions, use `main` (no bundled mcporter).
 
 Invocation:
 ```bash
-python3 .../eval_skill.py functional ~/.openclaw/workspace/skills/<skill> \
-  --agent main --runs 3
+python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> \
+  --agent main --runs 3                # clean lift measurement
+# or
+python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> \
+  --agent skill-tester --runs 3        # MCP outcome plumbing
 ```
 
-## MCP signal capture (Signal 3 — sidecar wrapper)
+## MCP signal capture (four signals)
 
-Every functional trial is wrapped in a temporary `mcporter` PATH shim that JSONL-logs every invocation. Ground-truth answer to "did the agent actually call MCP."
+Every functional trial captures four orthogonal MCP signals. Three were original; the fourth (outcome narration) was added 2026-05-24 to recover false negatives from a runtime bug — see below.
+
+| Signal | Source | Catches |
+|---|---|---|
+| 1. Native tool calls | OpenClaw `agentMeta.toolSummary.tools[]` filtered by declared MCP servers | `context7__query-docs`, `context7__resolve-library-id` etc. — the canonical OpenClaw MCP invocation path |
+| 2. Bash sidecar log | Temporary `mcporter` PATH shim wrapping the real binary | Bash CLI invocations like `mcporter call context7.query-docs ...` |
+| 3. Text narration (call syntax) | Regex on reply text for `mcporter call` and `<server>__` patterns | Agent narrating the call syntax verbatim |
+| 4. **Text narration (outcome)** | Regex on reply for "Fetched via Context7", "LibraryId: /...", `/websites/...`, etc. | Agent reporting *results* from an MCP call without naming the tool — the realistic case |
+
+Classification combines them into one verdict per trial:
 
 | Class | Means |
 |---|---|
-| `best_case` | Sidecar log shows call AND reply text narrates it |
-| `stealth_use` | Sidecar log shows call but reply doesn't narrate (agent was silently competent) |
-| `lip_service` | Reply narrates "I called MCP" but sidecar log is empty (hallucinated call) |
-| `clean_miss` | Neither — no MCP usage attempted |
+| `best_case` | Any of 1/2/4 fired AND signal 3 narrates the call |
+| `stealth_use` | Any of 1/2/4 fired without narration |
+| `lip_service` | Signal 3 narrated but no actual fire (1/2/4 all empty) |
+| `clean_miss` | None — no MCP usage attempted |
 
-The sidecar log is authoritative because openclaw's `toolSummary.tools[]` does not track Bash subprocesses (how `mcporter` is invoked).
+**Why signal 4 is necessary** (the `toolSummary`-null bug): OpenClaw's `agentMeta.toolSummary` is sometimes `null` for multi-step responses (likely subagent spawning loses top-level aggregation). Without signal 4, real MCP calls register as `clean_miss` whenever toolSummary is null. The 2026-05-24 diag captured an agent reply with verbatim Context7 output (`LibraryId: /websites/vllm_ai_en` plus the actual flag name `--cudagraph-capture-sizes`) and `toolSummary: null` — by signals 1–3 alone, this would be a false negative. Signal 4 recovers it as `best_case`.
+
+The sidecar log is authoritative for the bash CLI path; the native tools path needs signals 1+4 because OpenClaw `toolSummary` is unreliable.
+
+## Reply text preservation
+
+As of 2026-05-24, `eval_skill.py` writes full `reply_text` into each trial's JSON (previously only `reply_chars`). This enables offline re-grading when assertions or detection patterns change. File sizes grow ~5×; acceptable trade for the ability to apply harness fixes without re-spending on LLM calls.
+
+## Model variance caveat
+
+`openrouter/deepseek/deepseek-v4-pro` shows large day-to-day reply-length variance. Same prompts, same skill, different days produced median reply lengths of **430 chars one day and 28 chars another**. Pass-rate measurements from a single run can swing 30+ pp purely from this variance. Multi-day median-of-medians or model-of-models is needed before declaring one skill version better than another in absolute terms.
 
 ## Eval sets and graders
 

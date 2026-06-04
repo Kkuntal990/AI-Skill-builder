@@ -101,6 +101,8 @@ spec:
               value: "/results/data/${TASK}/data"
             - name: MLEVAL_SKILL_PATH
               value: "${MLEVAL_SKILL_PATH}"
+            - name: MLEVAL_SKILL_LIBRARY
+              value: "${MLEVAL_SKILL_LIBRARY}"
             - name: MLEVAL_LLM_TIMEOUT_SEC
               value: "${MLEVAL_LLM_TIMEOUT_SEC}"
             # Empty string lets entrypoint.sh default to TIME_LIMIT_SECONDS / 2.

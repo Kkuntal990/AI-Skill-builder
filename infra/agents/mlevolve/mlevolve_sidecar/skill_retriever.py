@@ -1,35 +1,27 @@
-"""Skill injection — Anthropic two-tier (catalog + full body), no retrieval.
+"""Skill library loader — Anthropic progressive-disclosure (Discovery tier data).
 
-Reads ``MLEVAL_SKILL_PATHS`` (colon-separated list, falls back to
-``MLEVAL_SKILL_PATH`` singular for backward compat) at import time. For each
-path:
-  - Resolves a SKILL.md file path OR a directory containing SKILL.md
-  - Loads SKILL.md content (full body, after stripping YAML frontmatter)
-  - Concatenates any ``references/*.md`` files (full)
-  - Parses frontmatter for L1 catalog metadata (name + description)
+Loads a LIBRARY of skills at import time and exposes the data the injector
+(`skill_injector.py`) needs to realise progressive disclosure for MLEvolve's
+single-shot codegen agents:
 
-Patches ``agents.prompts.environment.get_prompt_environment`` to splice the
-catalog and full skill bodies into the dict that ``draft_agent.py:154`` merges
-into ``prompt["Instructions"]``. Stepwise's StepAgent / MetaAgent
-(``coder/stepwise_coder.py``) copy ``prompt_base["Instructions"]`` into their
-own prompts, so the skill content reaches the live codegen path even though
-stepwise bypasses ``build_chat_prompt_for_model``.
+  - Discovery: ``catalog_text()`` — every skill's name + 1-line description +
+    its ``references/*.md`` filenames. The injector splices this into EVERY
+    codegen node so the agent is always aware of the whole library.
+  - Activation/Execution: ``loaded_skills()`` — per-skill ``body`` (SKILL.md,
+    frontmatter stripped) and ``references`` ({filename: text}). The injector's
+    model selector picks which skill bodies + which references to load per node.
 
-Slot layout in ``prompt["Instructions"]`` (only when at least one skill loads):
-  - ``"Available Skills"`` — L1 catalog (skill name + 1-line description)
-  - ``"Skill Reference"`` — L2 full content (SKILL.md body + all references)
+Source of skills (first that resolves wins):
+  1. ``MLEVAL_SKILL_LIBRARY`` — a directory; scan ``*/SKILL.md`` (skip dirs
+     whose name starts with ``_``). This is the library model: all skills
+     always available; the selector routes.
+  2. ``MLEVAL_SKILL_PATHS`` / ``MLEVAL_SKILL_PATH`` — colon-separated explicit
+     SKILL.md (or skill-dir) paths. Back-compat.
 
-Design rationale (see conversation 2026-06-01):
-  - Matches Anthropic's published Skills API: caller pre-selects skills (we
-    pass them via the env var); progressive disclosure shape with metadata +
-    body; up-to-8-skills cap matches Anthropic's API limit.
-  - Replaces ~400 LoC BM25 retriever. No chunker, no embedding, no stage
-    detection, no two-gate threshold. Trust the skill author's references/
-    structure and the LLM's ability to skim.
-  - Bypassed-by-stepwise problem (spike-011): the OLD implementation injected
-    into ``build_chat_prompt_for_model`` which stepwise's coder never calls.
-    The ``Instructions`` dict slot is the one place that survives all of:
-    non-stepwise draft, stepwise StepAgent + MetaAgent, improve, debug.
+This module no longer patches any MLEvolve prompt function — patching moved to
+``skill_injector.py`` (the old ``get_prompt_environment`` patch reached only the
+draft node; the injector reaches all four codegen stages via the universal
+``get_impl_guideline_from_agent`` seam).
 """
 from __future__ import annotations
 
@@ -38,11 +30,9 @@ import os
 import re
 from pathlib import Path
 
-import agents.prompts as _prompts_pkg
-import agents.prompts.environment as _env_mod
-
 logger = logging.getLogger(__name__)
 
+LIBRARY_ENV = "MLEVAL_SKILL_LIBRARY"
 PATH_ENV_MULTI = "MLEVAL_SKILL_PATHS"
 PATH_ENV_SINGULAR = "MLEVAL_SKILL_PATH"
 
@@ -80,33 +70,57 @@ def _parse_frontmatter(skill_md: str) -> tuple[str, str, str]:
 
 
 def _load_skill(skill_dir: Path) -> dict:
-    """Load one skill: SKILL.md + concatenated references/*.md."""
+    """Load one skill: SKILL.md body (frontmatter stripped) + references map.
+
+    Returns a dict with:
+      - name, description, source_dir
+      - body            — SKILL.md body only (NOT references — those load on demand)
+      - references      — {filename: text} for each references/*.md
+      - reference_files — sorted list of reference filenames (for the catalog)
+    """
     skill_md = (skill_dir / "SKILL.md").read_text()
     name, description, body = _parse_frontmatter(skill_md)
     if not name:
         name = skill_dir.name
 
-    ref_blocks: list[str] = []
+    references: dict[str, str] = {}
     ref_dir = skill_dir / "references"
     if ref_dir.is_dir():
         for ref_file in sorted(ref_dir.glob("*.md")):
-            ref_blocks.append(
-                f"\n\n#### references/{ref_file.name}\n\n{ref_file.read_text()}"
-            )
+            references[ref_file.name] = ref_file.read_text()
 
     return {
         "name": name,
         "description": description,
-        "body": body + "".join(ref_blocks),
+        "body": body,
+        "references": references,
+        "reference_files": sorted(references.keys()),
         "source_dir": str(skill_dir),
     }
 
 
-def _load_all_skills() -> list[dict]:
-    """Read MLEVAL_SKILL_PATHS (preferred) or MLEVAL_SKILL_PATH (back-compat)."""
-    paths_str = os.environ.get(PATH_ENV_MULTI) or os.environ.get(PATH_ENV_SINGULAR, "")
-    if not paths_str.strip():
+def _load_library_dir(root: str) -> list[dict]:
+    """Scan a library directory: every ``*/SKILL.md`` (skip ``_``-prefixed dirs)."""
+    root_path = Path(root).resolve()
+    if not root_path.is_dir():
+        logger.warning("[skill_retriever] library dir not found: %s", root)
         return []
+    skills: list[dict] = []
+    for child in sorted(root_path.iterdir()):
+        if not child.is_dir() or child.name.startswith("_"):
+            continue
+        if not (child / "SKILL.md").is_file():
+            continue
+        try:
+            skills.append(_load_skill(child))
+            logger.info("[skill_retriever] loaded library skill: %s", child.name)
+        except OSError as e:
+            logger.warning("[skill_retriever] failed to load %s: %s", child, e)
+    return skills
+
+
+def _load_explicit_paths(paths_str: str) -> list[dict]:
+    """Load from a colon-separated list of SKILL.md / skill-dir paths (back-compat)."""
     skills: list[dict] = []
     for raw in paths_str.split(":"):
         path = raw.strip()
@@ -124,48 +138,32 @@ def _load_all_skills() -> list[dict]:
     return skills
 
 
+def _load_all_skills() -> list[dict]:
+    """Prefer MLEVAL_SKILL_LIBRARY (dir scan); else MLEVAL_SKILL_PATHS/PATH."""
+    library = os.environ.get(LIBRARY_ENV, "").strip()
+    if library:
+        return _load_library_dir(library)
+    paths_str = os.environ.get(PATH_ENV_MULTI) or os.environ.get(PATH_ENV_SINGULAR, "")
+    if paths_str.strip():
+        return _load_explicit_paths(paths_str)
+    return []
+
+
 _SKILLS: list[dict] = _load_all_skills()
 
 
-def _catalog_text() -> str:
-    """L1: skill names + descriptions, formatted for the Instructions dict."""
+def catalog_text() -> str:
+    """L1 catalog (Discovery): name + 1-line description + reference filenames."""
     lines = []
     for s in _SKILLS:
         desc = (s["description"] or "(no description)").strip()
         lines.append(f"- **{s['name']}**: {desc}")
+        if s["reference_files"]:
+            lines.append(f"    references: {', '.join(s['reference_files'])}")
     return "\n".join(lines)
 
 
-def _reference_text() -> str:
-    """L2: full SKILL.md body + references for every loaded skill."""
-    blocks = []
-    for s in _SKILLS:
-        blocks.append(f"### Skill: {s['name']}\n\n{s['body']}")
-    return "\n\n---\n\n".join(blocks)
-
-
-_orig_get_prompt_environment = _env_mod.get_prompt_environment
-
-
-def _patched_get_prompt_environment() -> dict:
-    """Upstream env dict + skill catalog + skill body (when skills are loaded)."""
-    result = dict(_orig_get_prompt_environment())
-    if _SKILLS:
-        result["Available Skills"] = _catalog_text()
-        result["Skill Reference"] = _reference_text()
-    return result
-
-
-# Dual-bind: defining submodule + package re-export site (mirrors the pattern
-# the deleted env_overlay used; agents import via the re-export, so patching
-# only the defining submodule leaves callers pointing at the original).
-_env_mod.get_prompt_environment = _patched_get_prompt_environment
-_prompts_pkg.get_prompt_environment = _patched_get_prompt_environment
-
-logger.info(
-    "[skill_retriever] loaded %d skill(s); patched get_prompt_environment",
-    len(_SKILLS),
-)
+logger.info("[skill_retriever] loaded %d skill(s) into library", len(_SKILLS))
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +176,7 @@ def loaded_skills() -> list[dict]:
 
 
 def reload() -> int:
-    """Re-read MLEVAL_SKILL_PATH(S) and return the new skill count. Test-only."""
+    """Re-read the skill env vars and return the new skill count. Test-only."""
     global _SKILLS
     _SKILLS = _load_all_skills()
     return len(_SKILLS)

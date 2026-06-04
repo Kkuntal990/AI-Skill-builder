@@ -90,14 +90,16 @@ for entry in "$DATA_DIR"/*; do
 done
 cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
 
-# Optional skill(s): forward MLEVAL_SKILL_PATHS (preferred, colon-separated)
-# or MLEVAL_SKILL_PATH (singular, back-compat) to the sidecar's
-# skill_retriever. The retriever loads SKILL.md + references/*.md for each
-# resolved skill at import time and patches get_prompt_environment to splice
-# an L1 catalog + L2 full body into prompt["Instructions"]. This injection
-# slot is reached by both the regular draft path and the stepwise StepAgent
-# / MetaAgent (which copy prompt_base["Instructions"]).
-if [ -n "${MLEVAL_SKILL_PATHS:-}" ]; then
+# Optional skill(s): the sidecar's skill_retriever loads a library at import
+# time and skill_injector patches the 4 codegen agents (draft/improve/debug/
+# evolution) — Tier-0 catalog into every node + a per-node model selector that
+# loads the relevant skill(s)+references (Anthropic progressive disclosure).
+# Preferred: MLEVAL_SKILL_LIBRARY (a directory of */SKILL.md, all available).
+# Back-compat: MLEVAL_SKILL_PATHS (colon-separated) / MLEVAL_SKILL_PATH (one).
+if [ -n "${MLEVAL_SKILL_LIBRARY:-}" ] && [ -d "$MLEVAL_SKILL_LIBRARY" ]; then
+    export MLEVAL_SKILL_LIBRARY
+    echo "[entrypoint] skill library: $MLEVAL_SKILL_LIBRARY"
+elif [ -n "${MLEVAL_SKILL_PATHS:-}" ]; then
     export MLEVAL_SKILL_PATHS
     echo "[entrypoint] skill paths: $MLEVAL_SKILL_PATHS"
 elif [ -n "${MLEVAL_SKILL_PATH:-}" ] && [ -e "$MLEVAL_SKILL_PATH" ]; then
@@ -215,6 +217,18 @@ python3 -m mleval.analyzer.adapter_mlevolve "$OUT_DIR" 2>&1 | tail -10 || \
     echo "[entrypoint] adapter_mlevolve failed; trajectory.jsonl absent"
 python3 -m mleval.analyzer.stage_classifier "$OUT_DIR" 2>&1 | tail -5 || \
     echo "[entrypoint] stage_classifier failed (non-fatal)"
+
+# -------- Held-out grader (trustworthy A/B metric) ---------------------
+# Scores the predictions MLEvolve preserved for the best node
+# (mlevolve_runs/<ts>/workspace/best_submission/submission.csv, present because
+# config has no_submission_mode:False) against held-out references — NOT the
+# self-reported stdout number. Writes held_out_score.json. By contract the
+# grader never raises and exits 0, so it cannot abort the manifest write below.
+# Refs live at <data-root>/refs/test_refs.csv (sibling of the symlinked data
+# dir); override with MLEVAL_TASK_REFS_PATH.
+REFS_PATH="${MLEVAL_TASK_REFS_PATH:-$(dirname "$DATA_DIR")/refs/test_refs.csv}"
+python3 -m mleval.grader "$OUT_DIR" --task "$TASK" --refs "$REFS_PATH" 2>&1 | tail -5 || \
+    echo "[entrypoint] grader failed (non-fatal)"
 
 # -------- Manifest -----------------------------------------------------
 python3 <<PYEOF || echo "[entrypoint] manifest write failed (non-fatal)"

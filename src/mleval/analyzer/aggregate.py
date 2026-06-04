@@ -51,7 +51,8 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
     trajectory = _read_jsonl(traj_dir / "trajectory.jsonl")
     state = _read_json(traj_dir / "state.json")
 
-    # Best metric from AIDE's journal (use it as the trajectory's outcome).
+    # Self-reported best metric from the search journal (the agent's own
+    # stdout number — gameable; kept only for drift diagnostics).
     journal_match = list(traj_dir.rglob("journal.json"))
     journal = json.loads(journal_match[0].read_text()) if journal_match else {}
     metrics = [
@@ -60,12 +61,29 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
         if n.get("metric") and isinstance(n["metric"].get("value"), (int, float))
     ]
     if metrics:
-        # Respect maximize flag from any node (they should be uniform).
-        maximize = metrics[0].get("maximize", True)
+        # Respect maximize flag from any node (they should be uniform). Note
+        # .get("maximize", True) is NOT enough: the key can be present-but-None
+        # in the serialized journal, which would select min. Coerce safely.
+        _mx = metrics[0].get("maximize")
+        maximize = _mx if isinstance(_mx, bool) else True
         chooser = max if maximize else min
-        best = chooser(metrics, key=lambda m: m["value"])["value"]
+        self_reported = chooser(metrics, key=lambda m: m["value"])["value"]
     else:
-        best = None
+        self_reported = None
+
+    # Trustworthy outcome: the held-out grader's score (mleval.grader scored
+    # the best node's preserved predictions against held-out references).
+    #   - grader ran + valid     → best_metric = held-out score
+    #   - grader ran + invalid   → best_metric = None (drift correctly scores 0/none)
+    #   - grader never ran (legacy run, no held_out_score.json) → fall back to
+    #     the self-reported number so old aggregations don't all go blank.
+    held = _read_json(traj_dir / "held_out_score.json")
+    if held:
+        held_valid = bool(held.get("valid")) and isinstance(held.get("score"), (int, float))
+        best = held["score"] if held_valid else None
+    else:
+        held_valid = None  # grader did not run
+        best = self_reported
 
     total_in = sum((r["usage"]["input_tokens"] for r in trajectory), 0)
     total_out = sum((r["usage"]["output_tokens"] for r in trajectory), 0)
@@ -83,6 +101,10 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
         "status": manifest.get("result", {}).get("status"),
         "wall_clock_sec": manifest.get("timestamps", {}).get("wall_clock_sec"),
         "best_metric": best,
+        # Drift diagnostics: a large gap between self_reported and a None/low
+        # held-out score is the signature of an off-task trajectory.
+        "self_reported_metric": self_reported,
+        "held_out_valid": held_valid,
         "input_tokens": total_in,
         "output_tokens": total_out,
         "error_nodes": error_nodes,
