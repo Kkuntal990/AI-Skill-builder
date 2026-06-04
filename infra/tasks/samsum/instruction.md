@@ -14,29 +14,21 @@ FIXED. The RECIPE is OPEN — method, library, training schedule, and
 inference strategy are left to the agent (this is what we're evaluating).
 -->
 
-## Hard contract — non-negotiable (read before writing any code)
+## Task specification
 
-These four facts are FIXED. They are not a starting point to adapt from;
-any draft that violates one is wrong by construction, regardless of any
-example code you may have seen elsewhere (including in skills/references).
+The task family, dataset, backbone, metric, and output contract below are
+fixed; the recipe (method, library, training schedule, inference strategy)
+is open — that is what we are evaluating.
 
-1. **Task family** — abstractive dialogue **summarization**: text in →
-   summary text out. This is a **generative / sequence-to-sequence** task
-   on a **causal LM**. It is NOT a classification task.
-   - FORBIDDEN: `AutoModelForSequenceClassification` (or any
-     `*ForSequenceClassification` head), `num_labels=`, label/logit
-     classification, `accuracy_score` / accuracy as the metric.
-   - REQUIRED: load the backbone with `AutoModelForCausalLM` and train it
-     to generate the summary text.
-2. **Dataset** — the ONLY dataset is `knkarthick/samsum`. Do NOT load
-   `imdb`, `sst2`, `glue`, or any other dataset. If your code references
-   any HF slug other than `knkarthick/samsum`, you are off-task — stop.
-   The splits are pre-built; do NOT call `train_test_split`.
-3. **Backbone** — the ONLY model is `Qwen/Qwen2.5-3B-Instruct`.
-4. **Metric & output** — mean **ROUGE-L F1** over the 819 `test`
-   examples. You MUST (a) write a `submission.csv` of per-example
-   predictions (see Output contract) AND (b) print the last stdout line
-   exactly as `Final Validation Score: <float in [0,1]>`.
+1. **Task family** — abstractive dialogue summarization: dialogue text in →
+   summary text out (a generative, text-to-text task).
+2. **Dataset** — `knkarthick/samsum` (splits are pre-built; do not call
+   `train_test_split`).
+3. **Backbone** — `Qwen/Qwen2.5-3B-Instruct`.
+4. **Metric & output** — mean **ROUGE-L F1** over the 819 `test` examples.
+   You MUST (a) write a `submission.csv` of per-example predictions (see
+   Output contract) AND (b) print the last stdout line exactly as
+   `Final Validation Score: <float in [0,1]>`.
 
 ## Task
 
