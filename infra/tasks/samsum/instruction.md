@@ -57,8 +57,10 @@ fine-tuned model on the test split and print ROUGE-L F1.
   - `train` — 14,731 dialogue/summary pairs
   - `validation` — 818 pairs (optional, for training monitoring)
   - `test` — 819 pairs (use for the final ROUGE-L)
-- **Fields**: each example has `dialogue` (multi-turn chat string) and
-  `summary` (short paraphrase).
+- **Fields**: each example has `id` (a string identifier, e.g. `"13611370"`),
+  `dialogue` (multi-turn chat string), and `summary` (short paraphrase).
+  The `id` field is REQUIRED for the submission (see Output contract) — keep it
+  alongside each example through preprocessing/inference; do not drop it.
 
 ## Model
 
@@ -98,11 +100,23 @@ Produce BOTH of the following:
        id,generated_summary
 
    One row for **every** example in the `test` split (all 819), where
-   `id` is the example's `id` field from the dataset and
-   `generated_summary` is your fine-tuned model's generated summary for
-   that test dialogue. Do not leave summaries empty and do not invent
-   ids — the id set must match the `test` split exactly. Save it to
-   `./submission/submission.csv`, creating the directory if needed:
+   `id` is the example's `id` field copied **verbatim** from the dataset
+   (i.e. `str(example["id"])` — an 8-digit-style string like `13611370`)
+   and `generated_summary` is your fine-tuned model's generated summary
+   for that test dialogue.
+
+   ⚠️ The `id` column MUST be the dataset's own `id` values. Do NOT hash
+   the dialogue, renumber, or use the row index as the id — fabricated ids
+   match none of the held-out references and the submission scores **zero**
+   even if the summaries are perfect. Do not leave summaries empty. The id
+   set must equal the `test` split's `id` set exactly. Example rows
+   (format only — generate your own summaries):
+
+       id,generated_summary
+       13611370,Hannah needs Betty's number but Amanda doesn't have it.
+       13611413,Eric and Rob are going to watch a stand-up tonight.
+
+   Save it to `./submission/submission.csv`, creating the directory if needed:
 
        import os
        os.makedirs("submission", exist_ok=True)

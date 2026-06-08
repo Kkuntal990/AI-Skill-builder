@@ -28,8 +28,18 @@ metadata:
     cell: "${CELL}"
     seed: "${SEED}"
 spec:
-  backoffLimit: 0
-  activeDeadlineSeconds: ${ACTIVE_DEADLINE_SECONDS}
+  # >0 so a NODE-level failure (eviction / NotReady / preemption on unreserved
+  # capacity) reschedules instead of permanently failing the trajectory.
+  # spike-018 lost 3 jobs at once when gpu00 went NotReady with backoffLimit:0.
+  # A retry is a clean reseeded redo (MLEvolve doesn't persist the search tree),
+  # so the seed keeps it deterministic.
+  backoffLimit: 2
+  # activeDeadlineSeconds is set at the POD level (template.spec) below, NOT
+  # here. A JOB-level deadline counts from job creation and is NOT reset on
+  # retry — so a late eviction's fresh retry gets deadline-killed before it can
+  # finish (spike-018 with_skill-s0: retry started, DeadlineExceeded ~11 min
+  # later, grader never ran). Per-pod deadline gives each attempt its full
+  # budget; backoffLimit caps the number of attempts.
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
@@ -42,6 +52,10 @@ spec:
         seed: "${SEED}"
     spec:
       restartPolicy: Never
+      # Per-ATTEMPT wall cap — resets on each backoffLimit retry (unlike a
+      # job-level deadline), so an evicted-then-rescheduled pod gets its full
+      # time budget. Also the hard backstop if the watchdog/grader hangs.
+      activeDeadlineSeconds: ${ACTIVE_DEADLINE_SECONDS}
       # 90s grace gives the entrypoint SIGTERM-trap room to write the
       # manifest + run adapter_mlevolve.
       terminationGracePeriodSeconds: 90
@@ -164,13 +178,12 @@ spec:
         nvidia.com/gpu.product: ${GPU_PRODUCT}
 
       tolerations:
-        - key: nautilus.io/reservation
-          operator: Exists
-          effect: NoSchedule
-        - key: nautilus.io/hardware
-          operator: Equal
-          value: large-gpu
-          effect: NoSchedule
+        # Only tolerate taints we're authorized for. Do NOT add
+        # `nautilus.io/reservation` (lets pods poach other groups' reserved
+        # nodes) or `nautilus.io/hardware=large-gpu` (a hardware-class taint we
+        # don't need for a 1-GPU job and aren't entitled to blanket-tolerate).
+        # Per NRP policy you may only tolerate a reservation value if your group
+        # is approved for it. Run on unreserved capacity only.
         - key: nvidia.com/gpu
           operator: Exists
           effect: PreferNoSchedule

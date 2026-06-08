@@ -64,9 +64,11 @@ make k8s-delete-helper
 
 ## Conventions
 
-- **Tolerations** match the reference jupyter-1gpu pod (`nautilus.io/reservation`,
-  `nautilus.io/hardware=large-gpu`, `nvidia.com/gpu` PreferNoSchedule).
-  Adjust if your namespace's reservation tolerations differ.
+- **Tolerations** — only `nvidia.com/gpu` (PreferNoSchedule). Do **not** add
+  `nautilus.io/reservation` or `nautilus.io/hardware=large-gpu`: per NRP policy
+  you may only tolerate a reservation value if your group is approved for it, and
+  a value-less `Exists` toleration poaches other groups' reserved nodes (cluster
+  policy violation). Run on unreserved capacity only.
 - **No namespace in YAML** — every command uses `kubectl -n $K8S_NAMESPACE`.
 - **No image tag in YAML** — every image reference is `${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}`.
 - **Image pull secret**: every pod that pulls our private image sets

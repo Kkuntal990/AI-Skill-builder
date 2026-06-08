@@ -26,6 +26,12 @@ metadata:
     task: dev-helper
 spec:
   restartPolicy: Never
+  # Hard 4h cap so a forgotten helper can't idle a GPU forever. NRP bans
+  # workloads that "don't end by themselves" (sleep infinity) — a bounded
+  # sleep + activeDeadlineSeconds makes this self-terminating and frees the
+  # GPU even if we forget to delete it. Bump if a debug session needs longer,
+  # but still delete the pod the moment you're done.
+  activeDeadlineSeconds: 14400
   # Pull our private ghcr.io image. Secret created via `make k8s-ghcr-pull-secret`.
   imagePullSecrets:
     - name: ghcr-pull
@@ -35,12 +41,13 @@ spec:
       # at apply time (see `make k8s-apply-helper`).
       image: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
       imagePullPolicy: Always
-      # Plain sleep — exec in with `kubectl exec -it ... -- bash` to drive
-      # `python3 /workspace/run_mlevolve.py` interactively, or invoke the
-      # agent's generated code directly to debug task-level failures
-      # without re-launching a Job (which would mean ~5 min image pull
-      # again on a fresh node).
-      command: ["sleep", "infinity"]
+      # Bounded sleep (4h) — exec in with `kubectl exec -it ... -- bash` to
+      # drive `python3 /workspace/run_mlevolve.py` interactively, or invoke the
+      # agent's generated code directly to debug task-level failures without
+      # re-launching a Job (which would mean ~5 min image pull on a fresh node).
+      # NOT `sleep infinity`: that's the NRP-bannable "never ends" pattern and
+      # would pin the GPU idle. Matches activeDeadlineSeconds above.
+      command: ["sleep", "14400"]
 
       resources:
         # NRP admission webhook caps controllerless pods at 32 GiB / 16 CPU.
@@ -126,13 +133,12 @@ spec:
     nvidia.com/gpu.product: ${GPU_PRODUCT}
 
   tolerations:
-    - key: nautilus.io/reservation
-      operator: Exists
-      effect: NoSchedule
-    - key: nautilus.io/hardware
-      operator: Equal
-      value: large-gpu
-      effect: NoSchedule
+    # Only tolerate taints we're authorized for. Do NOT add
+    # `nautilus.io/reservation` (lets pods poach other groups' reserved nodes)
+    # or `nautilus.io/hardware=large-gpu` (a hardware-class taint we don't need
+    # for a 1-GPU pod and aren't entitled to blanket-tolerate). Per NRP policy
+    # you may only tolerate a reservation value if your group is approved for
+    # it. Run on unreserved capacity only.
     - key: nvidia.com/gpu
       operator: Exists
       effect: PreferNoSchedule
