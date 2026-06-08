@@ -1,31 +1,70 @@
-## Goal
+# <Task Name> — task instruction TEMPLATE
 
-<one-paragraph statement of what the agent is asked to do. State the
-input modality, the prediction target, and the success criterion in
-operational terms (e.g., "minimize MAE on the held-out 20% split").>
+> Copy this dir to `infra/tasks/<task>/`, fill the `<...>` placeholders, delete
+> this banner. It encodes the contract checks that, when missing, silently
+> invalidated spike-018 runs (memory: project_task_instruction_authoring_checklist).
+> After editing, SYNC to the PVC (`/results/data/<task>/instruction.md`) before
+> running — trajectory pods read the PVC copy, not the repo/image.
+
+Provenance: <dataset/source + citation>.
+
+## What you must do
+
+Fine-tune the pinned model on the dataset below and produce predictions on the
+`test` split. The **backbone is FIXED**; the recipe (method, library, schedule,
+inference strategy) is OPEN.
+
+## Dataset
+
+- **Slug / loader**: `<datasets.load_dataset("...")>` — splits are pre-built; do
+  NOT make your own split.
+- **Splits**: `train` — <N>; `validation` — <N> (optional); `test` — <N> (final metric).
+- **Fields**: each example has **`id`** (string identifier, e.g. `"<example_id>"`),
+  `<input_field>`, and `<target_field>`.
+  ⚠️ List EVERY field the output contract references — especially `id`. An agent
+  that doesn't see `id` here will fabricate one and score zero (see Output contract).
+
+## Model
+
+- **Backbone**: `<org/model-id>` (<params>, no gating). State it explicitly; the
+  held-out grader does NOT check the model, so a drifted/smaller backbone surfaces
+  only as a bad or invalid submission.
+- HF cache is at `/results/.hf-cache/hf` on the mounted PVC (weights persist
+  across trajectories).
 
 ## Evaluation
 
-Submissions are scored by <metric>. Lower is better. (Or: higher is better,
-maximize=true.) The validation split is the held-out 20% of `train.csv`;
-the agent should print
+- **Metric**: <e.g. mean ROUGE-L F1> over ALL <N> `test` examples. Use `test` only.
+- The **submission file** (not your printed number) is graded independently against
+  held-out references — it is the trajectory's official score.
 
-    Validation <metric>: <value>
+## Output contract
 
-as the last line of its submission script. The agent's judge / metric
-extractor reads this line to assign `metric.value`.
+Produce BOTH:
 
-The final submission CSV must be written to `./working/submission.csv`
-in the agent's working directory with the columns:
+1. **`./submission/submission.csv`** with EXACTLY these columns + header:
 
-    id,prediction
+       id,<prediction_column>
 
-## Data description
+   One row for **every** `test` example (all <N>), where `id` is the dataset's own
+   `id` copied **verbatim** (`str(example["id"])`, e.g. `<example_id>`) and
+   `<prediction_column>` is your model's prediction.
 
-- `train.csv` — N rows. Columns: <list with units / dtype>.
-- `test.csv`  — M rows. Same columns minus the target.
-- `sample_submission.csv` — M rows. Format reference for `submission.csv`.
+   ⚠️ The `id` column MUST be the dataset's `id` values. Do NOT hash, renumber, or
+   use the row index — fabricated ids match none of the held-out references and the
+   submission scores **zero** even if predictions are perfect. Example:
 
-Files are pre-cleaned: no missing values, no duplicates, no leakage of
-labels into features. The agent does not need to perform any data
-download — everything is available under the read-only data directory.
+       id,<prediction_column>
+       <example_id>,<illustrative prediction — generate your own>
+
+   Save with `df.to_csv("submission/submission.csv", index=False)` (create the dir).
+
+2. The very last stdout line, exactly: `Final Validation Score: <float in [0,1]>`
+
+## Resource notes
+
+- Bounded per-run execution limit (shown in the agent's budget line). **Training AND
+  final evaluation must finish within it** — program runtime counts toward it.
+- For expensive autoregressive decoding (LLM/VLM), **batch generation** so the full
+  test set fits in budget.
+- (Harness-enforced: `DataLoader(num_workers=0)` on GPU — don't rely on workers.)

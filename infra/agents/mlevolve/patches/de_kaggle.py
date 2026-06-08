@@ -42,6 +42,29 @@ AGENTS = ROOT / "agents"
 
 NEUTRAL_PERSONA = "You are an expert ML engineer implementing exactly the task described below"
 
+# GPU fork-after-CUDA safety preamble, prepended to EVERY executed node
+# (engine/executor.py). Forces DataLoader(num_workers=0): num_workers>0 forks
+# worker processes AFTER the model has initialized CUDA (device_map="auto" /
+# .to("cuda")). fork-after-CUDA is not safe and SIGSEGVs (exit 139), which kills
+# the whole trajectory — spike-018 lost both reruns this way, x3 attempts each.
+# The subprocess boundary doesn't contain it on a shared single GPU and we have
+# no container-in-container isolation on Nautilus, so we neutralize the trigger
+# at execution time. Wrapped in try/except so non-torch tasks are unaffected.
+# The \n are written literally into executor.py (they become real newlines in
+# the executed node string). Applies to BOTH cells -> no A/B confound.
+_GPU_SAFETY = (
+    "try:\\n"
+    "    import torch.utils.data as _mtud\\n"
+    "    _mo = _mtud.DataLoader.__init__\\n"
+    "    def _mw(s, *a, **k):\\n"
+    "        k['num_workers'] = 0\\n"
+    "        k.pop('persistent_workers', None); k.pop('prefetch_factor', None)\\n"
+    "        return _mo(s, *a, **k)\\n"
+    "    _mtud.DataLoader.__init__ = _mw\\n"
+    "except Exception:\\n"
+    "    pass\\n"
+)
+
 # (path-relative-to-ROOT, old, new, required, min_count)
 RULES = [
     # --- recurring competition persona across draft/improve/evolution/fusion/
@@ -98,6 +121,21 @@ RULES = [
      "evaluation must finish within it; program runtime counts toward it)", True, 1),
     ("agents/prompts/validation_template_prompts.py", "9 hours available",
      "bounded by the per-run execution time limit (training + evaluation must finish within it)", True, 1),
+    # --- fork-after-CUDA segfault, prompt side ---
+    # Upstream impl_guideline tells the agent "Use DataLoader with num_workers>=2
+    # for speed" — inherited from AIDE's CPU-tabular origin. On our single-GPU
+    # task that induces the fork-after-CUDA SIGSEGV (exit 139) that killed
+    # spike-018's reruns. Steer to the safe pattern (the harness also enforces
+    # num_workers=0 via _GPU_SAFETY below, but don't actively recommend the crash).
+    ("agents/prompts/impl_guideline.py", "Use DataLoader with num_workers>=2 for speed",
+     "Use DataLoader(num_workers=0) when the model is on GPU (num_workers>0 forks "
+     "after CUDA init and crashes the run; the harness enforces num_workers=0)", True, 1),
+    # --- fork-after-CUDA segfault, execution side (the real guard) ---
+    # Prepend _GPU_SAFETY to every executed node so DataLoader cannot fork
+    # workers after CUDA init regardless of what the agent wrote. See the
+    # _GPU_SAFETY comment above. One call site: code = pre_code + code.
+    ("engine/executor.py", "code = pre_code + code",
+     'code = pre_code + "' + _GPU_SAFETY + '" + code', True, 1),
     # --- optional leftovers (best-effort; don't fail build if upstream shifts) ---
     ("agents/coder/stepwise_coder.py", "competition-winning Python code", "high-quality Python code", False, 0),
     ("agents/improve_agent.py", "As a Grandmaster, make MEANINGFUL improvements that boost leaderboard performance",
