@@ -35,6 +35,10 @@ of the final numeric answer.
   answer ends with a final line `#### <number>` — the gold numeric
   answer is the token after `#### `. Strip any thousands-separator
   commas before comparing.
+- **No `id` field**: GSM8K examples have NO identifier. For the submission,
+  the `id` of an example is its **0-based row index in the `test` split**
+  (i.e. `enumerate` order from `load_dataset(...)["test"]`). This order is
+  fixed/deterministic — see Output contract. Do NOT shuffle the test split.
 
 ## Model
 
@@ -79,30 +83,35 @@ the LAST `#### ` it emits.
 
 ## Output contract
 
-<!-- Contract note: like SAMSum, this task uses an independent held-out
-     grader. The grader entry for gsm8k (exact-match scorer) + the
-     refs/test_refs.csv generator are PENDING — see mleval.grader._TASKS and
-     infra/tasks/samsum for the reference implementation. -->
-
 Produce BOTH of the following:
 
-1. **A submission file of per-example predictions** with exactly two
+1. **A submission file of per-example predictions** with EXACTLY these two
    columns and a header row:
 
        id,prediction
 
-   One row for **every** example in the test split, where `id` is the
-   example's id and `prediction` is your model's final integer answer.
-   The id set must match the test split exactly. Save it to
-   `./submission/submission.csv`, creating the directory if needed:
+   One row for **every** one of the 1,319 `test` examples, where `id` is the
+   example's **0-based row index in the `test` split** (the `enumerate` order
+   of `load_dataset("openai/gsm8k", "main")["test"]`, as a string: `"0"`,
+   `"1"`, …, `"1318"`) and `prediction` is your model's final integer answer.
 
-       import os
-       os.makedirs("submission", exist_ok=True)
-       df.to_csv("submission/submission.csv", index=False)
+   ⚠️ The `id` column MUST be these row indices. Do NOT hash the question,
+   shuffle the test split, or use any other key — the grader keys on the
+   test-split index, so mismatched ids match none of the held-out gold answers
+   and the submission scores **zero** even if the answers are right. The id set
+   must equal `{"0", …, "1318"}` exactly. Example rows (format only — generate
+   your own predictions):
 
-   This file is graded independently (exact-match accuracy) against
-   held-out gold answers; it — not your printed number — is the
-   trajectory's official score.
+       id,prediction
+       0,18
+       1,3
+
+   Save with `os.makedirs("submission", exist_ok=True)` then
+   `df.to_csv("submission/submission.csv", index=False)`.
+
+   This file is graded independently (exact-match accuracy) against held-out
+   gold answers; it — not your printed number — is the trajectory's official
+   score.
 
 2. The very last line of stdout, exactly:
 

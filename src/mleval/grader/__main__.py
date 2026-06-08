@@ -23,16 +23,34 @@ import json
 import sys
 from pathlib import Path
 
+from .exact_match import exact_match
 from .grade import GradeResult, grade_predictions
+from .rouge import rouge_l_f
+
+# Per-example scorers keyed by metric name. grade_predictions averages the
+# scorer over the reference id-set; the default (None) is ROUGE-L.
+_SCORERS = {
+    "rougeL_f": rouge_l_f,
+    "exact_match": exact_match,
+}
 
 # Per-task grading config. Each task names its prediction/reference columns
-# and the metric. GSM8K (exact-match) and BoolQ (accuracy) become siblings.
+# and the metric. BoolQ (accuracy) becomes a sibling once its refs land.
 _TASKS: dict[str, dict[str, str]] = {
     "samsum": {
         "id_col": "id",
         "pred_col": "generated_summary",
         "ref_col": "reference_summary",
         "metric": "rougeL_f",
+    },
+    # GSM8K has NO native id field — the submission id is the 0-based row index
+    # of the example in the deterministic `test` split (see instruction.md +
+    # scripts/make_grading_data.py, which key refs the same way).
+    "gsm8k": {
+        "id_col": "id",
+        "pred_col": "prediction",
+        "ref_col": "reference_answer",
+        "metric": "exact_match",
     },
 }
 
@@ -108,6 +126,7 @@ def run(
             pred_col=cfg["pred_col"],
             ref_col=cfg["ref_col"],
             metric=cfg["metric"],
+            scorer=_SCORERS.get(cfg["metric"]),
         )
         payload = {
             **base,

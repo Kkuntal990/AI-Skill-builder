@@ -28,7 +28,15 @@ absolute comparability to published numbers is ever required.
 """
 from __future__ import annotations
 
+from .exact_match import exact_match, to_number
 from .grade import GradeResult, grade_predictions
 from .rouge import rouge_l_f, tokenize
 
-__all__ = ["GradeResult", "grade_predictions", "rouge_l_f", "tokenize"]
+__all__ = [
+    "GradeResult",
+    "grade_predictions",
+    "rouge_l_f",
+    "tokenize",
+    "exact_match",
+    "to_number",
+]

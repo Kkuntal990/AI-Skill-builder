@@ -12,6 +12,7 @@ heavy dependency and runs anywhere.
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -80,6 +81,7 @@ def grade_predictions(
     pred_col: str = "generated_summary",
     ref_col: str = "reference_summary",
     metric: str = "rougeL_f",
+    scorer: Callable[[str, str], float] | None = None,
     max_id_examples: int = 5,
 ) -> GradeResult:
     """Grade ``predictions_path`` against ``references_path`` with ROUGE-L F1.
@@ -139,9 +141,10 @@ def grade_predictions(
             errors=errors,
         )
 
+    score_fn = scorer or rouge_l_f
     total = 0.0
     for rid, ref_text in refs.items():
-        total += rouge_l_f(preds.get(rid, ""), ref_text)
+        total += score_fn(preds.get(rid, ""), ref_text)
     score = total / n_expected if n_expected else 0.0
 
     return GradeResult(
