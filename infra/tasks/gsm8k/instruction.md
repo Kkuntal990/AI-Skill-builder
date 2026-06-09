@@ -43,6 +43,12 @@ of the final numeric answer.
 ## Model
 
 - **Backbone**: `Qwen/Qwen2.5-3B-Instruct` (3.1 B params, no gating).
+- Use **exactly this** model — a decoder-only causal LM loaded with
+  `AutoModelForCausalLM`. Do NOT substitute a smaller model, a
+  base/non-instruct variant, or an encoder (e.g. BERT/DistilBERT): the task
+  requires free-form chain-of-thought *generation*, and an encoder cannot
+  produce it. The grader does not check the model, so a wrong backbone
+  surfaces only as a bad/invalid submission.
 - The HF cache is at `/results/.hf-cache/hf` on the mounted PVC, so
   the model weights persist across trajectories — only the first
   trajectory pays the download cost.
@@ -136,3 +142,18 @@ Produce BOTH of the following:
    `[0.0, 1.0]`. This is your self-check and the search signal.
 
 Save the runnable script as `runfile.py` in the working directory.
+
+## Resource notes
+
+- Each run has a fixed per-execution wall-clock cap (do NOT assume hours).
+  **Both** the fine-tuning AND the full 1,319-example evaluation must finish
+  within it — budget your epochs/steps accordingly rather than hardcoding a
+  large schedule.
+- Generating 1,319 multi-step solutions is the dominant cost. **Batch the
+  generation** (a sizeable `batch_size`, left-padding, a tight
+  `max_new_tokens` that still fits the reasoning + `#### ` line) — unbatched
+  per-example decode will not finish in time. Use a parameter-efficient method
+  (e.g. LoRA) to keep training within the budget.
+- Save your `submission/submission.csv` as soon as a full evaluation pass
+  completes, so a later step that runs out of time still leaves a gradable
+  artifact.
