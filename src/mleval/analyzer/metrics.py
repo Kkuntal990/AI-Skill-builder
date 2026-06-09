@@ -34,6 +34,7 @@ import ast
 import csv
 import json
 import math
+import os
 import re
 import statistics
 from collections import Counter
@@ -71,10 +72,25 @@ def _read_jsonl(p: Path) -> list[dict]:
 
 
 def _find_journal(traj_dir: Path) -> dict | None:
-    matches = list(traj_dir.rglob("journal.json"))
-    if not matches:
-        return None
-    return _read_json(matches[0])
+    """Most-complete journal under the trajectory tree.
+
+    A trajectory dir can hold several ``mlevolve_runs/*/logs/journal.json``
+    from retried attempts; some are empty or truncated. Parse each defensively
+    and return the valid one with the most nodes (the completed attempt).
+    """
+    best: dict | None = None
+    best_n = -1
+    for m in traj_dir.rglob("journal.json"):
+        try:
+            j = json.loads(m.read_text())
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+        if not isinstance(j, dict):
+            continue
+        n = len(j.get("nodes") or [])
+        if n > best_n:
+            best, best_n = j, n
+    return best
 
 
 def _percentile(values: list[float], pct: float) -> float | None:
@@ -204,11 +220,16 @@ _HALLUCINATION_PATTERNS = re.compile(
 )
 
 
+_HALLUCINATION_EXC = {"ImportError", "ModuleNotFoundError", "NameError", "AttributeError"}
+
+
 def hallucination_rate(traj_dir: Path) -> dict[str, float | int | None]:
-    """Fraction of error records mentioning import/name/attribute errors.
+    """Fraction of buggy nodes whose exception is an import/name/attribute error.
 
     Proxy for the agent inventing modules, symbols, or attributes that don't
-    exist. Computed over trajectory.jsonl records that have any error.
+    exist. Computed over schema-1.0 trajectory.jsonl records: a node counts as
+    "errored" when ``is_buggy`` is true, and as "hallucinated" when its
+    ``exc_type`` is one of {Import,ModuleNotFound,Name,Attribute}Error.
     """
     traj = _read_jsonl(traj_dir / "trajectory.jsonl")
     if not traj:
@@ -216,11 +237,10 @@ def hallucination_rate(traj_dir: Path) -> dict[str, float | int | None]:
     errored = 0
     hallucinated = 0
     for r in traj:
-        errs = r.get("output", {}).get("errors") or []
-        if not errs:
+        if not r.get("is_buggy"):
             continue
         errored += 1
-        if any(_HALLUCINATION_PATTERNS.search(e) for e in errs):
+        if (r.get("exc_type") or "") in _HALLUCINATION_EXC:
             hallucinated += 1
     rate = hallucinated / errored if errored else None
     return {"rate": rate, "hallucinated": hallucinated, "errored": errored}
@@ -270,14 +290,21 @@ def convergence_curve(traj_dir: Path) -> dict[str, Any] | None:
 def time_to_first_valid_submission(
     traj_dir: Path,
     required_columns: tuple[str, ...] = ("Id",),
-) -> dict[str, int | None]:
+) -> dict[str, Any]:
     """Earliest op_NNN step whose snapshot has a parseable submission.csv.
 
-    Looks under ``working_dirs/op_*/working/submission.csv`` and returns the
-    step index of the first CSV whose header contains every column in
-    ``required_columns``. Task-agnostic on purpose; per-task callers can
-    override the column set.
+    Primary path (universal, MLEvolve-native): the first schema-1.0
+    trajectory.jsonl node with ``is_valid == True`` — MLEvolve marks a node
+    valid only once it produced a parseable submission + metric, so this is
+    the "first valid submission" step without needing working-dir snapshots.
+
+    Fallback (AIDE-era): scan ``working_dirs/op_*/**/submission.csv`` for the
+    first CSV whose header contains every column in ``required_columns``.
     """
+    for rec in _read_jsonl(traj_dir / "trajectory.jsonl"):
+        if rec.get("is_valid") is True:
+            return {"step": rec.get("step"), "submission_path": None,
+                    "source": "trajectory.is_valid"}
     snapshots = sorted((traj_dir / "working_dirs").glob("op_*"))
     for snap in snapshots:
         try:
@@ -298,19 +325,34 @@ def time_to_first_valid_submission(
 # ---- 13. Skill-API adoption rate ----------------------------------------
 
 
-_PY_FENCE = re.compile(r"```(?:python|py)?\n(.*?)```", re.DOTALL)
+# Anchor on an EXPLICIT python language tag. The old bare-``` form treated
+# every fenced block as python, so interleaved shell / directory-tree / output
+# fences (e.g. in SKILL.md) shifted the global ```-pairing and silently
+# collapsed real python blocks — extracting zero APIs. Requiring ```python /
+# ```py pairs each opening with its own close and ignores non-python fences.
+_PY_FENCE = re.compile(r"```[ \t]*(?:python|py)[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 
 def _extract_skill_apis(skill_md_path: Path) -> tuple[set[str], set[str]]:
-    """Parse SKILL.md, AST-walk every python code fence, return (imports, calls).
+    """Parse a skill, AST-walk every python code fence, return (imports, calls).
 
-    Anything inside ``` python … ``` (or ``` … ```) is treated as code. Bad
-    blocks (unparseable) are silently skipped — SKILL.md often has pseudo-code
-    or fragments. Returns empty sets if the file is absent.
+    Reads ``SKILL.md`` AND every ``references/*.md`` beside it: progressive-
+    disclosure skills (e.g. peft-tuning) keep their concrete code examples in
+    ``references/`` and leave SKILL.md mostly prose, so reading only SKILL.md
+    extracts zero APIs and makes adoption inert. Anything inside ``` python …
+    ``` (or ``` … ```) is treated as code; unparseable blocks are skipped
+    (SKILL.md often has pseudo-code). Returns empty sets if nothing is found.
     """
     if not skill_md_path.is_file():
         return set(), set()
     text = skill_md_path.read_text()
+    ref_dir = skill_md_path.parent / "references"
+    if ref_dir.is_dir():
+        for ref in sorted(ref_dir.glob("*.md")):
+            try:
+                text += "\n" + ref.read_text()
+            except OSError:
+                continue
     imports: set[str] = set()
     calls: set[str] = set()
     for block in _PY_FENCE.findall(text):
@@ -373,11 +415,23 @@ def skill_api_adoption(traj_dir: Path, repo_root: Path) -> dict[str, Any] | None
     cell = manifest.get("cell", {}) or {}
     if cell.get("name") != "with_skill":
         return None
+    # Resolve which skill the cell injected. Preference order:
+    #   1. manifest.cell.skill_path (written by the entrypoint going forward),
+    #   2. $MLEVAL_SKILL_DIR_NAME (back-fill override for runs whose manifest
+    #      predates skill_path — e.g. spike-018; set it to "peft-tuning").
     skill_path = cell.get("skill_path") or ""
-    if not skill_path:
-        return None
-    # In-pod path → repo-local mirror by basename of the parent dir.
-    skill_dir_name = Path(skill_path).parent.name
+    if skill_path:
+        skill_dir_name = Path(skill_path).parent.name
+    else:
+        skill_dir_name = os.environ.get("MLEVAL_SKILL_DIR_NAME", "")
+    if not skill_dir_name:
+        return {
+            "adoption_rate": None,
+            "steps_with_code": 0,
+            "steps_adopting": 0,
+            "skill_md_resolved": None,
+            "reason": "skill_path_missing (no manifest.cell.skill_path, no MLEVAL_SKILL_DIR_NAME)",
+        }
     local_skill_md = repo_root / "infra" / "skills" / skill_dir_name / "SKILL.md"
     skill_imports, skill_calls = _extract_skill_apis(local_skill_md)
     if not skill_imports and not skill_calls:
@@ -388,14 +442,24 @@ def skill_api_adoption(traj_dir: Path, repo_root: Path) -> dict[str, Any] | None
             "skill_md_resolved": str(local_skill_md) if local_skill_md.is_file() else None,
             "reason": "skill_md_missing_or_no_code_blocks",
         }
+    # Prefer the extracted per-step code files; fall back to the inline `code`
+    # field on each schema-1.0 trajectory.jsonl record when the code/ dir was
+    # not materialised by the entrypoint (the code is identical either way).
+    code_texts: list[str] = []
     code_files = sorted((traj_dir / "code").glob("op_*.py"))
-    steps_with_code = 0
-    steps_adopting = 0
     for cf in code_files:
         try:
-            code_text = cf.read_text()
+            code_texts.append(cf.read_text())
         except OSError:
             continue
+    if not code_texts:
+        code_texts = [
+            r.get("code") or ""
+            for r in _read_jsonl(traj_dir / "trajectory.jsonl")
+        ]
+    steps_with_code = 0
+    steps_adopting = 0
+    for code_text in code_texts:
         if not code_text.strip():
             continue
         steps_with_code += 1
@@ -437,8 +501,14 @@ def cost_normalized_lift(
     }
 
 
-def stage_chi_square(summaries: list[dict]) -> dict[str, float | int | None]:
-    """χ² test of stage_counts distribution between with_skill and without_skill.
+def stage_chi_square(
+    summaries: list[dict], counts_key: str = "sub_stage_counts"
+) -> dict[str, float | int | None]:
+    """χ² test of stage-activity distribution between with_skill and without_skill.
+
+    ``counts_key`` selects which per-trajectory distribution to test —
+    ``sub_stage_counts`` (the 16 pipeline sub-stages, the L2a granularity the
+    Stage-2 plan intends) by default, or ``stage_counts`` (the 5 MCGS stages).
 
     Stdlib-only, no scipy. Returns chi2 statistic, dof, and a rough p-value
     approximation via the survival function of the chi-square distribution.
@@ -448,7 +518,7 @@ def stage_chi_square(summaries: list[dict]) -> dict[str, float | int | None]:
     for s in summaries:
         cell = s.get("cell")
         if cell in by_cell:
-            for stage, n in (s.get("stage_counts") or {}).items():
+            for stage, n in (s.get(counts_key) or {}).items():
                 by_cell[cell][stage] += n
     stages = sorted(set(by_cell["with_skill"]) | set(by_cell["without_skill"]))
     if not stages:
@@ -474,6 +544,7 @@ def stage_chi_square(summaries: list[dict]) -> dict[str, float | int | None]:
         "dof": dof,
         "p_value_approx": _chi2_sf(chi2, dof) if dof > 0 else None,
         "n_stages": len(stages),
+        "counts_key": counts_key,
         "cells_dropped_zero_expected": dropped,
     }
 

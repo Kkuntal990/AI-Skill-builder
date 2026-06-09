@@ -33,6 +33,14 @@ TRAJECTORY_ID="${MLEVAL_TRAJECTORY_ID:?MLEVAL_TRAJECTORY_ID required}"
 RUN_ID="${MLEVAL_RUN_ID:?MLEVAL_RUN_ID required}"
 INSTRUCTION_PATH="${MLEVAL_TASK_INSTRUCTION_PATH:?MLEVAL_TASK_INSTRUCTION_PATH required}"
 DATA_DIR="${MLEVAL_TASK_DATA_DIR:?MLEVAL_TASK_DATA_DIR required}"
+
+# References id-set, exported so BOTH the in-run format validator the agent can
+# call (mleval.grader.validate — MLE-Bench's validate_submission affordance,
+# format-only, no score) and the post-run held-out grader use the same path.
+# Node subprocesses inherit this env, so the agent can run:
+#   python -m mleval.grader.validate submission/submission.csv
+export TASK
+export MLEVAL_TASK_REFS_PATH="${MLEVAL_TASK_REFS_PATH:-$(dirname "$DATA_DIR")/refs/test_refs.csv}"
 # Required even though config.yaml has a default — empty model name silently
 # breaks MLEvolve's per-stage dispatch. Caught here, not after a 5-min image
 # pull and a wasted run.
@@ -128,6 +136,9 @@ echo "ts_unix,pgrp_rss_kb,pod_mem_used_kb,gpu_util_pct,gpu_mem_used_mib" > "$SAM
 INNER_LOG="$OUT_DIR/agent_logs/mlevolve_stdout.log"
 cd /workspace/mlevolve
 
+# Trajectory wall-clock start, stamped into the manifest below.
+RUN_START_EPOCH=$(date +%s)
+
 # setsid gives the agent tree its own session for clean killpg cleanup
 # (MLEvolve uses subprocess.Popen per step, but agent itself still needs
 # its own session so the entrypoint can signal-group it on SIGTERM).
@@ -217,6 +228,10 @@ python3 -m mleval.analyzer.adapter_mlevolve "$OUT_DIR" 2>&1 | tail -10 || \
     echo "[entrypoint] adapter_mlevolve failed; trajectory.jsonl absent"
 python3 -m mleval.analyzer.stage_classifier "$OUT_DIR" 2>&1 | tail -5 || \
     echo "[entrypoint] stage_classifier failed (non-fatal)"
+# State predicates → state.json (generic + per-task next to instruction.md).
+# Without this the analyzer's predicate pass-rates are blank.
+python3 -m mleval.analyzer.state_predicates "$OUT_DIR" 2>&1 | tail -3 || \
+    echo "[entrypoint] state_predicates failed (non-fatal)"
 
 # -------- Held-out grader (trustworthy A/B metric) ---------------------
 # Scores the predictions MLEvolve preserved for the best node
@@ -226,7 +241,7 @@ python3 -m mleval.analyzer.stage_classifier "$OUT_DIR" 2>&1 | tail -5 || \
 # grader never raises and exits 0, so it cannot abort the manifest write below.
 # Refs live at <data-root>/refs/test_refs.csv (sibling of the symlinked data
 # dir); override with MLEVAL_TASK_REFS_PATH.
-REFS_PATH="${MLEVAL_TASK_REFS_PATH:-$(dirname "$DATA_DIR")/refs/test_refs.csv}"
+REFS_PATH="$MLEVAL_TASK_REFS_PATH"  # exported above; same id-set the validator used
 python3 -m mleval.grader "$OUT_DIR" --task "$TASK" --refs "$REFS_PATH" 2>&1 | tail -5 || \
     echo "[entrypoint] grader failed (non-fatal)"
 
@@ -234,12 +249,20 @@ python3 -m mleval.grader "$OUT_DIR" --task "$TASK" --refs "$REFS_PATH" 2>&1 | ta
 python3 <<PYEOF || echo "[entrypoint] manifest write failed (non-fatal)"
 import json, os, socket, time
 out = os.environ['MLEVAL_OUTPUT_DIR']
+started = $RUN_START_EPOCH
+now = time.time()
 m = {
     'schema_version': '1.0',
     'run_id': os.environ['MLEVAL_RUN_ID'],
     'trajectory_id': os.environ['MLEVAL_TRAJECTORY_ID'],
     'task': {'name': os.environ['TASK']},
-    'cell': {'name': os.environ['CELL']},
+    'cell': {
+        'name': os.environ['CELL'],
+        # skill_path lets the analyzer resolve which skill was injected (for
+        # skill_api_adoption); empty for without_skill / library-routing mode.
+        'skill_path': os.environ.get('MLEVAL_SKILL_PATH', ''),
+        'skill_library': os.environ.get('MLEVAL_SKILL_LIBRARY', ''),
+    },
     'seed': int(os.environ['SEED']),
     'agent': {
         'name': 'mlevolve',
@@ -247,7 +270,11 @@ m = {
         'llm_model': os.environ['MLEVAL_LLM_MODEL'],
     },
     'pod': {'hostname': socket.gethostname(), 'node': os.environ.get('KUBE_NODE_NAME', 'unknown')},
-    'timestamps': {'ended_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())},
+    'timestamps': {
+        'started_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(started)),
+        'ended_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
+        'wall_clock_sec': int(now - started),
+    },
     'result': {'exit_code': $INNER_EXIT, 'status': 'completed' if $INNER_EXIT == 0 else 'crashed'},
 }
 with open(os.path.join(out, 'manifest.json'), 'w') as f:

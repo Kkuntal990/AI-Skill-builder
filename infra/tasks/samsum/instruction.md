@@ -125,6 +125,21 @@ Produce BOTH of the following:
    This file is graded independently against held-out reference summaries;
    it — not your printed number — is the trajectory's official score.
 
+   ✅ **Validate the format before you finish.** A checker is provided that
+   confirms your `submission.csv` is well-formed (correct `id,generated_summary`
+   columns over the exact expected id-set). Run it at the end of your script and
+   make sure it prints `VALID`:
+
+       import subprocess
+       print(subprocess.run(
+           ["python", "-m", "mleval.grader.validate", "submission/submission.csv"],
+           capture_output=True, text=True).stdout)
+
+   It checks **format only and does NOT report your score** — but a submission
+   it marks `INVALID` (wrong columns, hashed/extra/missing ids, duplicates)
+   scores **zero** when graded, no matter how good the summaries are. If it
+   prints `INVALID`, fix the reported issue before finishing.
+
 2. The very last line of stdout, exactly:
 
        Final Validation Score: <float>

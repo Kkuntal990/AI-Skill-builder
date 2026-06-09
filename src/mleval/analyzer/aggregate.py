@@ -28,6 +28,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from . import metrics as _metrics
+from . import stage_metrics as _stage_metrics
+from . import state_predicates as _state_predicates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -49,12 +51,21 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
     if not manifest:
         return None
     trajectory = _read_jsonl(traj_dir / "trajectory.jsonl")
+    # Prefer the entrypoint-written state.json; if absent (the MLEvolve
+    # entrypoint did not run state_predicates), compute the generic predicates
+    # inline from the journal/artifacts so predicate pass-rates aren't blank.
     state = _read_json(traj_dir / "state.json")
+    if not state:
+        try:
+            state = _state_predicates.evaluate(traj_dir)
+        except Exception:
+            state = {}
 
     # Self-reported best metric from the search journal (the agent's own
-    # stdout number — gameable; kept only for drift diagnostics).
-    journal_match = list(traj_dir.rglob("journal.json"))
-    journal = json.loads(journal_match[0].read_text()) if journal_match else {}
+    # stdout number — gameable; kept only for drift diagnostics). Reuse the
+    # defensive picker: a trajectory may hold several journals from retried
+    # attempts, some empty/truncated.
+    journal = _metrics._find_journal(traj_dir) or {}
     metrics = [
         n["metric"]
         for n in journal.get("nodes", [])
@@ -85,13 +96,32 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
         held_valid = None  # grader did not run
         best = self_reported
 
-    total_in = sum((r["usage"]["input_tokens"] for r in trajectory), 0)
-    total_out = sum((r["usage"]["output_tokens"] for r in trajectory), 0)
-    error_nodes = sum(1 for r in trajectory if r.get("output", {}).get("errors"))
+    # trajectory.jsonl is the adapter's schema-versioned record (schema 1.0):
+    # per-node token totals are flat fields, "buggy" replaces the old
+    # output.errors list, and "stage" is the flat MCGS stage string.
+    total_in = sum((r.get("llm_total_in_tokens") or 0) for r in trajectory)
+    total_out = sum((r.get("llm_total_out_tokens") or 0) for r in trajectory)
+    error_nodes = sum(1 for r in trajectory if r.get("is_buggy"))
 
+    # Two granularities of stage activity:
+    #   stage_counts     — the 5 MCGS stages (root/draft/debug/improve/evolution)
+    #   sub_stage_counts — the 16 pipeline sub-stages from the multi-label
+    #                      classifier (stage_classifier.all_sub_stages). This is
+    #                      the L2a granularity the Stage-2 plan reports on, and
+    #                      what stage_chi_square tests by default.
     stage_counts: Counter[str] = Counter()
+    sub_stage_counts: Counter[str] = Counter()
     for r in trajectory:
-        stage_counts[r["stage"]["sub_stage"]] += 1
+        stage = r.get("stage")
+        if stage:
+            stage_counts[stage] += 1
+        for sub in (r.get("stage_classifier") or {}).get("all_sub_stages") or []:
+            sub_stage_counts[sub] += 1
+
+    try:
+        per_sub_stage = _stage_metrics.stage_metrics(traj_dir)
+    except Exception:
+        per_sub_stage = {}
 
     derived = _metrics.per_trajectory(traj_dir, REPO_ROOT)
     return {
@@ -109,6 +139,8 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
         "output_tokens": total_out,
         "error_nodes": error_nodes,
         "stage_counts": dict(stage_counts),
+        "sub_stage_counts": dict(sub_stage_counts),
+        "stage_metrics": per_sub_stage,
         "predicates_passed": sum(1 for v in state.values() if v is True),
         "predicates_total": sum(1 for v in state.values() if isinstance(v, bool)),
         # Derived metrics (see mleval.analyzer.metrics for definitions)
@@ -192,7 +224,8 @@ def write_markdown(report: dict, out: Path) -> None:
         "",
         "## L2a stage-distribution shift",
         f"- χ²={_fmt(chi.get('chi2'))}  dof={_fmt(chi.get('dof'))}  "
-        f"p≈{_fmt(chi.get('p_value_approx'))}  n_stages={_fmt(chi.get('n_stages'))}",
+        f"p≈{_fmt(chi.get('p_value_approx'))}  n_stages={_fmt(chi.get('n_stages'))}  "
+        f"(over `{chi.get('counts_key', 'sub_stage_counts')}`)",
         "",
         "## Per-trajectory — outcome + cost",
         "",
@@ -270,7 +303,63 @@ def write_markdown(report: dict, out: Path) -> None:
         direction = "↑" if conv.get("maximize") else "↓"
         lines.append(f"- **{s['cell']} s{s['seed']}** ({direction} better): {pairs}")
 
+    _write_substage_section(report, lines)
+
     out.write_text("\n".join(lines) + "\n")
+
+
+def _write_substage_section(report: dict, lines: list[str]) -> None:
+    """L2a per-sub-stage decomposition: clean-reach · rework · failure-modes.
+
+    Uses the multi-label classifier's ``all_sub_stages``; reachability/rework/
+    failure-modes attribute cleanly even though MLEvolve's monolithic
+    full-pipeline nodes touch many sub-stages at once (the co-location
+    confound that blocks per-stage time/token attribution). When exactly one
+    with_skill and one without_skill trajectory are present, emit a paired
+    A/B table; otherwise one block per trajectory.
+    """
+    sm = _stage_metrics
+    trajs = report["trajectories"]
+    withs = [s for s in trajs if s["cell"] == "with_skill" and s.get("stage_metrics")]
+    withouts = [s for s in trajs if s["cell"] == "without_skill" and s.get("stage_metrics")]
+
+    lines += ["", "## L2a per-sub-stage — clean-reach · rework · failure-modes", ""]
+
+    if len(withs) == 1 and len(withouts) == 1:
+        mw, mn = withs[0]["stage_metrics"], withouts[0]["stage_metrics"]
+        subs = sm._all_substages(mw, mn)
+        lines += [
+            f"Paired: with_skill s{withs[0]['seed']} vs without_skill s{withouts[0]['seed']}.",
+            "", "### clean-reach (clean nodes / nodes touching stage)", "",
+            "| Sub-stage | Label | with_skill | without_skill |", "|---|---|---|---|",
+        ]
+        for s in subs:
+            lines.append(f"| {s} | {sm._LABELS.get(s, '?')} | "
+                         f"{sm._fmt_reach(mw.get(s))} | {sm._fmt_reach(mn.get(s))} |")
+        lines += ["", "### rework (re-attempts beyond first = touches − 1)", "",
+                  "| Sub-stage | Label | with_skill | without_skill |", "|---|---|---|---|"]
+        for s in subs:
+            rw_w = mw.get(s, {}).get("rework", "—")
+            rw_n = mn.get(s, {}).get("rework", "—")
+            lines.append(f"| {s} | {sm._LABELS.get(s, '?')} | {rw_w} | {rw_n} |")
+        lines += ["", "### failure modes (exc_type over buggy nodes touching stage)", "",
+                  "| Sub-stage | Label | with_skill | without_skill |", "|---|---|---|---|"]
+        for s in subs:
+            lines.append(f"| {s} | {sm._LABELS.get(s, '?')} | "
+                         f"{sm._fmt_modes(mw.get(s))} | {sm._fmt_modes(mn.get(s))} |")
+    else:
+        for s in trajs:
+            m = s.get("stage_metrics") or {}
+            if not m:
+                continue
+            lines += [f"### {s['cell']} s{s['seed']}", "",
+                      "| Sub-stage | Label | clean-reach | rework | failure modes |",
+                      "|---|---|---|---|---|"]
+            for sub in sm._all_substages(m):
+                a = m.get(sub)
+                lines.append(f"| {sub} | {sm._LABELS.get(sub, '?')} | {sm._fmt_reach(a)} "
+                             f"| {a['rework'] if a else '—'} | {sm._fmt_modes(a)} |")
+            lines.append("")
 
 
 def main(argv: list[str] | None = None) -> int:

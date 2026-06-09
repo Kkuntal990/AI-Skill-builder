@@ -31,6 +31,7 @@ from __future__ import annotations
 from .exact_match import exact_match, to_number
 from .grade import GradeResult, grade_predictions
 from .rouge import rouge_l_f, tokenize
+from .validate import validate_format
 
 __all__ = [
     "GradeResult",
@@ -39,4 +40,5 @@ __all__ = [
     "tokenize",
     "exact_match",
     "to_number",
+    "validate_format",
 ]

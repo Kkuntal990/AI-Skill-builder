@@ -59,6 +59,19 @@ Produce BOTH:
 
    Save with `df.to_csv("submission/submission.csv", index=False)` (create the dir).
 
+   ✅ **Validate the format before you finish.** A checker confirms your file is
+   well-formed (correct columns over the exact expected id-set) — run it at the
+   end and make sure it prints `VALID`:
+
+       import subprocess
+       print(subprocess.run(
+           ["python", "-m", "mleval.grader.validate", "submission/submission.csv"],
+           capture_output=True, text=True).stdout)
+
+   It checks **format only and does NOT report your score**; an `INVALID` file
+   scores **zero** when graded regardless of prediction quality. (For a new task,
+   add its column contract to `mleval.grader.validate._TASK_COLUMNS`.)
+
 2. The very last stdout line, exactly: `Final Validation Score: <float in [0,1]>`
 
 ## Resource notes

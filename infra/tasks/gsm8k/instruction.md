@@ -113,6 +113,21 @@ Produce BOTH of the following:
    gold answers; it — not your printed number — is the trajectory's official
    score.
 
+   ✅ **Validate the format before you finish.** A checker is provided that
+   confirms your `submission.csv` is well-formed (correct `id,prediction`
+   columns over the exact expected id-set: `"0"`…`"1318"`). Run it at the end of
+   your script and make sure it prints `VALID`:
+
+       import subprocess
+       print(subprocess.run(
+           ["python", "-m", "mleval.grader.validate", "submission/submission.csv"],
+           capture_output=True, text=True).stdout)
+
+   It checks **format only and does NOT report your score** — but a submission
+   it marks `INVALID` (wrong columns, hashed/shuffled/missing ids, duplicates)
+   scores **zero** when graded, however correct the answers are. Fix any
+   reported issue before finishing.
+
 2. The very last line of stdout, exactly:
 
        Final Validation Score: <float>

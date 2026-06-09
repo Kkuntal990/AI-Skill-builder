@@ -40,7 +40,11 @@ def _load_journal(output_dir: Path) -> dict | None:
 
 
 def has_best_solution(output_dir: Path) -> bool:
-    return any(output_dir.rglob("best_solution.py"))
+    # AIDE preserves the best node as best_solution.py; MLEvolve preserves it as
+    # best_submission/submission.csv (no_submission_mode:False). Accept either.
+    return any(output_dir.rglob("best_solution.py")) or any(
+        output_dir.rglob("best_submission/submission.csv")
+    )
 
 
 def at_least_one_non_buggy_node(output_dir: Path) -> bool:
