@@ -176,14 +176,20 @@ SAMPLER_PID=$!
 # PGID, but the watchdog runs in parallel so it works whether the trap
 # fires or not. Analyzer + manifest then run as normal because the wait
 # below returns and we continue to the post-run section.
+WATCHDOG_SENTINEL="$OUT_DIR/.watchdog_fired"
+rm -f "$WATCHDOG_SENTINEL"
 (
     sleep "$TIME_LIMIT_SECONDS"
     if kill -0 "$AGENT_PID" 2>/dev/null; then
+        # Mark this as a graceful time-budget stop (an expected, successful
+        # harvest — NOT a crash). The main shell reads this to exit 0 so the
+        # Job Completes instead of retrying from scratch.
+        : > "$WATCHDOG_SENTINEL"
         echo "[entrypoint] WALL CAP ($TIME_LIMIT_SECONDS sec) reached — SIGTERM to PGID=$AGENT_PGID"
         kill -TERM -"$AGENT_PGID" 2>/dev/null || true
-        sleep 60
+        sleep 30
         if kill -0 "$AGENT_PID" 2>/dev/null; then
-            echo "[entrypoint] WALL CAP — SIGKILL after 60s grace"
+            echo "[entrypoint] WALL CAP — SIGKILL after 30s grace"
             kill -KILL -"$AGENT_PGID" 2>/dev/null || true
         fi
     fi
@@ -246,11 +252,17 @@ python3 -m mleval.grader "$OUT_DIR" --task "$TASK" --refs "$REFS_PATH" 2>&1 | ta
     echo "[entrypoint] grader failed (non-fatal)"
 
 # -------- Manifest -----------------------------------------------------
+# A watchdog-triggered stop is an EXPECTED time-budget harvest, not a failure:
+# treat it as a completed run (status=completed, exit 0) so the Job does not
+# retry-from-scratch and discard the graded best node.
+if [ -f "$WATCHDOG_SENTINEL" ]; then WATCHDOG_FIRED=1; else WATCHDOG_FIRED=0; fi
 python3 <<PYEOF || echo "[entrypoint] manifest write failed (non-fatal)"
 import json, os, socket, time
 out = os.environ['MLEVAL_OUTPUT_DIR']
 started = $RUN_START_EPOCH
 now = time.time()
+watchdog_fired = bool($WATCHDOG_FIRED)
+inner_exit = $INNER_EXIT
 m = {
     'schema_version': '1.0',
     'run_id': os.environ['MLEVAL_RUN_ID'],
@@ -275,12 +287,27 @@ m = {
         'ended_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
         'wall_clock_sec': int(now - started),
     },
-    'result': {'exit_code': $INNER_EXIT, 'status': 'completed' if $INNER_EXIT == 0 else 'crashed'},
+    'result': {
+        'exit_code': inner_exit,
+        # time-budget stop OR clean finish → completed; anything else → crashed.
+        'status': 'completed' if (inner_exit == 0 or watchdog_fired) else 'crashed',
+        'stopped_by': 'watchdog_time_limit' if watchdog_fired else ('clean' if inner_exit == 0 else 'crash'),
+    },
 }
 with open(os.path.join(out, 'manifest.json'), 'w') as f:
     json.dump(m, f, indent=2)
 print('[entrypoint] manifest written')
 PYEOF
 
+# Exit 0 on a watchdog time-limit stop: the agent hit its wall budget and we
+# successfully harvested + graded the best node. A non-zero exit here would
+# make K8s mark the pod Failed and backoffLimit would retry FROM SCRATCH,
+# discarding the graded result and burning another full budget (spike-018,
+# 2026-06-09). A genuine crash (no sentinel) still propagates its exit code so
+# backoffLimit can retry transient failures / evictions.
+if [ -f "$WATCHDOG_SENTINEL" ]; then
+    echo "[entrypoint] finished via watchdog time-limit (agent exit=$INNER_EXIT) — harvested + graded; exiting 0 (Job completes)"
+    exit 0
+fi
 echo "[entrypoint] finished exit=$INNER_EXIT"
 exit "$INNER_EXIT"

@@ -142,10 +142,19 @@ class Trajectory:
                 "MLEVAL_LLM_MODEL": self.llm_model,
                 "TIME_LIMIT_SECONDS": str(self.time_limit_sec),
                 "STEP_LIMIT": str(self.step_limit),
-                # +1200s buffer = ~10 min image pull + ~3 min first-run pip
-                # install + ~5 min for analyzers / cleanup. Tighter buffer
-                # killed mvp-002 mid-AIDE before the 1800s soft cap fired.
-                "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 1200),
+                # activeDeadlineSeconds counts from POD START, but the agent
+                # watchdog counts TIME_LIMIT from AGENT LAUNCH (after startup).
+                # The buffer must therefore cover BOTH ends: startup (image
+                # pull + first-run model download, which can be 15-25 min) AND
+                # the post-run grader/adapter/manifest chain after the watchdog
+                # stops the agent. The old +1200 was consumed entirely by
+                # startup, so the pod was SIGKILLed the moment the watchdog
+                # fired — before grading ran, and held_out_score.json was never
+                # written even when a valid best_submission existed (spike-018,
+                # 2026-06-09). +3600 = ~25 min startup + ~30 min grading slack.
+                # The deadline is only a safety ceiling; the watchdog remains
+                # the real per-agent cap, so being generous here is free.
+                "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 3600),
                 "MLEVAL_SKILL_PATH": self.skill_path if self.cell == "with_skill" else "",
                 # Library dir (preferred): all skills available, model selector
                 # routes. Empty for without_skill → zero skills → baseline.
@@ -332,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("=== waiting for completion ===")
         for t in plan.trajectories:
-            status = wait_for_job(namespace, t.trajectory_id, timeout_sec=t.time_limit_sec + 1200)
+            status = wait_for_job(namespace, t.trajectory_id, timeout_sec=t.time_limit_sec + 3600)
             print(f"  {t.trajectory_id}: {status}")
 
     print()
