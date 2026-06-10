@@ -128,6 +128,64 @@ assert getattr(_openai_provider.generate, "_token_budget_patched", False), \
     "token_budget did not wrap llm.openai.generate (max_tokens cap not raised)"
 
 # -----------------------------------------------------------------------------
+# diff_guard — the never-built "layer 3" against `=======` patch corruption.
+# Proven root cause: the coder emits a spurious extra `=======` divider before
+# `>>>>>>> REPLACE`; the patcher bakes it into the runfile -> SyntaxError, and
+# the corruption death-spirals. Assert: (a) the patcher chokepoint is wrapped,
+# (b) a trailing-divider block is NORMALIZED and applies cleanly (node
+# recovered, no residual markers, valid Python), (c) a clean patch is untouched,
+# (d) the corruption classifier flags fences but not benign code.
+# -----------------------------------------------------------------------------
+import agents.coder.diff_coder.patcher as _patcher_mod  # noqa: E402
+from mlevolve_sidecar import diff_guard as _diff_guard  # noqa: E402
+import ast as _ast0  # noqa: E402
+
+assert getattr(_patcher_mod.SearchReplacePatcher.apply_patch, "_mleval_diff_guarded", False), \
+    "diff_guard did not wrap SearchReplacePatcher.apply_patch (import hook missed it?)"
+
+_orig_code = "x = 1\ny = 2\n"
+
+# (b) trailing-divider corruption -> normalized -> clean apply, count=1
+_bad_patch = (
+    "<<<<<<< SEARCH\n"
+    "y = 2\n"
+    "=======\n"
+    "y = 3\n"
+    "=======\n"          # spurious extra divider (the proven bug)
+    ">>>>>>> REPLACE\n"
+)
+_pat = _patcher_mod.SearchReplacePatcher()
+_res, _cnt = _pat.apply_patch(_bad_patch, _orig_code, strict=False)
+assert _cnt == 1, f"diff_guard: trailing-divider block did not apply (count={_cnt})"
+assert "=======" not in _res and "y = 3" in _res, \
+    f"diff_guard: corruption survived normalization: {_res!r}"
+_ast0.parse(_res)  # must be valid Python
+
+# (c) a clean single-divider patch still applies normally
+_good_patch = "<<<<<<< SEARCH\ny = 2\n=======\ny = 9\n>>>>>>> REPLACE\n"
+_res2, _cnt2 = _pat.apply_patch(_good_patch, _orig_code, strict=False)
+assert _cnt2 == 1 and "y = 9" in _res2 and "=======" not in _res2, \
+    f"diff_guard: clean patch regressed: cnt={_cnt2} res={_res2!r}"
+
+# (d) prose leak -> result not valid Python -> REVERT to last-good (count=0,
+#     code unchanged). This is the second corruption mode seen in the real
+#     journals ("Wait, looking at the error...") that a marker-only check misses.
+_prose_patch = (
+    "<<<<<<< SEARCH\n"
+    "=======\n"
+    "Wait, looking at the error more carefully:\n"   # prose, not code
+    ">>>>>>> REPLACE\n"
+)
+_res3, _cnt3 = _pat.apply_patch(_prose_patch, _orig_code, strict=False)
+assert _cnt3 == 0 and _res3 == _orig_code, \
+    f"diff_guard: prose-leak not reverted: cnt={_cnt3} res={_res3!r}"
+
+# (e) classifier helpers: markers flagged; benign 'almost-divider' code is valid
+assert _diff_guard._has_markers("x = 1\n<<<<<<< SEARCH\n"), "diff_guard: fence not flagged"
+assert _diff_guard._is_valid_python('s = "====== not seven"\nx = 1\n'), \
+    "diff_guard: benign code wrongly invalid"
+
+# -----------------------------------------------------------------------------
 # bitsandbytes import guard — the base image ships triton 3.3.1, which dropped
 # `triton.ops`. bnb 0.43.3 eagerly imported `triton.ops.matmul_perf_model` and
 # died at import, breaking every QLoRA/4-bit path (the spike-012 confound).
