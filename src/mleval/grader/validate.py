@@ -111,7 +111,20 @@ def validate_format(
     return valid, errors
 
 
-def _default_refs() -> Path | None:
+def _default_idset() -> Path | None:
+    """Path the validator reads the expected id-set from (id column ONLY).
+
+    Prefers ``$MLEVAL_TASK_IDSET_PATH`` — a PUBLIC, agent-facing file (the
+    task's ``sample_submission.csv``) that contains the id-set but no targets.
+    This keeps the gold ``test_refs.csv`` path out of the agent's environment
+    under the held-out design (docs/eval/task-authoring.md C3): an agent that
+    self-validates never receives a pointer to the answers. Falls back to the
+    legacy ``$MLEVAL_TASK_REFS_PATH`` for tasks staged before the split (the
+    validator reads only the id column there too, so no score leaks either way).
+    """
+    idset = os.environ.get("MLEVAL_TASK_IDSET_PATH")
+    if idset:
+        return Path(idset)
     refs = os.environ.get("MLEVAL_TASK_REFS_PATH")
     return Path(refs) if refs else None
 
@@ -124,8 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("submission", type=Path, help="Path to your submission.csv")
     p.add_argument("--task", default=os.environ.get("TASK", ""),
                    help="Task name (defaults to $TASK)")
-    p.add_argument("--refs", type=Path, default=_default_refs(),
-                   help="References CSV for the id-set (defaults to $MLEVAL_TASK_REFS_PATH)")
+    p.add_argument("--refs", type=Path, default=_default_idset(),
+                   help="CSV providing the expected id-set, id column only "
+                        "(defaults to $MLEVAL_TASK_IDSET_PATH, else $MLEVAL_TASK_REFS_PATH)")
     args = p.parse_args(argv)
 
     cfg = _TASK_COLUMNS.get(args.task)
@@ -134,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"INVALID: unknown task '{args.task}' (set --task or $TASK; known: {known})")
         return 1
     if args.refs is None:
-        print("INVALID: no references path (pass --refs or set $MLEVAL_TASK_REFS_PATH)")
+        print("INVALID: no id-set path (pass --refs or set $MLEVAL_TASK_IDSET_PATH)")
         return 1
 
     valid, errors = validate_format(

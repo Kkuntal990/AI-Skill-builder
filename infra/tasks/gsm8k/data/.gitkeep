@@ -1,3 +1,8 @@
-# Intentionally empty — GSM8K is fetched at runtime via
-# `datasets.load_dataset('openai/gsm8k', 'main')`. The HF cache lives at
-# /results/.hf-cache/hf on PVC so it persists across trajectories.
+# Intentionally empty in the repo. At run time this dir holds the AGENT-FACING
+# data, produced by scripts/make_grading_data.py and staged to the PVC at
+# /results/data/gsm8k/data/:
+#   train.jsonl            question + answer (7,473)
+#   test.jsonl             id + question ONLY (1,319 — targets withheld)
+#   sample_submission.csv  id,prediction (format + id-set)
+# The held-out gold answers live separately under ../refs/ (private; graded
+# post-run, never shipped to the agent). See docs/eval/task-authoring.md (C3).

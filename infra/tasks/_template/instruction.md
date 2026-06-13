@@ -1,83 +1,78 @@
-# <Task Name> — task instruction TEMPLATE
+<!--
+<Task Name> — task instruction TEMPLATE (MLE-Bench-aligned).
 
-> Copy this dir to `infra/tasks/<task>/`, fill the `<...>` placeholders, delete
-> this banner. It encodes the contract checks that, when missing, silently
-> invalidated spike-018 runs (memory: project_task_instruction_authoring_checklist).
-> After editing, SYNC to the PVC (`/results/data/<task>/instruction.md`) before
-> running — trajectory pods read the PVC copy, not the repo/image.
+Copy this dir to infra/tasks/<task>/, fill the <...> placeholders, delete this
+banner. Schema + rationale: docs/eval/task-authoring.md.
+
+This file is the TASK-SPECIFIC contract only. The shared, task-agnostic rules
+(provided-data-only, no fabricated answers, fixed submission path, validate
+tool, submission-is-the-score, resource budget) are prepended automatically at
+run time from infra/tasks/_harness_rules.md — do NOT restate them here.
+
+Held-out design (C3): the agent gets train (with labels) + test INPUTS ONLY
+(targets stripped) + sample_submission.csv; the test targets live privately in
+refs/ and are graded post-run. The search signal is a validation slice the
+agent carves from train — never the test set. A scripts/make_grading_data.py
+builds data/ (agent-facing) + refs/ (private) and stages them to the PVC at
+/results/data/<task>/{data,refs}/. SYNC to the PVC before running — pods read
+the PVC, not the repo/image.
 
 Provenance: <dataset/source + citation>.
+-->
 
-## What you must do
+## Description
 
-Fine-tune the pinned model on the dataset below and produce predictions on the
-`test` split. The **backbone is FIXED**; the recipe (method, library, schedule,
-inference strategy) is OPEN.
+<Task family in one line: input -> output.> Fine-tune the pinned model on the
+provided training data and produce a prediction for every example in the test
+set. The contract (model, data, metric, output) is FIXED; the recipe (method,
+library, schedule, inference strategy) is OPEN — that is what we evaluate.
 
-## Dataset
+## Dataset Description
 
-- **Slug / loader**: `<datasets.load_dataset("...")>` — splits are pre-built; do
-  NOT make your own split.
-- **Splits**: `train` — <N>; `validation` — <N> (optional); `test` — <N> (final metric).
-- **Fields**: each example has **`id`** (string identifier, e.g. `"<example_id>"`),
-  `<input_field>`, and `<target_field>`.
-  ⚠️ List EVERY field the output contract references — especially `id`. An agent
-  that doesn't see `id` here will fabricate one and score zero (see Output contract).
+All data is provided as files in your input directory (`./input/`) — do not
+download the dataset (the test targets are withheld on purpose).
+
+- **`train.<ext>`** — <N> examples WITH targets. Use for fine-tuning AND for
+  carving your own validation split.
+- **`test.<ext>`** — <N> examples with **`id` + inputs ONLY** (no target field).
+  Predict on these; keep each `id` with its prediction.
+- **`sample_submission.csv`** — the exact output format + id-set.
+- **Fields**: list EVERY field the output contract references — especially the
+  **`id`** key (`<id_field>`, e.g. `"<example_id>"`). An agent that doesn't see
+  `id` here will fabricate one and score zero.
 
 ## Model
 
-- **Backbone**: `<org/model-id>` (<params>, no gating). State it explicitly; the
-  held-out grader does NOT check the model, so a drifted/smaller backbone surfaces
-  only as a bad or invalid submission.
-- HF cache is at `/results/.hf-cache/hf` on the mounted PVC (weights persist
-  across trajectories).
+- **Backbone**: `<org/model-id>` (<params>, no gating). State it explicitly and
+  use exactly this model; the held-out grader does NOT check the model, so a
+  drifted/smaller backbone surfaces only as a bad/invalid submission.
+- HF cache is at `/results/.hf-cache/hf` (weights persist across runs).
 
 ## Evaluation
 
-- **Metric**: <e.g. mean ROUGE-L F1> over ALL <N> `test` examples. Use `test` only.
-- The **submission file** (not your printed number) is graded independently against
-  held-out references — it is the trajectory's official score.
+- **Official metric**: <e.g. exact-match / ROUGE-L F1> over ALL <N> test
+  examples, computed by the held-out grader from your `submission.csv`.
+- **Your search signal**: hold out a slice of `train.<ext>` as a validation set,
+  score the metric on it yourself, and print it as `Final Validation Score`. Do
+  NOT score on the test set (you have no test targets).
+- <Cost note: if generation-heavy, tell them to batch / cap tokens.>
 
-## Output contract
+## Submission Format
 
-Produce BOTH:
+Write predictions to **`./submission/submission.csv`** (this exact path; only it
+is graded), EXACTLY these columns + header, matching `sample_submission.csv`:
 
-1. **`./submission/submission.csv`** with EXACTLY these columns + header:
+    id,<prediction_column>
 
-       id,<prediction_column>
+One row for **every** test example (all <N>); `id` copied **verbatim** from
+`test.<ext>` (no hashing/renumber unless the task DEFINES index-as-id). Example
+(format only):
 
-   One row for **every** `test` example (all <N>), where `id` is the dataset's own
-   `id` copied **verbatim** (`str(example["id"])`, e.g. `<example_id>`) and
-   `<prediction_column>` is your model's prediction.
+    id,<prediction_column>
+    <example_id>,<illustrative prediction — generate your own>
 
-   ⚠️ The `id` column MUST be the dataset's `id` values. Do NOT hash, renumber, or
-   use the row index — fabricated ids match none of the held-out references and the
-   submission scores **zero** even if predictions are perfect. Example:
-
-       id,<prediction_column>
-       <example_id>,<illustrative prediction — generate your own>
-
-   Save with `df.to_csv("submission/submission.csv", index=False)` (create the dir).
-
-   ✅ **Validate the format before you finish.** A checker confirms your file is
-   well-formed (correct columns over the exact expected id-set) — run it at the
-   end and make sure it prints `VALID`:
-
-       import subprocess
-       print(subprocess.run(
-           ["python", "-m", "mleval.grader.validate", "submission/submission.csv"],
-           capture_output=True, text=True).stdout)
-
-   It checks **format only and does NOT report your score**; an `INVALID` file
-   scores **zero** when graded regardless of prediction quality. (For a new task,
-   add its column contract to `mleval.grader.validate._TASK_COLUMNS`.)
-
-2. The very last stdout line, exactly: `Final Validation Score: <float in [0,1]>`
-
-## Resource notes
-
-- Bounded per-run execution limit (shown in the agent's budget line). **Training AND
-  final evaluation must finish within it** — program runtime counts toward it.
-- For expensive autoregressive decoding (LLM/VLM), **batch generation** so the full
-  test set fits in budget.
-- (Harness-enforced: `DataLoader(num_workers=0)` on GPU — don't rely on workers.)
+Save with `os.makedirs("submission", exist_ok=True)` then
+`df.to_csv("submission/submission.csv", index=False)`, validate with
+`python -m mleval.grader.validate submission/submission.csv`, and save the
+runnable script as `runfile.py`. (For a new task, add its column contract to
+`mleval.grader.validate._TASK_COLUMNS` and `grader.__main__._TASKS`.)

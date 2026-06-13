@@ -1,57 +1,64 @@
 <!--
 Provenance: GSM8K (Grade School Math 8K), OpenAI.
-Dataset: https://huggingface.co/datasets/openai/gsm8k (config `main`).
-Paper: "Training Verifiers to Solve Math Word Problems"
-(Cobbe et al., 2021). License: MIT. Not gated.
+Source: https://huggingface.co/datasets/openai/gsm8k (config `main`).
+Paper: "Training Verifiers to Solve Math Word Problems" (Cobbe et al., 2021).
+License: MIT. Not gated.
 
-This task is harness-staged for cheap multi-step-reasoning smoke
-testing on a single GPU. ~10 MB dataset, single A6000, deterministic
-exact-match metric.
-
-The recipe below is intentionally OPEN — we specify only the dataset,
-model, prompt template, and output contract. Method choice, library
-choice, training schedule, and inference strategy are all left to the
-agent (this is what we're evaluating).
+MLE-Bench-aligned (docs/eval/task-authoring.md): the shared benchmark rules are
+prepended from infra/tasks/_harness_rules.md at run time; this file is the
+task-specific contract only. The TEST TARGETS ARE WITHHELD — the agent gets
+test questions only and self-scores on a held-out slice of train; the full
+test answers live privately in refs/test_refs.csv and are graded post-run.
+Files are produced by scripts/make_grading_data.py and staged to the PVC at
+/results/data/gsm8k/{data,refs}/. SYNC to the PVC before running.
 -->
 
-## Task
+## Description
 
-Fine-tune the pre-trained instruction-tuned LLM specified below on the
-GSM8K grade-school math dataset. After training, evaluate the
-fine-tuned model on the test split and print the exact-match accuracy
-of the final numeric answer.
+Grade-school math word problems with multi-step reasoning. Fine-tune the pinned
+instruction-tuned causal LM on the provided training problems so that, given a
+new problem, it generates a chain-of-thought solution ending in a final numeric
+answer. Produce a prediction (the final integer) for every problem in the test
+set. The contract below (model, data, metric, output) is FIXED; the recipe
+(method, library, schedule, inference strategy) is OPEN — that is what we
+evaluate.
 
-## Data
+## Dataset Description
 
-- **Dataset slug**: `openai/gsm8k` on HuggingFace Hub.
-- **Config**: `main` (NOT `socratic`).
-- **Loader**: `datasets.load_dataset("openai/gsm8k", "main")` returns a
-  `DatasetDict` with pre-built splits.
-- **Splits** (already provided — DO NOT do your own train/test split):
-  - `train` — 7,473 question/answer pairs
-  - `test` — 1,319 pairs (use for the final exact-match accuracy)
-- **Fields**: each example has `question` (the word problem, a string)
-  and `answer` (the full chain-of-thought solution, a string). The
-  answer ends with a final line `#### <number>` — the gold numeric
-  answer is the token after `#### `. Strip any thousands-separator
-  commas before comparing.
-- **No `id` field**: GSM8K examples have NO identifier. For the submission,
-  the `id` of an example is its **0-based row index in the `test` split**
-  (i.e. `enumerate` order from `load_dataset(...)["test"]`). This order is
-  fixed/deterministic — see Output contract. Do NOT shuffle the test split.
+All data is provided as files in your input directory — **do not download
+GSM8K from the internet** (the benchmark rules above require provided-data-only;
+the test targets have been withheld here on purpose).
+
+Files (`./input/`):
+
+- **`train.jsonl`** — 7,473 lines, one JSON object per line with keys
+  `question` (the word problem) and `answer` (the full chain-of-thought
+  solution; its last line is `#### <number>`, the gold final answer). Use this
+  for fine-tuning AND for carving your own validation split.
+- **`test.jsonl`** — 1,319 lines, one JSON object per line with keys `id`
+  (a string, `"0"`…`"1318"`) and `question` **only**. There is **no `answer`
+  field** — the targets are held out and graded against references you do not
+  have. Predict on these; keep each `id` with its prediction.
+- **`sample_submission.csv`** — the exact required output format and id-set
+  (`id,prediction` with ids `"0"`…`"1318"`, empty predictions).
+
+Load with, e.g.:
+
+    import json
+    train = [json.loads(l) for l in open("input/train.jsonl")]
+    test  = [json.loads(l) for l in open("input/test.jsonl")]   # id + question, no answer
 
 ## Model
 
-- **Backbone**: `Qwen/Qwen2.5-3B-Instruct` (3.1 B params, no gating).
-- Use **exactly this** model — a decoder-only causal LM loaded with
-  `AutoModelForCausalLM`. Do NOT substitute a smaller model, a
-  base/non-instruct variant, or an encoder (e.g. BERT/DistilBERT): the task
-  requires free-form chain-of-thought *generation*, and an encoder cannot
-  produce it. The grader does not check the model, so a wrong backbone
-  surfaces only as a bad/invalid submission.
-- The HF cache is at `/results/.hf-cache/hf` on the mounted PVC, so
-  the model weights persist across trajectories — only the first
-  trajectory pays the download cost.
+- **Backbone**: `Qwen/Qwen2.5-3B-Instruct` (3.1 B params, no gating). Load it
+  with `AutoModelForCausalLM` and use **exactly this** model — the task requires
+  free-form chain-of-thought *generation*, so do NOT substitute a smaller model,
+  a base/non-instruct variant, or an encoder (BERT/DistilBERT cannot generate).
+  The grader does not check the model; a wrong backbone surfaces only as a
+  bad/invalid submission. Use a parameter-efficient method (e.g. LoRA) to keep
+  training within the time budget.
+- The HF cache is at `/results/.hf-cache/hf` on the mounted PVC, so the weights
+  persist across runs (only the first run pays the download).
 
 ## Prompt template
 
@@ -66,94 +73,58 @@ For both training (SFT) and inference, format each example as:
     Solution:
     {answer}
 
-At inference time, generate after the `Solution:\n` cue and decode
-until end-of-sequence (or a sensible max-new-token cap that you pick —
-budget enough tokens for the multi-step reasoning AND the `#### `
-line). Extract the model's predicted answer as the number following
-the LAST `#### ` it emits.
+At inference, generate after the `Solution:\n` cue and decode until
+end-of-sequence (or a sensible `max_new_tokens` cap that fits the reasoning AND
+the `#### ` line). Extract the prediction as the number following the **last**
+`#### ` the model emits; treat a missing/unparseable answer as wrong (do not
+crash).
 
 ## Evaluation
 
-- **Metric**: exact-match accuracy of the predicted final number
-  against the gold number, over ALL 1,319 examples in the `test`
-  split. A prediction counts as correct iff its extracted integer
-  equals the gold integer (compare as numbers, not strings — normalize
+- **Official metric**: exact-match accuracy of the predicted final integer
+  against the gold integer, over **all 1,319 test examples**, computed by the
+  held-out grader from your `submission.csv` (compare as numbers — normalise
   commas / leading `$` / trailing `.0`).
-- **No external library needed** — parse `#### ` from both the gold
-  answer and the model generation yourself. Be robust to a model that
-  forgets the `####` cue (treat a missing/unparseable prediction as
-  wrong, do not crash).
-- Generating 1,319 multi-step solutions is the dominant cost — pick a
-  max-new-tokens cap and (optional) batched generation so eval fits the
-  wall clock. Evaluate on the FULL test split for the reported metric.
+- **Your search signal**: hold out a slice of `train.jsonl` (e.g. the last
+  ~500 lines) as a validation set, score exact-match on it yourself, and print
+  it as the `Final Validation Score`. Do **not** score on the test set — you
+  have no test targets, and per the benchmark rules the submission file is what
+  is graded.
+- Generating ~1,319 (test) + your-val multi-step solutions is the dominant cost.
+  **Batch** generation (sizeable `batch_size`, **left-padding** for a
+  decoder-only LM, a tight `max_new_tokens`); unbatched per-example decode will
+  not finish in time.
 
-## Output contract
+## Submission Format
 
-Produce BOTH of the following:
+Write predictions to **`./submission/submission.csv`** (this exact path; only it
+is graded), with EXACTLY these two columns and a header — matching
+`sample_submission.csv`:
 
-1. **A submission file of per-example predictions** with EXACTLY these two
-   columns and a header row:
+    id,prediction
 
-       id,prediction
+One row for **every** one of the 1,319 test examples, where `id` is copied
+**verbatim** from `test.jsonl` (`"0"`…`"1318"`) and `prediction` is your model's
+final integer answer. The id-set must equal `{"0",…,"1318"}` exactly — do not
+renumber, shuffle, or invent ids. Example rows (format only):
 
-   One row for **every** one of the 1,319 `test` examples, where `id` is the
-   example's **0-based row index in the `test` split** (the `enumerate` order
-   of `load_dataset("openai/gsm8k", "main")["test"]`, as a string: `"0"`,
-   `"1"`, …, `"1318"`) and `prediction` is your model's final integer answer.
+    id,prediction
+    0,18
+    1,3
 
-   ⚠️ The `id` column MUST be these row indices. Do NOT hash the question,
-   shuffle the test split, or use any other key — the grader keys on the
-   test-split index, so mismatched ids match none of the held-out gold answers
-   and the submission scores **zero** even if the answers are right. The id set
-   must equal `{"0", …, "1318"}` exactly. Example rows (format only — generate
-   your own predictions):
+Save with:
 
-       id,prediction
-       0,18
-       1,3
+    import os
+    os.makedirs("submission", exist_ok=True)
+    df.to_csv("submission/submission.csv", index=False)
 
-   Save with `os.makedirs("submission", exist_ok=True)` then
-   `df.to_csv("submission/submission.csv", index=False)`.
+Then validate the format (it does NOT reveal your score):
 
-   This file is graded independently (exact-match accuracy) against held-out
-   gold answers; it — not your printed number — is the trajectory's official
-   score.
+    import subprocess
+    print(subprocess.run(
+        ["python", "-m", "mleval.grader.validate", "submission/submission.csv"],
+        capture_output=True, text=True).stdout)
 
-   ✅ **Validate the format before you finish.** A checker is provided that
-   confirms your `submission.csv` is well-formed (correct `id,prediction`
-   columns over the exact expected id-set: `"0"`…`"1318"`). Run it at the end of
-   your script and make sure it prints `VALID`:
-
-       import subprocess
-       print(subprocess.run(
-           ["python", "-m", "mleval.grader.validate", "submission/submission.csv"],
-           capture_output=True, text=True).stdout)
-
-   It checks **format only and does NOT report your score** — but a submission
-   it marks `INVALID` (wrong columns, hashed/shuffled/missing ids, duplicates)
-   scores **zero** when graded, however correct the answers are. Fix any
-   reported issue before finishing.
-
-2. The very last line of stdout, exactly:
-
-       Final Validation Score: <float>
-
-   where `<float>` is your own exact-match accuracy estimate in
-   `[0.0, 1.0]`. This is your self-check and the search signal.
-
-Save the runnable script as `runfile.py` in the working directory.
-
-## Resource notes
-
-- Each run has a fixed per-execution wall-clock cap (do NOT assume hours).
-  **Both** the fine-tuning AND the full 1,319-example evaluation must finish
-  within it — budget your epochs/steps accordingly rather than hardcoding a
-  large schedule.
-- Generating 1,319 multi-step solutions is the dominant cost. **Batch the
-  generation** (a sizeable `batch_size`, left-padding, a tight
-  `max_new_tokens` that still fits the reasoning + `#### ` line) — unbatched
-  per-example decode will not finish in time. Use a parameter-efficient method
-  (e.g. LoRA) to keep training within the budget.
-- Save your `submission/submission.csv` as soon as a full evaluation pass
-  completes, so a later step that runs out of time still leaves a gradable
-  artifact.
+Save the runnable script as `runfile.py` in the working directory. Write
+`submission.csv` as soon as a full test pass completes, so a later step that
+runs out of time still leaves a gradable artifact.

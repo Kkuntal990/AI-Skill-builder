@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mleval.grader.validate import main, validate_format
+from mleval.grader.validate import _default_idset, main, validate_format
 
 _REFS = "id,reference_summary\n13862856,a\n13611370,b\n13611413,c\n"
 
@@ -90,3 +90,31 @@ def test_cli_unknown_task(tmp_path, capsys):
     rc = main([str(sub), "--task", "nope", "--refs", str(tmp_path / "refs.csv")])
     assert rc == 1
     assert "unknown task" in capsys.readouterr().out
+
+
+def test_idset_path_preferred_over_refs(tmp_path, monkeypatch):
+    """C3 held-out: the validator must read the PUBLIC id-set, not the gold refs.
+
+    When MLEVAL_TASK_IDSET_PATH is set (the agent-facing sample_submission.csv),
+    it wins over MLEVAL_TASK_REFS_PATH (gold) so the agent never gets the gold
+    path. The gold-only fallback remains for tasks staged before the split.
+    """
+    idset = _write(tmp_path / "sample_submission.csv", "id,prediction\n0,\n1,\n")
+    gold = _write(tmp_path / "test_refs.csv", "id,reference_answer\n0,18\n1,3\n")
+    monkeypatch.setenv("MLEVAL_TASK_IDSET_PATH", str(idset))
+    monkeypatch.setenv("MLEVAL_TASK_REFS_PATH", str(gold))
+    assert _default_idset() == idset  # public id-set wins
+    monkeypatch.delenv("MLEVAL_TASK_IDSET_PATH")
+    assert _default_idset() == gold   # falls back to refs (back-compat)
+
+
+def test_cli_validates_against_public_idset(tmp_path, capsys, monkeypatch):
+    """A gsm8k submission validates against sample_submission.csv (no gold needed)."""
+    idset = _write(tmp_path / "sample_submission.csv", "id,prediction\n0,\n1,\n2,\n")
+    monkeypatch.setenv("MLEVAL_TASK_IDSET_PATH", str(idset))
+    monkeypatch.delenv("MLEVAL_TASK_REFS_PATH", raising=False)
+    sub = _write(tmp_path / "sub.csv", "id,prediction\n0,18\n1,3\n2,42\n")
+    rc = main([str(sub), "--task", "gsm8k"])  # no --refs: resolved from idset env
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.startswith("VALID")

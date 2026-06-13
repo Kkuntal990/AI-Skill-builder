@@ -34,13 +34,29 @@ RUN_ID="${MLEVAL_RUN_ID:?MLEVAL_RUN_ID required}"
 INSTRUCTION_PATH="${MLEVAL_TASK_INSTRUCTION_PATH:?MLEVAL_TASK_INSTRUCTION_PATH required}"
 DATA_DIR="${MLEVAL_TASK_DATA_DIR:?MLEVAL_TASK_DATA_DIR required}"
 
-# References id-set, exported so BOTH the in-run format validator the agent can
-# call (mleval.grader.validate — MLE-Bench's validate_submission affordance,
-# format-only, no score) and the post-run held-out grader use the same path.
-# Node subprocesses inherit this env, so the agent can run:
-#   python -m mleval.grader.validate submission/submission.csv
 export TASK
-export MLEVAL_TASK_REFS_PATH="${MLEVAL_TASK_REFS_PATH:-$(dirname "$DATA_DIR")/refs/test_refs.csv}"
+
+# GOLD references (id + answer). Used ONLY by the post-run held-out grader,
+# which runs in THIS entrypoint (parent process) — NEVER by the agent. Under the
+# held-out design (docs/eval/task-authoring.md C3) we must NOT export this to the
+# agent's node subprocesses, or self-validation would hand them the path to the
+# answers. Kept as a plain (un-exported) shell var.
+REFS_PATH="${MLEVAL_TASK_REFS_PATH:-$(dirname "$DATA_DIR")/refs/test_refs.csv}"
+
+# PUBLIC id-set for the in-run format validator (mleval.grader.validate — the
+# MLE-Bench validate_submission affordance, format-only, no score). Prefer the
+# agent-facing sample_submission.csv (id column, NO targets) so node subprocesses
+# can self-check format without ever seeing the gold path. Back-compat: tasks
+# staged before the split have no public sample_submission.csv — fall back to
+# exporting the gold refs (the validator reads only its id column, so no leak via
+# the validator itself, though the path is then visible — pre-C3 behaviour).
+if [ -f "$DATA_DIR/sample_submission.csv" ]; then
+    export MLEVAL_TASK_IDSET_PATH="$DATA_DIR/sample_submission.csv"
+    echo "[entrypoint] validator id-set (public): $MLEVAL_TASK_IDSET_PATH; gold refs withheld from agent env"
+else
+    export MLEVAL_TASK_REFS_PATH="$REFS_PATH"
+    echo "[entrypoint] no public id-set; exporting refs for validator (back-compat): $REFS_PATH"
+fi
 # Required even though config.yaml has a default — empty model name silently
 # breaks MLEvolve's per-stage dispatch. Caught here, not after a 5-min image
 # pull and a wasted run.
@@ -96,7 +112,23 @@ for entry in "$DATA_DIR"/*; do
     [ -e "$entry" ] || continue
     ln -sf "$entry" "$PUBLIC_DIR/input/$(basename "$entry")"
 done
-cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
+
+# Two-layer instructions (MLE-Bench env/instructions.txt + per-comp
+# description.md; docs/eval/task-authoring.md C1): prepend the shared,
+# task-agnostic benchmark rules ahead of the task-specific contract. The rules
+# live one level above the task dir (e.g. /results/data/_harness_rules.md);
+# override with MLEVAL_HARNESS_RULES_PATH. Absent file => task instruction
+# alone (existing tasks unaffected until the rules file is staged).
+HARNESS_RULES_PATH="${MLEVAL_HARNESS_RULES_PATH:-$(dirname "$(dirname "$INSTRUCTION_PATH")")/_harness_rules.md}"
+if [ -f "$HARNESS_RULES_PATH" ]; then
+    cat "$HARNESS_RULES_PATH" > "$PUBLIC_DIR/description.md"
+    printf '\n' >> "$PUBLIC_DIR/description.md"
+    cat "$INSTRUCTION_PATH" >> "$PUBLIC_DIR/description.md"
+    echo "[entrypoint] description.md = harness rules ($HARNESS_RULES_PATH) + task instruction"
+else
+    cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
+    echo "[entrypoint] description.md = task instruction only (no rules at $HARNESS_RULES_PATH)"
+fi
 
 # Optional skill(s): the sidecar's skill_retriever loads a library at import
 # time and skill_injector patches the 4 codegen agents (draft/improve/debug/
@@ -246,8 +278,9 @@ python3 -m mleval.analyzer.state_predicates "$OUT_DIR" 2>&1 | tail -3 || \
 # self-reported stdout number. Writes held_out_score.json. By contract the
 # grader never raises and exits 0, so it cannot abort the manifest write below.
 # Refs live at <data-root>/refs/test_refs.csv (sibling of the symlinked data
-# dir); override with MLEVAL_TASK_REFS_PATH.
-REFS_PATH="$MLEVAL_TASK_REFS_PATH"  # exported above; same id-set the validator used
+# dir); $REFS_PATH (gold, parent-only) was resolved near the top and is NOT in
+# the agent's environment under C3. This grader runs in the entrypoint, so it
+# can read the gold answers the agent never sees.
 python3 -m mleval.grader "$OUT_DIR" --task "$TASK" --refs "$REFS_PATH" 2>&1 | tail -5 || \
     echo "[entrypoint] grader failed (non-fatal)"
 
