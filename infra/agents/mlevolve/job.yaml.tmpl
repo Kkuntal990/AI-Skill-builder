@@ -77,15 +77,20 @@ spec:
           # 3B-model eval generation), so an 8 GiB cap asymmetrically kills it
           # and confounds the A/B. 16 GiB covers that heavy-code case while
           # staying well under the GPU node's RAM.
+          # Raised 16Gi -> 32Gi (2026-06-12): the ~6.2GB Qwen2.5-3B safetensors
+          # page cache must survive training-process memory pressure, else every
+          # node re-reads the model from CephFS at ~7MB/s (~15 min of the 30-60
+          # min exec cap; measured spike-018 gsm8k — node 1 loaded in 907s, node
+          # 2 in 3s off warm cache). Page cache counts against the pod cgroup.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "16Gi"
+              memory: "32Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "16Gi"
+              memory: "32Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
