@@ -58,4 +58,11 @@ they ever conflict**.
    submission it had already written. Budget your schedule accordingly, and for
    generation-heavy evaluation, batch your decoding.
 
+<!--
+The skill-router (mlevolve_sidecar/skill_injector.py) strips everything up to
+and including the END_HARNESS_RULES marker below before deciding which skills
+are relevant, so these constant rules don't crowd the task-specific signal out
+of the selector's context window. Keep the marker as the final line.
+-->
 ---
+<!-- END_HARNESS_RULES -->

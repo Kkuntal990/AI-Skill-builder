@@ -72,6 +72,21 @@ assert _spec.name == "select_skills", f"selector spec name changed: {_spec.name}
 assert _spec.as_openai_tool_dict["function"]["name"] == "select_skills", \
     "selector FunctionSpec.as_openai_tool_dict malformed"
 
+# 2b. Selector routing context strips the prepended harness rules (spike-023
+#     regression: a ~3 KB _harness_rules.md header pushed the task past the old
+#     1500-char cap, so the selector saw only boilerplate and declined every
+#     skill — silently emptying the with_skill treatment).
+_routed = skill_injector._task_for_routing(
+    "RULE A\nRULE B\n<!-- END_HARNESS_RULES -->\n## Description\nFine-tune with LoRA."
+)
+assert "END_HARNESS_RULES" not in _routed and "RULE A" not in _routed, \
+    f"harness rules not stripped from selector context: {_routed!r}"
+assert "Fine-tune with LoRA." in _routed, f"task signal lost after strip: {_routed!r}"
+assert skill_injector._SELECTOR_TASK_CHARS >= 5000, \
+    f"selector task cap {skill_injector._SELECTOR_TASK_CHARS} too small (was 1500 in the regression)"
+assert skill_injector._task_for_routing("## Description\nno marker") == "## Description\nno marker", \
+    "no-marker passthrough broke (pre-C1 tasks)"
+
 # 3. Empty-library baseline — with no skills loaded, the wrapped guideline fn
 #    must return the upstream list UNCHANGED (no catalog, no selector call).
 os.environ.pop("MLEVAL_SKILL_LIBRARY", None)

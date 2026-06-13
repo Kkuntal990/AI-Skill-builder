@@ -119,10 +119,38 @@ def _selector_system(skills) -> str:
     )
 
 
+# End-of-rules sentinel emitted by infra/tasks/_harness_rules.md. Everything up
+# to and including it is the shared, task-agnostic benchmark boilerplate, which
+# carries NO skill-routing signal and is identical across tasks.
+_HARNESS_RULES_MARKER = "<!-- END_HARNESS_RULES -->"
+# Generous cap: route on the task-specific lead (model/method/data/eval). Must
+# comfortably exceed a task instruction's signal-bearing head — the gsm8k
+# instruction places LoRA@~2.9k and the batch/left-padding (vLLM) signal@~4.4k
+# chars into the task-only text, so 1500 (the old value) cut all of it.
+_SELECTOR_TASK_CHARS = 6000
+
+
+def _task_for_routing(task: str) -> str:
+    """Task text the selector routes on: drop the prepended harness-rules header.
+
+    The harness concatenates the constant _harness_rules.md ahead of every
+    task's instruction (docs/eval/task-authoring.md C1). Those ~3k chars contain
+    submission/validation boilerplate but nothing about the model, method, or
+    data — so left in place they push the real task past the truncation window
+    and the selector declines every skill (observed spike-023: selections=[]
+    x6, treatment silently emptied). Strip them when the sentinel is present;
+    otherwise (pre-C1 tasks with no rules header) use the text unchanged.
+    """
+    idx = task.find(_HARNESS_RULES_MARKER)
+    if idx != -1:
+        task = task[idx + len(_HARNESS_RULES_MARKER):].lstrip()
+    return task
+
+
 def _selector_user(agent, stage, parent) -> str:
     parts = [f"Stage: {stage or 'unknown'}"]
-    task = getattr(agent, "task_desc", "") or ""
-    parts.append(f"Task:\n{task[:1500]}")
+    task = _task_for_routing(getattr(agent, "task_desc", "") or "")
+    parts.append(f"Task:\n{task[:_SELECTOR_TASK_CHARS]}")
     if parent is not None:
         term_out = getattr(parent, "term_out", "") or ""
         analysis = getattr(parent, "analysis", "") or ""
