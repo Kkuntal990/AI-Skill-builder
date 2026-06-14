@@ -77,20 +77,24 @@ spec:
           # 3B-model eval generation), so an 8 GiB cap asymmetrically kills it
           # and confounds the A/B. 16 GiB covers that heavy-code case while
           # staying well under the GPU node's RAM.
-          # Raised 16Gi -> 32Gi (2026-06-12): the ~6.2GB Qwen2.5-3B safetensors
-          # page cache must survive training-process memory pressure, else every
-          # node re-reads the model from CephFS at ~7MB/s (~15 min of the 30-60
-          # min exec cap; measured spike-018 gsm8k — node 1 loaded in 907s, node
-          # 2 in 3s off warm cache). Page cache counts against the pod cgroup.
+          # Briefly raised to 32Gi (2026-06-12) to protect the ~6.2GB Qwen2.5-3B
+          # page cache; reverted to 16Gi (2026-06-13) after measuring the real
+          # cgroup peak in spike-024 (cgroup.v2 memory.peak): with_skill (GPU
+          # train) = 8.75 GB incl. the model page cache, without_skill (CPU node)
+          # = 5.33 GB. 16Gi (17.2 GB) is ~2x the observed peak AND still leaves
+          # ~7GB above the 8.75GB working set, so the model page cache survives
+          # across nodes — 32Gi was idle headroom. Note: the mem_sampler's
+          # pgrp_rss column undercounts (it misses the node SUBPROCESS that does
+          # the training); trust cgroup memory.peak, not that CSV, for sizing.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "32Gi"
+              memory: "16Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "32Gi"
+              memory: "16Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -205,4 +209,4 @@ spec:
           # against pod memory limit. MLEvolve subprocesses share /dev/shm
           # via torch DataLoader workers when num_workers>0.
           emptyDir:
-            sizeLimit: 8Gi
+            sizeLimit: 16Gi
