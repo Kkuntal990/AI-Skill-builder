@@ -87,8 +87,21 @@ assert skill_injector._SELECTOR_TASK_CHARS >= 5000, \
 assert skill_injector._task_for_routing("## Description\nno marker") == "## Description\nno marker", \
     "no-marker passthrough broke (pre-C1 tasks)"
 
+# 2c. Eval-harness injection — cell-agnostic. Appends the held-out rules to ANY
+#     guideline and rewrites the num_workers nudge. Both cells must get this.
+_eh = {"Implementation guideline": ["x", "• Use DataLoader with num_workers>=2 for speed"]}
+skill_injector._apply_eval_harness(_eh)
+_ehgl = _eh["Implementation guideline"]
+assert any("Held-out evaluation rules" in l for l in _ehgl), "eval-harness rules not injected"
+assert any("mleval.grader.validate" in l for l in _ehgl), "validate-tool rule missing"
+assert not any("num_workers>=2" in l for l in _ehgl), "num_workers>=2 nudge not rewritten"
+assert any("num_workers=0" in l for l in _ehgl), "num_workers=0 fix missing"
+skill_injector._apply_eval_harness(_eh)  # idempotent
+assert sum("Held-out evaluation rules" in l for l in _eh["Implementation guideline"]) == 1, \
+    "eval-harness injection not idempotent"
+
 # 3. Empty-library baseline — with no skills loaded, the wrapped guideline fn
-#    must return the upstream list UNCHANGED (no catalog, no selector call).
+#    must add the eval-harness rules (both cells) but NO skill catalog/bodies.
 os.environ.pop("MLEVAL_SKILL_LIBRARY", None)
 os.environ.pop("MLEVAL_SKILL_PATHS", None)
 os.environ.pop("MLEVAL_SKILL_PATH", None)
@@ -96,9 +109,11 @@ assert skill_retriever.reload() == 0, "expected 0 skills with no env var"
 assert skill_retriever.catalog_text() == "", "catalog should be empty with no skills"
 _baseline = {"Implementation guideline": ["original-line"]}
 _wrapped = skill_injector._wrap_impl_guideline(lambda _agent: _baseline)
-_out = _wrapped(object())  # stub agent; must not be touched when no skills
-assert _out["Implementation guideline"] == ["original-line"], \
-    f"empty-library path mutated the guideline: {_out}"
+_out = _wrapped(object())["Implementation guideline"]  # stub agent
+assert _out[0] == "original-line", "baseline guideline head clobbered"
+assert any("Held-out evaluation rules" in l for l in _out), "eval rules missing in baseline cell"
+assert not any("Available Skills (catalog)" in l for l in _out), \
+    f"skill catalog leaked into no-skill cell: {_out}"
 
 # 4. Library round-trip — a synthetic library with a real skill dir and a
 #    _-prefixed dir that MUST be skipped; catalog lists the skill + its refs.

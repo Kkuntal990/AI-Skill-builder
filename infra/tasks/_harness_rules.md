@@ -1,20 +1,25 @@
 <!--
-Shared benchmark rules, prepended to EVERY task's instruction.md by
-infra/agents/mlevolve/entrypoint.sh (concatenated into prepared/public/
-description.md, ahead of the task-specific contract).
+⚠️ NO LONGER PREPENDED TO description.md (changed 2026-06-16).
 
-This is the analogue of MLE-Bench's environment/instructions.txt: the FIXED,
-task-agnostic rules. Anything task-specific (backbone, dataset, metric, exact
-columns) belongs in the per-task instruction.md, NOT here.
+History: this file was briefly concatenated ahead of each task's instruction
+(C1). That front-loaded MLEvolve's de_kaggle LLM task-cleaner with ~3 KB of
+removable-genre boilerplate, which pushed it out of distribution and made it
+hallucinate the whole task into garbage (spike-025), blinding the skill selector
+and metric-direction. MLE-Bench+MLEvolve never hits this: MLEvolve delivers
+harness info through its OWN per-node channel (agents/prompts/impl_guideline.py),
+not through the task description.
 
-Stage to the PVC at /results/data/_harness_rules.md (one level above each
-<task>/ dir). If absent, the entrypoint falls back to the task instruction
-alone — so existing tasks are unaffected until this file is staged.
+OPERATIVE SOURCE NOW: the task-agnostic eval rules live as a code constant,
+`_EVAL_HARNESS_RULES` in mlevolve_sidecar/skill_injector.py, injected into every
+node's impl_guideline (both cells, after de_kaggle). MLEvolve's native
+impl_guideline already covers resource budget / submission path / anti-cheat.
 
-Authoring guideline: docs/eval/task-authoring.md
+This file is retained ONLY as human-readable documentation of the rules; it is
+NOT read at run time. Keep it in sync with _EVAL_HARNESS_RULES if you edit
+either. Authoring guideline: docs/eval/task-authoring.md
 -->
 
-# Benchmark rules (read first)
+# Benchmark rules (documentation only — see header)
 
 These rules apply to every task and **override the task description below if
 they ever conflict**.

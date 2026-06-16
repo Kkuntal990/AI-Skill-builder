@@ -113,22 +113,26 @@ for entry in "$DATA_DIR"/*; do
     ln -sf "$entry" "$PUBLIC_DIR/input/$(basename "$entry")"
 done
 
-# Two-layer instructions (MLE-Bench env/instructions.txt + per-comp
-# description.md; docs/eval/task-authoring.md C1): prepend the shared,
-# task-agnostic benchmark rules ahead of the task-specific contract. The rules
-# live one level above the task dir (e.g. /results/data/_harness_rules.md);
-# override with MLEVAL_HARNESS_RULES_PATH. Absent file => task instruction
-# alone (existing tasks unaffected until the rules file is staged).
-HARNESS_RULES_PATH="${MLEVAL_HARNESS_RULES_PATH:-$(dirname "$(dirname "$INSTRUCTION_PATH")")/_harness_rules.md}"
-if [ -f "$HARNESS_RULES_PATH" ]; then
-    cat "$HARNESS_RULES_PATH" > "$PUBLIC_DIR/description.md"
-    printf '\n' >> "$PUBLIC_DIR/description.md"
-    cat "$INSTRUCTION_PATH" >> "$PUBLIC_DIR/description.md"
-    echo "[entrypoint] description.md = harness rules ($HARNESS_RULES_PATH) + task instruction"
-else
-    cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
-    echo "[entrypoint] description.md = task instruction only (no rules at $HARNESS_RULES_PATH)"
-fi
+# description.md = the task instruction ONLY (clean, task-specific text).
+#
+# We intentionally do NOT prepend the shared benchmark/harness rules here.
+# MLEvolve delivers harness info (resource budget, submission contract,
+# anti-cheat) through its OWN per-node channel — agents/prompts/impl_guideline.py
+# (get_impl_guideline), injected into every codegen prompt — NOT through the task
+# description. This mirrors how MLEvolve+MLE-Bench actually runs (desc_file =
+# description.md only; instructions.txt is never loaded). Our eval-specific rules
+# (held-out test, validate tool, submission-is-the-score, no-train-on-test) are
+# appended to that same impl_guideline via mlevolve_sidecar/skill_injector.py
+# (_EVAL_HARNESS_RULES), so they reach BOTH cells identically and AFTER de_kaggle.
+#
+# Why this matters: MLEvolve runs an LLM "clean_task_desc" (de_kaggle) rewrite
+# over description.md at init. Front-loading it with ~3 KB of removable-genre
+# harness boilerplate pushed it out of distribution and it hallucinated the whole
+# task into garbage (spike-025: "Unihandecode Ecosphere"), blinding the skill
+# selector + metric-direction. Keeping description.md = clean task keeps de_kaggle
+# in-distribution (as in every prior samsum run + vanilla MLE-Bench).
+cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
+echo "[entrypoint] description.md = task instruction only (harness via impl_guideline)"
 
 # Optional skill(s): the sidecar's skill_retriever loads a library at import
 # time and skill_injector patches the 4 codegen agents (draft/improve/debug/

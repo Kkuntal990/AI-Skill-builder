@@ -79,3 +79,29 @@ def test_routing_noop_without_marker():
 def test_cap_raised_above_old_1500():
     inj = _load_injector()
     assert inj._SELECTOR_TASK_CHARS >= 5000  # old value 1500 cut all signal
+
+
+def test_eval_harness_injected_and_num_workers_fixed():
+    """Eval rules reach impl_guideline (both cells) and the num_workers nudge is fixed."""
+    inj = _load_injector()
+    gl = {"Implementation guideline": ["a", "• Use DataLoader with num_workers>=2 for speed", "b"]}
+    inj._apply_eval_harness(gl)
+    lines = gl["Implementation guideline"]
+    assert any("Held-out evaluation rules" in l for l in lines)
+    assert any("mleval.grader.validate" in l for l in lines)
+    assert any("do NOT train on, or select against, the test set" in l.lower() for l in lines) \
+        or any("never on the test set" in l for l in lines)
+    # num_workers>=2 (fork-after-CUDA segfault) rewritten to num_workers=0
+    assert not any("num_workers>=2" in l for l in lines)
+    assert any("num_workers=0" in l for l in lines)
+
+
+def test_eval_harness_idempotent_and_safe():
+    inj = _load_injector()
+    gl = {"Implementation guideline": ["x"]}
+    inj._apply_eval_harness(gl)
+    inj._apply_eval_harness(gl)
+    assert sum("Held-out evaluation rules" in l for l in gl["Implementation guideline"]) == 1
+    # malformed structure must not raise
+    inj._apply_eval_harness({})
+    inj._apply_eval_harness({"Implementation guideline": "not-a-list"})
