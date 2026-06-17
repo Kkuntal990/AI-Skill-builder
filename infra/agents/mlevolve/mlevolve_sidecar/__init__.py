@@ -46,5 +46,6 @@ from . import openai_apikey_env   # noqa: F401
 from . import prompt_logger       # noqa: F401
 from . import token_budget        # noqa: F401  — raises max_tokens default (anti-truncation); AFTER prompt_logger so it wraps outermost
 from . import diff_guard          # noqa: F401  — hardens SEARCH/REPLACE patcher vs ======= corruption (ast-guard + divider normalize)
+from . import metric_direction    # noqa: F401  — pins maximize/minimize (MLEvolve's LLM determine_metric_direction flips nondeterministically)
 from . import skill_retriever     # noqa: F401  — loads the skill library
 from . import skill_injector      # noqa: F401  — patches the 4 codegen agents (must be LAST)

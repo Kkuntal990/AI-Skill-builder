@@ -43,6 +43,15 @@ export TASK
 # answers. Kept as a plain (un-exported) shell var.
 REFS_PATH="${MLEVAL_TASK_REFS_PATH:-$(dirname "$DATA_DIR")/refs/test_refs.csv}"
 
+# Pin the metric optimization direction (mlevolve_sidecar/metric_direction.py).
+# MLEvolve's LLM determine_metric_direction nondeterministically flips the
+# maximize/minimize boolean (spike-026: inverted the without-skill search).
+# Every harness task maximizes its metric (gsm8k exact-match, samsum ROUGE-L),
+# so pin maximize by default; override per-task with MLEVAL_METRIC_MAXIMIZE=0
+# for a future error/loss metric. Empty => fall back to MLEvolve's LLM guess.
+export MLEVAL_METRIC_MAXIMIZE="${MLEVAL_METRIC_MAXIMIZE:-1}"
+echo "[entrypoint] metric direction pinned: MLEVAL_METRIC_MAXIMIZE=$MLEVAL_METRIC_MAXIMIZE (1=maximize)"
+
 # PUBLIC id-set for the in-run format validator (mleval.grader.validate — the
 # MLE-Bench validate_submission affordance, format-only, no score). Prefer the
 # agent-facing sample_submission.csv (id column, NO targets) so node subprocesses

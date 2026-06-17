@@ -145,6 +145,38 @@ with _tf0.TemporaryDirectory() as _libdir:
     assert skill_retriever.reload() == 0, "reset to 0 skills failed"
 
 # -----------------------------------------------------------------------------
+# metric_direction pin — MLEvolve's LLM determine_metric_direction flips the
+# maximize/minimize boolean nondeterministically (spike-026 inverted the search).
+# (a) helper logic, (b) the meta_path finder actually patches the real
+# agents.result_parse_agent module when MLEVAL_METRIC_MAXIMIZE is set.
+# -----------------------------------------------------------------------------
+from mlevolve_sidecar import metric_direction as _md  # noqa: E402
+
+# (a) helper logic with fakes (import-order independent)
+os.environ["MLEVAL_METRIC_MAXIMIZE"] = "1"
+assert _md._pinned_maximize() is True
+os.environ["MLEVAL_METRIC_MAXIMIZE"] = "0"
+assert _md._pinned_maximize() is False
+os.environ["MLEVAL_METRIC_MAXIMIZE"] = "1"
+
+class _StubAgent:  # noqa: E306
+    metric_maximize = None
+    metric_maximize_reasoning = None
+_a = _StubAgent()
+_md._make_determine(lambda agent: (_ for _ in ()).throw(AssertionError("LLM not skipped")))(_a)
+assert _a.metric_maximize is True, "pin did not set maximize"
+
+# (b) finder wiring: force a fresh import of the target so the finder fires with
+# the env set, then assert both functions are pinned.
+sys.modules.pop("agents.result_parse_agent", None)
+import agents.result_parse_agent as _rpa  # noqa: E402
+assert getattr(_rpa.determine_metric_direction, "_mleval_pinned", False), \
+    "metric_direction finder did not patch determine_metric_direction"
+assert getattr(_rpa._validate_metric_direction, "_mleval_pinned", False), \
+    "metric_direction finder did not patch _validate_metric_direction"
+os.environ.pop("MLEVAL_METRIC_MAXIMIZE", None)
+
+# -----------------------------------------------------------------------------
 # token_budget guard — the anti-truncation sidecar must have wrapped the
 # provider-level query/generate so the default max_tokens is raised (spike-012
 # corruption root cause was 16384-token truncation). Catches: import-order
