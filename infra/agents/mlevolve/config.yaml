@@ -23,7 +23,9 @@
 #                                      + entrypoint.sh:90. Embedding model
 #                                      pre-warmed on PVC at HF cache.
 #   - parallel_search_num: 1         → no parallel branches (sequential)
-#   - num_drafts: 1                  → ONE draft per node (vs 5 upstream)
+#   - num_drafts: 5                  → upstream default (reverted from 1; a
+#                                      single draft let one buggy lineage doom
+#                                      the run + spin the search — spike-022/026)
 #   - num_gpus: 1                    → matches our pod request
 
 data_dir: ${PUBLIC_DIR}/input
@@ -127,9 +129,15 @@ agent:
     parallel_search_num: 1
     num_gpus: 1
 
-    num_drafts: 1
+    # num_drafts=5 = upstream MLEvolve default. Reverted 1->5 (2026-06-16):
+    # num_drafts=1 gave the root a single independent draft, so one all-buggy
+    # draft lineage doomed the whole trajectory and the MCGS search spun to the
+    # deadline (no sibling draft, no valid Top-K node — spike-022/026). With 5,
+    # a bad lineage leaves 4 other independent attempts. Costs ~5x the codegen +
+    # train/eval per trajectory; accepted for robustness.
+    num_drafts: 5
     num_bugs: 1
-    num_improves: 2
+    num_improves: 3
     topk_max_improves: 3
 
     max_debug_depth: 5
