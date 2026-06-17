@@ -75,7 +75,12 @@ agent:
   # TIME_LIMIT_SECONDS. Pass the same value here so MLEvolve's prompts
   # report the correct budget to the agent.
   time_limit: ${TIME_LIMIT_SECONDS}
-  initial_drafts: 1
+  # initial_drafts=3 = upstream default (raised from 1, 2026-06-16). The number
+  # of INDEPENDENT starting branches seeded before search. With 1 we began with
+  # a single branch, so one all-buggy lineage left nothing to fall back on;
+  # 3 gives diverse independent starts (run sequentially since
+  # parallel_search_num=1). Pairs with the num_drafts 1->5 revert.
+  initial_drafts: 3
   seed: 0
   data_preview: True
 
@@ -92,7 +97,9 @@ agent:
     base_url: ${OPENAI_BASE_URL}
     api_key: ""
 
-  check_data_leakage: False
+  # Enabled (was False, 2026-06-16): for real held-out tasks (gsm8k/samsum) a
+  # node that trains/selects on the test set is a validity threat we want flagged.
+  check_data_leakage: True
   # use_diff_mode governs how EDITS (debug/improve/evolve/fuse) are applied,
   # NOT drafting (drafts always use stepwise whole-code). True = SEARCH/REPLACE
   # diff patches; False = Base mode, regenerate the whole file each edit.
@@ -138,7 +145,7 @@ agent:
     num_drafts: 5
     num_bugs: 1
     num_improves: 3
-    topk_max_improves: 3
+    topk_max_improves: 10
 
     max_debug_depth: 5
     back_debug_depth: 2
@@ -150,16 +157,18 @@ agent:
     branch_stagnation_threshold: 3
     topk_stagnation_threshold: 6
     stagnation_window: 4
-    top_candidates_size: 5
+    top_candidates_size: 20
 
     explore_switch_start: 0.5
     explore_switch_end: 0.7
     min_exploration_weight: 0.2
 
-    topk_early_k: 3
-    topk_early_max_per_branch: 2
-    topk_late_k: 2
-    topk_late_max_per_branch: 1
+    # Exploitation breadth raised to upstream defaults (2026-06-16) now that
+    # num_drafts=5 + initial_drafts=3 produce multiple branches worth exploiting.
+    topk_early_k: 5
+    topk_early_max_per_branch: 3
+    topk_late_k: 3
+    topk_late_max_per_branch: 2
 
     force_backprop_late_threshold: 0.80
     force_backprop_late_prob: 0.5
@@ -178,15 +187,20 @@ agent:
     alpha: 0.01
     phase_ratios: [0.3, 0.7]
 
-# Coldstart — enabled to match MLEvolve's published config. The domain
-# classifier reads `cfg.exp_id` against the Kaggle competition tag JSON
-# (engine/coldstart/competition_tag_classified.json) and returns empty
-# for unknown tasks (verified: knowledge.py:18-22 graceful no-op). Our
-# SAMSum / GSM8K / BoolQ exp_ids are not in the taxonomy so coldstart
-# adds nothing to the prompt — but enabling matches MLE-Bench-style
-# baseline and avoids us silently diverging from the published config.
+# Coldstart — DISABLED (2026-06-16). It seeds draft prompts with recommended
+# pretrained models + code templates ("Option A [RECOMMENDED]") for KNOWN Kaggle
+# competitions, keyed on cfg.exp_id. Our SAMSum/GSM8K/BoolQ exp_ids are NOT in
+# the taxonomy, so build_guidance_description returns "" — BUT the earlier
+# "graceful no-op" claim was wrong: draft_agent.py:126 fires on `"" != "None
+# model"`, so it STILL injects an EMPTY "Option A [RECOMMENDED]:", a misleading
+# "copy the Code template EXACTLY" instruction (no template exists), AND the
+# stale `num_workers>=2` nudge (draft_agent.py:146 — the second copy our
+# impl_guideline patch can't reach). It also conflicts with our pinned backbone
+# and is a non-skill guidance channel that clutters the A/B. Disabling loses no
+# real guidance for our custom tasks and removes all three liabilities.
+# (Upstream itself disables it in some modes — run_single_task.sh:72.)
 coldstart:
-  use_coldstart: True
+  use_coldstart: False
   task_json_path: "engine/coldstart/competition_tag_classified.json"
   model_json_path: "engine/coldstart/models_guidance_classified.json"
   description: ""
