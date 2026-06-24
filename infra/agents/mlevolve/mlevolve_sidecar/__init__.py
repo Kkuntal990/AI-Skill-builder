@@ -14,15 +14,19 @@ LLM call or RNG-using code runs. Order matters:
                               skips _-prefixed) or $MLEVAL_SKILL_PATHS /
                               $MLEVAL_SKILL_PATH (back-compat). Exposes
                               loaded_skills() + catalog_text(). No patching.
-    5. skill_injector      — PATCHER (Anthropic progressive disclosure). A
+    5. eval_harness        — RULES ONLY. Task-agnostic benchmark rules +
+                              num_workers fix, appended to impl_guideline via
+                              skill_injector's wrapper (see eval_harness.py).
+    6. skill_injector      — PATCHER (Anthropic progressive disclosure). A
                               sys.meta_path hook rebinds run +
                               get_impl_guideline_from_agent on the 4 codegen
                               agents (draft/improve/debug/evolution): Tier-0
                               catalog into EVERY node, plus a per-node temp-0
                               model selector that loads only the relevant
-                              skill(s)+references. Imports LAST so the library
-                              is populated and the hook is registered before
-                              MLEvolve loads any agent module.
+                              skill(s)+references. Calls eval_harness for the
+                              non-skill harness append. Imports LAST so the
+                              library is populated and the hook is registered
+                              before MLEvolve loads any agent module.
 
 Each submodule applies its patch on import. The order ensures prompt_logger
 wraps the LLM call site BEFORE MLEvolve's agent modules cache references to it,
@@ -48,4 +52,5 @@ from . import token_budget        # noqa: F401  — raises max_tokens default (a
 from . import diff_guard          # noqa: F401  — hardens SEARCH/REPLACE patcher vs ======= corruption (ast-guard + divider normalize)
 from . import metric_direction    # noqa: F401  — pins maximize/minimize (MLEvolve's LLM determine_metric_direction flips nondeterministically)
 from . import skill_retriever     # noqa: F401  — loads the skill library
+from . import eval_harness        # noqa: F401  — benchmark rules (no patch; used by skill_injector)
 from . import skill_injector      # noqa: F401  — patches the 4 codegen agents (must be LAST)

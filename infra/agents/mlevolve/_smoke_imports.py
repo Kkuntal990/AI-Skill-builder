@@ -52,6 +52,7 @@ import agents.improve_agent as _improve  # noqa: E402
 import agents.debug_agent as _debug  # noqa: E402
 import agents.evolution_agent as _evolution  # noqa: E402
 from mlevolve_sidecar import skill_retriever  # noqa: E402
+from mlevolve_sidecar import eval_harness  # noqa: E402
 from mlevolve_sidecar import skill_injector  # noqa: E402
 
 # 1. Per-agent rebind fired for ALL FOUR codegen agents (the core fix vs the
@@ -90,13 +91,14 @@ assert skill_injector._task_for_routing("## Description\nno marker") == "## Desc
 # 2c. Eval-harness injection — cell-agnostic. Appends the held-out rules to ANY
 #     guideline and rewrites the num_workers nudge. Both cells must get this.
 _eh = {"Implementation guideline": ["x", "• Use DataLoader with num_workers>=2 for speed"]}
-skill_injector._apply_eval_harness(_eh)
+eval_harness.apply_impl_guideline_harness(_eh)
 _ehgl = _eh["Implementation guideline"]
 assert any("Held-out evaluation rules" in l for l in _ehgl), "eval-harness rules not injected"
+assert any("Resource budget" in l for l in _ehgl), "resource-budget rule missing"
 assert any("mleval.grader.validate" in l for l in _ehgl), "validate-tool rule missing"
 assert not any("num_workers>=2" in l for l in _ehgl), "num_workers>=2 nudge not rewritten"
 assert any("num_workers=0" in l for l in _ehgl), "num_workers=0 fix missing"
-skill_injector._apply_eval_harness(_eh)  # idempotent
+eval_harness.apply_impl_guideline_harness(_eh)  # idempotent
 assert sum("Held-out evaluation rules" in l for l in _eh["Implementation guideline"]) == 1, \
     "eval-harness injection not idempotent"
 

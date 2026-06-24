@@ -75,12 +75,16 @@ agent:
   # TIME_LIMIT_SECONDS. Pass the same value here so MLEvolve's prompts
   # report the correct budget to the agent.
   time_limit: ${TIME_LIMIT_SECONDS}
-  # initial_drafts=3 = upstream default (raised from 1, 2026-06-16). The number
-  # of INDEPENDENT starting branches seeded before search. With 1 we began with
-  # a single branch, so one all-buggy lineage left nothing to fall back on;
-  # 3 gives diverse independent starts (run sequentially since
-  # parallel_search_num=1). Pairs with the num_drafts 1->5 revert.
-  initial_drafts: 3
+  # initial_drafts=1 (reverted 3->1, 2026-06-17 after spike-027). This is the
+  # number of drafts MLEvolve executes in its "Phase 2: Pipelined parallel
+  # execution" BEFORE the MCGS search begins — and that phase runs them
+  # CONCURRENTLY, which parallel_search_num=1 does NOT serialize. With 3 we got
+  # 3-4 simultaneous Qwen-3B runfile procs (device_map="auto") on the single
+  # A6000 → 100% GPU / 27GB → CUDA contention → exit 139 (SIGSEGV), both arms.
+  # Robustness against an all-buggy lineage comes from num_drafts=5 instead:
+  # those drafts are spawned SEQUENTIALLY during the search, one GPU proc at a
+  # time. initial_drafts=1 = single non-parallel Phase-2 exec; safe on 1 GPU.
+  initial_drafts: 1
   seed: 0
   data_preview: True
 
@@ -164,7 +168,8 @@ agent:
     min_exploration_weight: 0.2
 
     # Exploitation breadth raised to upstream defaults (2026-06-16) now that
-    # num_drafts=5 + initial_drafts=3 produce multiple branches worth exploiting.
+    # num_drafts=5 produces multiple branches worth exploiting (drafts spawn
+    # sequentially during search; initial_drafts=1 keeps Phase-2 single-GPU-safe).
     topk_early_k: 5
     topk_early_max_per_branch: 3
     topk_late_k: 3

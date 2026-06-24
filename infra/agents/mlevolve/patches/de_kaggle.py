@@ -3,10 +3,10 @@
 WHY: MLEvolve is a Kaggle/MLE-bench agent. Its prompts hardcode a
 "Kaggle Grandmaster competing to WIN on a leaderboard" persona AND a
 "data lives in ./input / read sample_submission.csv" framing. On our
-contract-only tasks (SAMSum etc., HF-loaded) this derails the agent into
-writing generic Kaggle tabular code (`pd.read_csv("./input/train.csv")`,
-classification heads, generic NN) → off-task drift, never reaching the
-actual task.
+contract-only tasks this derailed the agent into generic Kaggle tabular code
+(`pd.read_csv("./input/train.csv")`, classification heads) → off-task drift.
+File-staged tasks (gsm8k jsonl) and HF-loaded tasks (samsum) both defer to the
+task description for the loader — see the INPUT-side patch below.
 
 This patch neutralizes the *competition persona* and the *./input read*
 framing image-wide so the agent stays on the contract. Two notes on the
@@ -84,9 +84,15 @@ RULES = [
     ("agents/draft_agent.py", "with the quality expected of a Kaggle Grandmaster",
      "with the quality expected of an expert ML engineer", True, 1),
     # --- INPUT-side data-location nudge ---
+    # Task-description-driven: gsm8k reads staged jsonl under ./input/; samsum
+    # uses datasets.load_dataset per instruction. Do NOT steer all tasks toward HF
+    # or away from ./input/ — that contradicted file-staged tasks (spike-028).
     ("agents/draft_agent.py",
      "- The data is already prepared in `./input` directory. No need to unzip files.",
-     "- Load the dataset using the loader named in the task description (e.g. a HuggingFace `datasets.load_dataset(...)` call). The `./input` directory may be EMPTY — do NOT assume local train.csv/test.csv/sample_submission.csv exist; do NOT read CSVs from `./input`.", True, 1),
+     "- Follow the dataset loader and file paths named in the task description exactly. "
+     "When the task lists local files under `./input/` (e.g. `.jsonl`, `.csv`), read those files. "
+     "When the task names a HuggingFace dataset slug, use `datasets.load_dataset(...)` as specified. "
+     "Do not assume MLE-Bench CSV layouts (`train.csv`, `test.csv`) unless the task describes them.", True, 1),
     # --- OUTPUT-side submission-format warning (injected into EVERY prompt
     #     via update_data_preview) ---
     ("engine/agent_search.py", "self.data_preview = base_preview + submission_format_warning",

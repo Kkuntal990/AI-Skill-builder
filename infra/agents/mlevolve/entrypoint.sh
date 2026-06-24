@@ -131,8 +131,8 @@ done
 # description. This mirrors how MLEvolve+MLE-Bench actually runs (desc_file =
 # description.md only; instructions.txt is never loaded). Our eval-specific rules
 # (held-out test, validate tool, submission-is-the-score, no-train-on-test) are
-# appended to that same impl_guideline via mlevolve_sidecar/skill_injector.py
-# (_EVAL_HARNESS_RULES), so they reach BOTH cells identically and AFTER de_kaggle.
+# appended to that same impl_guideline via mlevolve_sidecar/eval_harness.py
+# (injected by skill_injector's wrapper), so they reach BOTH cells identically
 #
 # Why this matters: MLEvolve runs an LLM "clean_task_desc" (de_kaggle) rewrite
 # over description.md at init. Front-loading it with ~3 KB of removable-genre
@@ -190,8 +190,19 @@ RUN_START_EPOCH=$(date +%s)
 setsid python3 /workspace/run_mlevolve.py \
     > "$INNER_LOG" 2>&1 &
 AGENT_PID=$!
-AGENT_PGID=$(ps -o pgid= -p "$AGENT_PID" | tr -d ' ' || echo "$AGENT_PID")
-echo "[entrypoint] mlevolve PID=$AGENT_PID PGID=$AGENT_PGID"
+# setsid makes the agent a session+group leader, so its PGID == its PID.
+# But `ps` can race the child's setsid() call and momentarily report the
+# entrypoint's OWN pgid. If we then signalled that pgid we'd signal the
+# entrypoint shell itself, re-entering the trap forever (the spike-027 2655x
+# "received signal" storm). Guard: if the resolved pgid is empty or equals the
+# entrypoint's own group, fall back to AGENT_PID (which setsid guarantees IS
+# the agent's pgid).
+SELF_PGID=$(ps -o pgid= -p $$ | tr -d ' ' 2>/dev/null)
+AGENT_PGID=$(ps -o pgid= -p "$AGENT_PID" | tr -d ' ' 2>/dev/null)
+if [ -z "$AGENT_PGID" ] || [ "$AGENT_PGID" = "$SELF_PGID" ]; then
+    AGENT_PGID="$AGENT_PID"
+fi
+echo "[entrypoint] mlevolve PID=$AGENT_PID PGID=$AGENT_PGID (self_pgid=$SELF_PGID)"
 
 (
     while kill -0 "$AGENT_PID" 2>/dev/null; do
@@ -241,7 +252,16 @@ rm -f "$WATCHDOG_SENTINEL"
 ) &
 WATCHDOG_PID=$!
 
+# Re-entrancy guard: forward exactly once. Even with a correct PGID, K8s + the
+# watchdog can each deliver SIGTERM, and a trap that re-signals can re-enter
+# itself. We only ever need to forward the kill ONCE; after that, ignore further
+# TERM/INT so the wait loop + watchdog SIGKILL backstop finish the teardown
+# without a signal storm.
+_TERM_FIRED=0
 _term() {
+    [ "$_TERM_FIRED" = "1" ] && return
+    _TERM_FIRED=1
+    trap '' TERM INT
     echo "[entrypoint] received signal, forwarding to mlevolve PGID=$AGENT_PGID"
     kill -TERM -"$AGENT_PGID" 2>/dev/null || kill -TERM "$AGENT_PID" 2>/dev/null || true
 }

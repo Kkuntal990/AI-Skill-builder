@@ -37,6 +37,7 @@ import logging
 import sys
 
 from . import skill_retriever
+from .eval_harness import apply_impl_guideline_harness
 
 logger = logging.getLogger(__name__)
 
@@ -53,68 +54,6 @@ _TARGETS = {
 }
 
 _SELECTOR_SPEC = None
-
-# ---------------------------------------------------------------------------
-# Eval-harness rules (cell-agnostic; injected into EVERY node's impl_guideline)
-# ---------------------------------------------------------------------------
-# These are the eval-framework-specific rules that MLEvolve's native
-# impl_guideline (agents/prompts/impl_guideline.py) does NOT already cover. They
-# are delivered through impl_guideline — the same per-node channel MLEvolve uses
-# for its own harness (budget, submission path, anti-cheat) — instead of being
-# prepended to the task description, so they (a) reach with_skill AND
-# without_skill identically (no A/B confound), (b) are injected AFTER de_kaggle's
-# task-cleaning rewrite and so can never be hallucinated away (spike-025), and
-# (c) are not subject to the selector's task-truncation window. Task-SPECIFIC
-# held-out details (which files, the exact id contract) stay in each task's
-# instruction.md — only the task-agnostic rules live here.
-_EVAL_HARNESS_RULES = [
-    "",
-    "🔒 **Held-out evaluation rules** (this benchmark):",
-    "• The test inputs have their TARGETS WITHHELD — they are graded against "
-    "held-out references you cannot see. Do NOT train on, or select against, the "
-    "test set.",
-    "• Estimate your `Final Validation Score` on a validation split you hold out "
-    "from the TRAINING data — never on the test set.",
-    "• Your `./submission/submission.csv` is the ONLY thing graded (independently, "
-    "after the run). Your printed score is just the search signal — it is not the "
-    "official result.",
-    "• Validate your submission FORMAT before finishing (this does NOT reveal your "
-    "score): `python -m mleval.grader.validate submission/submission.csv` — fix any "
-    "INVALID before you stop.",
-]
-
-# MLEvolve's impl_guideline hardcodes "num_workers>=2"; forking DataLoader
-# workers after CUDA init segfaults the process (exit 139) on our GPU pods
-# (see memory: samsum fork-after-CUDA). Rewrite that line to a safe default.
-_NUM_WORKERS_BAD = "num_workers>=2"
-_NUM_WORKERS_FIX = (
-    "• Use DataLoader with num_workers=0 (forking workers AFTER CUDA/model init "
-    "can segfault the process, exit 139); only raise it if you create the loader "
-    "before any CUDA call"
-)
-
-
-def _apply_eval_harness(result) -> None:
-    """Inject eval-harness rules + fix the num_workers line. Cell-agnostic.
-
-    Mutates ``result["Implementation guideline"]`` in place. Safe/no-op if the
-    structure is unexpected. Idempotent within a node (the marker check prevents
-    double-append if the guideline is ever rebuilt).
-    """
-    try:
-        gl = result.get("Implementation guideline")
-        if not isinstance(gl, list):
-            return
-        # Fix the hardcoded num_workers nudge wherever it appears.
-        for i, line in enumerate(gl):
-            if isinstance(line, str) and _NUM_WORKERS_BAD in line:
-                gl[i] = _NUM_WORKERS_FIX
-        # Append eval-harness rules once.
-        if not any(isinstance(l, str) and "Held-out evaluation rules" in l for l in gl):
-            gl.extend(_EVAL_HARNESS_RULES)
-    except Exception as e:  # noqa: BLE001 — never break codegen
-        logger.warning("[skill_injector] eval-harness injection failed: %s", e)
-
 
 # ---------------------------------------------------------------------------
 # Selector (Activation + Execution)
@@ -180,10 +119,8 @@ def _selector_system(skills) -> str:
     )
 
 
-# End-of-rules sentinel emitted by infra/tasks/_harness_rules.md. Everything up
-# to and including it is the shared, task-agnostic benchmark boilerplate, which
-# carries NO skill-routing signal and is identical across tasks.
-_HARNESS_RULES_MARKER = "<!-- END_HARNESS_RULES -->"
+# End-of-rules sentinel in infra/tasks/_harness_rules.md (legacy C1 prepend).
+from .eval_harness import HARNESS_RULES_MARKER as _HARNESS_RULES_MARKER
 # Generous cap: route on the task-specific lead (model/method/data/eval). Must
 # comfortably exceed a task instruction's signal-bearing head — the gsm8k
 # instruction places LoRA@~2.9k and the batch/left-padding (vLLM) signal@~4.4k
@@ -333,9 +270,8 @@ def _wrap_impl_guideline(orig_fn):
 
     def wrapper(agent):
         result = orig_fn(agent)
-        # Eval-harness rules + num_workers fix: ALWAYS, both cells (not a skill;
-        # part of the benchmark harness, delivered via impl_guideline).
-        _apply_eval_harness(result)
+        # Benchmark harness (both cells) — see eval_harness.py, not skill content.
+        apply_impl_guideline_harness(result)
         try:
             skills = skill_retriever.loaded_skills()
             if skills:
