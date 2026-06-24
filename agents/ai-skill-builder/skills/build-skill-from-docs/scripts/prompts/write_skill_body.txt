@@ -27,6 +27,7 @@ Description (opening paragraph) must:
 - Be written in THIRD PERSON (no "I"/"you"/"we"). It is injected into the system prompt for skill selection; inconsistent point-of-view breaks discovery.
 - Start with an action verb ("Train...", "Process...", "Convert...")
 - State BOTH what the skill does AND when to use it: include at least one concrete "Use when..." / "Invoke when..." clause naming the triggering scenarios and key terms (class / algorithm names).
+- Name 2-3 DISTINCT situations the skill should fire on, not just one. User phrasing varies a lot, and the description is matched against many different wordings; covering several concrete scenarios (different tasks/entry-points the skill applies to) raises the chance it triggers on whichever way the user phrases their request.
 - Be a little "pushy" about triggering — agents tend to UNDER-use skills. Add a clause like "Use this whenever the user works with <X>, <Y>, or <Z>, even if they don't explicitly ask for <feature>."
 - Name specific capabilities (class names, algorithm names) — not generic terms.
 

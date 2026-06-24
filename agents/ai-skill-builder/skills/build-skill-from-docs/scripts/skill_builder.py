@@ -81,11 +81,19 @@ MAX_SKILL_LINES = 500
 # Target range: 60–150 lines covers the expanded structure (workflows, when-to-use,
 # hardware, templates sections). Hard cap stays 500 per Anthropic guideline.
 TARGET_SKILL_LINES = (60, 150)
+# Max generate→critic→repair rounds before shipping with residual findings as
+# warnings (ship-with-warning, not hard-reject — a usable skill with a flagged
+# residual beats no skill; the residual is surfaced via quality_gate + report).
+MAX_REPAIR_ROUNDS = 3
+# Skills with more than this many DOMAIN reference modules are flagged for review:
+# SkillsBench (arXiv:2602.12670) finds focused skills (≤3 modules) outperform
+# larger bundles. Soft signal (warning), not a hard cap.
+MAX_FOCUSED_MODULES = 3
 OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6"
 HTTP_TIMEOUT = 30
 LLM_TIMEOUT = 120
 USER_AGENT = "ai-skill-builder/1.0 (+https://github.com/Kkuntal990/AI-Skill-builder)"
-BUILDER_VERSION = "1.4.0"
+BUILDER_VERSION = "1.5.0"
 
 # Runtime MCP declarations. Skills *declare* expected MCPs in frontmatter; they
 # don't auto-install. The agent runtime decides whether to invoke them.
@@ -1176,12 +1184,26 @@ def judge_triggering(user_message: str, skills: list[dict]) -> dict:
 
 
 def evaluate_triggering(
-    skill_name: str, skill_description: str, eval_prompts: list[dict]
+    skill_name: str,
+    skill_description: str,
+    eval_prompts: list[dict],
+    siblings: list[dict] | None = None,
+    negative_prompts: list[dict] | None = None,
 ) -> dict:
-    """Run triggering judge over each eval prompt. Returns per-prompt results + win rate."""
+    """Run the triggering judge over each eval prompt. Returns per-prompt results + win rate.
+
+    `siblings`: real co-resident skill descriptions to compete against instead of
+    the canned `DECOY_SKILLS` (set via `--siblings`). Competing against the actual
+    sibling set is a far harder, more realistic precision test than synthetic decoys.
+
+    `negative_prompts`: should-NOT-trigger near-misses. If the target wins one, that
+    is a false positive (over-triggering). Makes the eval bidirectional — it catches
+    over-selection (the other half of the triggering failure mode), not just misses.
+    """
     if not eval_prompts:
         return {"win_rate": None, "results": [], "failing": []}
-    skills = [{"name": skill_name, "description": skill_description}] + DECOY_SKILLS
+    competitors = siblings if siblings else DECOY_SKILLS
+    skills = [{"name": skill_name, "description": skill_description}] + competitors
     results = []
     failing = []
     for p in eval_prompts:
@@ -1202,12 +1224,29 @@ def evaluate_triggering(
             failing.append(entry)
     total = len(results)
     wins = sum(1 for r in results if r["won"])
+    # Bidirectional: should-NOT-trigger near-misses. Target winning = false positive.
+    false_positives = []
+    for p in (negative_prompts or []):
+        msg = p.get("prompt", "")
+        if not msg:
+            continue
+        verdict = judge_triggering(msg, skills)
+        if verdict.get("choice") == skill_name:
+            false_positives.append({
+                "prompt_id": p.get("id"),
+                "prompt": msg,
+                "judge_reason": verdict.get("reason", ""),
+            })
     return {
         "win_rate": wins / total if total else None,
         "wins": wins,
         "total": total,
         "results": results,
         "failing": failing,
+        "competitors": "siblings" if siblings else "decoys",
+        "n_competitors": len(competitors),
+        "false_positives": false_positives,
+        "fp_total": len(negative_prompts or []),
     }
 
 
@@ -1240,6 +1279,164 @@ def improve_description(
         if len(p) > 50 and not p.startswith("#"):
             return p
     return raw.strip() or current_description
+
+
+# ── Quality critic + bounded repair (P1–P4 reliability checklist) ─────────────
+# critique_skill mirrors _run_scanner's BLOCK/WARN shape: deterministic regex for
+# the mechanical anti-patterns (P3) + structural checks (P1/P2), plus one LLM call
+# for the judgment dimensions (P4 scope-honesty, P1 semantic). The LLM critic is
+# told to abstain when unsure (demystifying-evals judge hygiene) so it adds recall
+# without inventing findings. "block" findings drive the repair loop in _pipeline.
+
+# All-caps directive words used as standalone rigid commands (P3 anti-pattern).
+_CRIT_ALLCAPS = re.compile(r"(?<![A-Za-z])(ALWAYS|NEVER|MUST NOT|MUST|DO NOT|DON'T)(?![A-Za-z])")
+# Windows-style paths: drive-letter (C:\) or UNC/backslash separators.
+_CRIT_WIN_PATH = re.compile(r"(?:[A-Za-z]:\\|\\\\[A-Za-z]|[A-Za-z]+\\[A-Za-z]+\\)")
+# Time-sensitive phrasing tied to a month/year ("after July 2026", "as of 2026").
+_CRIT_TIME = re.compile(
+    r"\b(?:after|before|as of|since|starting|until)\s+"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|"
+    r"January|February|March|April|June|July|August|September|October|November|December|"
+    r"(?:19|20)\d{2})",  # year-like only (avoids "after 1000 steps")
+    re.IGNORECASE,
+)
+# First/second-person pronouns in a description paragraph (P1 — must be third person).
+_CRIT_FIRST_PERSON = re.compile(r"(?<![A-Za-z])(I|we|our|us|my|you|your)(?![A-Za-z])", re.IGNORECASE)
+
+
+def critique_skill(
+    body: str, skill_name: str, module_count: int = 0, run_llm: bool = True
+) -> list[dict]:
+    """Critique a SKILL.md body against the P1–P4 reliability checklist.
+
+    Returns findings shaped like _run_scanner output:
+    {"severity": "block"|"warn", "where": "<dimension>", "message": str}.
+    "block" findings drive a repair round; "warn" findings ship as report
+    warnings. Deterministic regex covers P3 anti-patterns + mechanical P1/P2;
+    one LLM call (skippable via run_llm=False) covers P4 scope-honesty + semantic P1.
+    """
+    findings: list[dict] = []
+
+    # ── P3 — content anti-patterns (deterministic) ──
+    allcaps = sorted({m.upper() for m in _CRIT_ALLCAPS.findall(body)})
+    if allcaps:
+        findings.append({
+            "severity": "warn", "where": "P3-allcaps",
+            "message": f"rigid all-caps directive(s) {allcaps} — state the constraint once and explain why instead",
+        })
+    if _CRIT_WIN_PATH.search(body):
+        findings.append({
+            "severity": "warn", "where": "P3-windows-path",
+            "message": "Windows-style backslash path — use forward slashes for portability",
+        })
+    if _CRIT_TIME.search(body):
+        findings.append({
+            "severity": "warn", "where": "P3-time-sensitive",
+            "message": "time-sensitive phrasing tied to a date — move legacy info to an `## Old Patterns` section",
+        })
+
+    # ── P1 — description mechanics (deterministic) ──
+    desc = _extract_description(body)
+    if desc:
+        if _CRIT_FIRST_PERSON.search(desc):
+            findings.append({
+                "severity": "warn", "where": "P1-person",
+                "message": "description uses first/second person — write in third person (it is injected into the skill-selection system prompt)",
+            })
+        if not re.search(r"\b(?:use|invoke)\b[^.]*\bwhen(?:ever)?\b", desc, re.IGNORECASE):
+            findings.append({
+                "severity": "warn", "where": "P1-when-clause",
+                "message": "description has no 'Use when...' trigger clause — agents under-trigger without explicit when-conditions",
+            })
+
+    # ── P2 — focus / anti-bloat (deterministic; SkillsBench focused-skill finding) ──
+    if module_count > MAX_FOCUSED_MODULES:
+        findings.append({
+            "severity": "warn", "where": "P2-bloat",
+            "message": f"{module_count} domain reference modules; focused skills (≤{MAX_FOCUSED_MODULES}) outperform large bundles (SkillsBench) — consider grouping or splitting",
+        })
+
+    # ── P4 + semantic P1 — LLM judgment (abstain-when-unsure) ──
+    if run_llm:
+        try:
+            tpl = _read_prompt("critique_skill.txt")
+            prompt = _fill_prompt(tpl, skill_name=skill_name, skill_body=body[:12000])
+            raw = _strip_fences(_openrouter_call(prompt, max_tokens=1200, temperature=0.0))
+            match = re.search(r"\[.*\]", raw, re.DOTALL)
+            if match is None:
+                raise ValueError("critic returned no JSON array")
+            llm_findings = json.loads(match.group(0))
+            for f in llm_findings:
+                sev = "block" if f.get("severity") == "block" else "warn"
+                dim = f.get("dimension", "scope-honesty")
+                span = (f.get("offending_span") or "").strip()
+                reason = (f.get("reason") or "").strip()
+                msg = reason
+                if span:
+                    msg = f"{reason} (offending text: {span[:160]!r})"
+                findings.append({
+                    "severity": sev,
+                    "where": f"P{'4' if dim == 'scope-honesty' else '1'}-{dim}",
+                    "message": msg or f"{dim} violation",
+                })
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            # Critic LLM returned unparseable output — fail open (no block) so a
+            # flaky judge can't wedge the build; deterministic checks still apply.
+            findings.append({
+                "severity": "warn", "where": "P4-critic-error",
+                "message": "scope-honesty critic returned unparseable output; deterministic checks applied only",
+            })
+    return findings
+
+
+def repair_skill_body(body: str, findings: list[dict], skill_name: str) -> str:
+    """Re-generate the full body fixing the listed findings.
+
+    Full regeneration, NOT a diff-patch: targeted patching is what corrupts
+    bodies (mid-diff truncation → SyntaxError); full regen with a "fix only these"
+    instruction is robust.
+    """
+    tpl = _read_prompt("repair_skill_body.txt")
+    findings_text = "\n".join(
+        f"- [{f['severity']}] {f['where']}: {f['message']}" for f in findings
+    ) or "(no findings)"
+    prompt = _fill_prompt(
+        tpl, skill_name=skill_name, findings=findings_text, skill_body=body,
+    )
+    raw = _strip_fences(_openrouter_call(prompt, max_tokens=5000, temperature=0.2))
+    idx = raw.find("# ")
+    if idx > 0:
+        raw = raw[idx:]
+    return raw.strip() + "\n"
+
+
+def _load_sibling_descriptions(siblings_dir: str, exclude_name: str = "") -> list[dict]:
+    """Load {name, description} for each SKILL.md under siblings_dir (one level of
+    subdirs, plus the dir itself), excluding the skill being built. Lets the
+    triggering eval compete against REAL co-resident skills instead of canned decoys."""
+    out: list[dict] = []
+    base = Path(siblings_dir).expanduser()
+    if not base.exists():
+        return out
+    candidates = sorted(base.glob("*/SKILL.md"))
+    if (base / "SKILL.md").exists():
+        candidates.append(base / "SKILL.md")
+    for p in candidates:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        fm = text[3:end] if end != -1 else text
+        nm = re.search(r"^name:\s*(.+?)\s*$", fm, re.MULTILINE)
+        dm = re.search(r"^description:\s*(.+?)\s*$", fm, re.MULTILINE)
+        name = nm.group(1).strip().strip("\"'") if nm else p.parent.name
+        descr = dm.group(1).strip().strip("\"'") if dm else ""
+        if name and name != exclude_name and descr:
+            out.append({"name": name, "description": descr})
+    return out
 
 
 # ── Frontmatter assembly (deterministic) ──────────────────────────────────────
@@ -1792,6 +1989,32 @@ def _pipeline(
         old_patterns=plan.get("old_patterns", []),
     )
 
+    # ── Quality critic + bounded repair loop (Phase C/D) ──
+    # generate → critique (P1–P4) → if any "block" finding, repair → re-critique,
+    # bounded to MAX_REPAIR_ROUNDS. The body is settled here, BEFORE the description
+    # is extracted (below) and before refs synthesis, so all downstream stages see
+    # the repaired body. Residual findings ship as warnings (folded into validation
+    # below) — the critic never hard-rejects; the P0 gates remain the only hard gate.
+    critic_report = None
+    if not getattr(args, "no_critic", False):
+        module_count = len(plan.get("references", []))
+        critic_findings = critique_skill(body, skill_name, module_count=module_count)
+        initial_findings = list(critic_findings)
+        rounds = 0
+        while rounds < MAX_REPAIR_ROUNDS and any(f["severity"] == "block" for f in critic_findings):
+            blocking = [f for f in critic_findings if f["severity"] == "block"]
+            body = repair_skill_body(body, blocking, skill_name)
+            rounds += 1
+            critic_findings = critique_skill(body, skill_name, module_count=module_count)
+        residual_blocks = [f for f in critic_findings if f["severity"] == "block"]
+        critic_report = {
+            "rounds": rounds,
+            "repaired": rounds > 0,
+            "initial_findings": initial_findings,
+            "final_findings": critic_findings,
+            "quality_gate": "failed" if residual_blocks else "passed",
+        }
+
     refs_content: dict[str, str] = {}
     templates_content: dict[str, str] = {}
     scripts_content: dict[str, str] = {}
@@ -1870,9 +2093,20 @@ def _pipeline(
     evals_doc = write_evals(skill_name, body) if include_evals else None
 
     description = _extract_description(body)
+    # Real co-resident siblings (--siblings) replace the canned decoys in the
+    # triggering eval — a harder, realistic precision test. negative_prompts (when
+    # the eval doc carries them) make it bidirectional (catch over-triggering too).
+    siblings = (
+        _load_sibling_descriptions(args.siblings, exclude_name=skill_name)
+        if getattr(args, "siblings", None) else None
+    ) or None
+    negative_prompts = evals_doc.get("negative_prompts") if evals_doc else None
     triggering_report = None
     if run_eval_loop and evals_doc and evals_doc.get("prompts"):
-        initial = evaluate_triggering(skill_name, description, evals_doc["prompts"])
+        initial = evaluate_triggering(
+            skill_name, description, evals_doc["prompts"],
+            siblings=siblings, negative_prompts=negative_prompts,
+        )
         triggering_report = {"initial": initial}
         if initial.get("win_rate") is not None and initial["win_rate"] < 1.0 and initial["failing"]:
             improved = improve_description(
@@ -1882,7 +2116,10 @@ def _pipeline(
                 failing=initial["failing"],
             )
             if improved and improved != description:
-                revised = evaluate_triggering(skill_name, improved, evals_doc["prompts"])
+                revised = evaluate_triggering(
+                    skill_name, improved, evals_doc["prompts"],
+                    siblings=siblings, negative_prompts=negative_prompts,
+                )
                 if revised.get("win_rate", 0) > initial.get("win_rate", 0):
                     description = improved
                     triggering_report["revised"] = revised
@@ -1947,6 +2184,17 @@ def _pipeline(
     # Scripts validated: py_compile for .py, bash -n for .sh
     if scripts_content:
         validation_issues.extend(validate_scripts(scripts_content))
+    # Fold residual critic findings into validation as WARNINGS (ship-with-warning —
+    # the critic does not hard-reject). A "block" that survived the repair loop is
+    # tagged UNRESOLVED; the quality_gate field (below) carries the pass/fail signal.
+    if critic_report:
+        for f in critic_report["final_findings"]:
+            note = " [UNRESOLVED after repair]" if f["severity"] == "block" else ""
+            validation_issues.append({
+                "severity": "warning",
+                "where": f"critic:{f['where']}",
+                "message": f["message"] + note,
+            })
 
     return {
         "skill_name": skill_name,
@@ -1957,6 +2205,8 @@ def _pipeline(
         "scripts": scripts_content,
         "evals": evals_doc,
         "triggering_report": triggering_report,
+        "critic": critic_report,
+        "quality_gate": (critic_report or {}).get("quality_gate", "skipped"),
         "validation": validation_issues,
         "source_url": url,
         "repo": sources["repo"],
@@ -2211,6 +2461,8 @@ def cmd_build(args: argparse.Namespace) -> dict:
         "validation_warnings": [i for i in result["validation"] if i["severity"] == "warning"],
         "openclaw_skills_check": {"ok": ok, "output": check_out[:1000]},
         "triggering_report": result.get("triggering_report"),
+        "quality_gate": result.get("quality_gate", "skipped"),
+        "critic_rounds": (result.get("critic") or {}).get("rounds", 0),
         "hardware_hints_used": result.get("hardware_hints_used", False),
     }
 
@@ -2250,6 +2502,11 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--no-evals", action="store_true")
         sp.add_argument("--no-eval-triggering", action="store_true",
                         help="Skip the triggering judge + description optimizer loop")
+        sp.add_argument("--no-critic", action="store_true",
+                        help="Skip the quality critic + bounded repair loop (P1–P4 reliability checklist)")
+        sp.add_argument("--siblings", default=None,
+                        help="Directory of co-resident skills (each <dir>/<name>/SKILL.md) to use as "
+                             "REAL competitors in the triggering eval instead of the canned decoys")
         sp.add_argument("--force", action="store_true")
         sp.add_argument("--out", default=None)
 

@@ -1,0 +1,24 @@
+You are repairing the body of an OpenClaw SKILL.md. You are given the current body and a list of specific findings to fix. Rewrite the FULL body, fixing ONLY the listed findings and preserving everything else as close to verbatim as possible.
+
+Rules:
+- Output the complete markdown body (NO frontmatter — that is added separately). Start with `# `.
+- Fix every listed finding. Change nothing else: keep the same sections, code blocks, checklists, and wording except where a finding requires an edit.
+- Do not shorten or summarize sections that are not implicated by a finding.
+
+How to fix the common findings:
+- Scope-honesty / task-genre exclusion: REMOVE the "NOT for: <task genre>" wall. If the skill genuinely lacks a specific capability, replace it with a positive, capability-scoped escape-hatch ("For <a method this skill does not implement>, use <tool> instead") — never exclude a whole task genre the skill could be one step of. If a "use when" trigger contradicts an exclusion, drop the exclusion.
+- Description (opening paragraph): rewrite in THIRD PERSON (no "I"/"you"/"we"), state both what the skill does and when to use it (keep/add a concrete "Use when..." clause naming specific capabilities, class names, or algorithms), and keep it one paragraph.
+- Rigid ALL-CAPS directives (ALWAYS / NEVER / MUST): state the constraint once in normal case and explain WHY in one clause.
+- Windows-style backslash paths: use forward slashes.
+- Time-sensitive language ("after July 2026 ..."): move legacy/version info into a `## Old Patterns` collapsed `<details>` section instead.
+
+Return ONLY the repaired markdown body, starting with `# `.
+
+---
+SKILL NAME: {{skill_name}}
+
+FINDINGS TO FIX:
+{{findings}}
+
+CURRENT SKILL.md BODY:
+{{skill_body}}
