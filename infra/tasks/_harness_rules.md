@@ -9,14 +9,16 @@ and metric-direction. MLE-Bench+MLEvolve never hits this: MLEvolve delivers
 harness info through its OWN per-node channel (agents/prompts/impl_guideline.py),
 not through the task description.
 
-OPERATIVE SOURCE NOW: the task-agnostic eval rules live as a code constant,
-`_EVAL_HARNESS_RULES` in mlevolve_sidecar/skill_injector.py, injected into every
-node's impl_guideline (both cells, after de_kaggle). MLEvolve's native
-impl_guideline already covers resource budget / submission path / anti-cheat.
+OPERATIVE SOURCE NOW: the task-agnostic eval rules live in
+`mlevolve_sidecar/eval_harness.py` (`EVAL_HARNESS_RULES`), injected into every
+node's impl_guideline by `skill_injector.py`'s wrapper (both cells, after
+de_kaggle). MLEvolve's native impl_guideline already shows the dynamic per-run
+exec timeout and time/steps remaining from config.
 
 This file is retained ONLY as human-readable documentation of the rules; it is
-NOT read at run time. Keep it in sync with _EVAL_HARNESS_RULES if you edit
-either. Authoring guideline: docs/eval/task-authoring.md
+NOT read at run time. Keep it in sync with `EVAL_HARNESS_RULES` in
+`mlevolve_sidecar/eval_harness.py` if you edit either. Authoring guideline:
+docs/eval/task-authoring.md
 -->
 
 # Benchmark rules (documentation only — see header)
@@ -66,8 +68,7 @@ they ever conflict**.
 <!--
 The skill-router (mlevolve_sidecar/skill_injector.py) strips everything up to
 and including the END_HARNESS_RULES marker below before deciding which skills
-are relevant, so these constant rules don't crowd the task-specific signal out
-of the selector's context window. Keep the marker as the final line.
+are relevant (legacy C1 prepend only; harmless when tasks have no marker).
 -->
 ---
 <!-- END_HARNESS_RULES -->

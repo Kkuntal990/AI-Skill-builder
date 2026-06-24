@@ -4,12 +4,18 @@ Source: https://huggingface.co/datasets/openai/gsm8k (config `main`).
 Paper: "Training Verifiers to Solve Math Word Problems" (Cobbe et al., 2021).
 License: MIT. Not gated.
 
-MLE-Bench-aligned (docs/eval/task-authoring.md): the shared benchmark rules are
-prepended from infra/tasks/_harness_rules.md at run time; this file is the
-task-specific contract only. The TEST TARGETS ARE WITHHELD — the agent gets
-test questions only and self-scores on a held-out slice of train; the full
-test answers live privately in refs/test_refs.csv and are graded post-run.
-Files are produced by scripts/make_grading_data.py and staged to the PVC at
+Task-specific contract only. Shared harness rules (held-out grading, validate
+tool, resource budget, submission-is-the-score) are injected via MLEvolve
+implementation guidelines on every node (both A/B cells) — see
+infra/tasks/_harness_rules.md (documentation mirror of
+mlevolve_sidecar/eval_harness.py). They are NOT prepended to this file.
+Per-run time caps are shown dynamically in those guidelines and set by the
+orchestrator (`TIME_LIMIT`, `EXEC_TIMEOUT`); do not restate them here.
+
+The TEST TARGETS ARE WITHHELD — the agent gets test questions only and
+self-scores on a held-out slice of train; the full test answers live privately
+in refs/test_refs.csv and are graded post-run. Files are produced by
+scripts/make_grading_data.py and staged to the PVC at
 /results/data/gsm8k/{data,refs}/. SYNC to the PVC before running.
 -->
 
@@ -26,8 +32,8 @@ evaluate.
 ## Dataset Description
 
 All data is provided as files in your input directory — **do not download
-GSM8K from the internet** (the benchmark rules above require provided-data-only;
-the test targets have been withheld here on purpose).
+GSM8K from the internet**; use only the provided files below (test targets
+have been withheld on purpose).
 
 Files (`./input/`):
 
@@ -40,7 +46,8 @@ Files (`./input/`):
   field** — the targets are held out and graded against references you do not
   have. Predict on these; keep each `id` with its prediction.
 - **`sample_submission.csv`** — the exact required output format and id-set
-  (`id,prediction` with ids `"0"`…`"1318"`, empty predictions).
+  (`id,prediction` with ids `"0"`…`"1318"`, empty predictions). Read this for
+  column/header/id-set reference.
 
 Load with, e.g.:
 
@@ -81,36 +88,40 @@ crash).
 
 ## Evaluation
 
-- **Official metric**: exact-match accuracy of the predicted final integer
-  against the gold integer, over **all 1,319 test examples**, computed by the
-  held-out grader from your `submission.csv` (compare as numbers — normalise
-  commas / leading `$` / trailing `.0`).
-- **Your search signal**: hold out a slice of `train.jsonl` (e.g. the last
-  ~500 lines) as a validation set, score exact-match on it yourself, and print
-  it as the `Final Validation Score`. Do **not** score on the test set — you
-  have no test targets, and per the benchmark rules the submission file is what
-  is graded.
-- Generating ~1,319 (test) + your-val multi-step solutions is the dominant cost.
-  **Batch** generation (sizeable `batch_size`, **left-padding** for a
-  decoder-only LM, a tight `max_new_tokens`); unbatched per-example decode will
-  not finish in time.
+Three distinct roles — do not conflate them:
+
+1. **Official score (post-run, not in stdout):** exact-match accuracy over
+   **all 1,319 test examples**, computed by the held-out grader from
+   `./submission/submission.csv` only (compare as numbers — normalise commas /
+   leading `$` / trailing `.0`).
+
+2. **Search signal (stdout during run):** hold out a slice of `train.jsonl`
+   (e.g. the last ~500 lines) as a validation set. Score exact-match on **that
+   slice only** and print the result as `Final Validation Score`. Do **not**
+   compute this on the test set — you have no test labels.
+
+3. **Submission artifact:** populate `./submission/submission.csv` with one
+   prediction per test id. You may need a dedicated execution for full-test
+   batched inference; that pass produces the graded file, not your search metric.
+   Use sizeable `batch_size`, **left-padding** for this decoder-only LM, and a
+   tight `max_new_tokens`; unbatched per-example decode will not finish in time.
 
 ## Submission Format
 
 Write predictions to **`./submission/submission.csv`** (this exact path; only it
 is graded), with EXACTLY these two columns and a header — matching
-`sample_submission.csv`:
+`input/sample_submission.csv`:
 
     id,prediction
 
 One row for **every** one of the 1,319 test examples, where `id` is copied
 **verbatim** from `test.jsonl` (`"0"`…`"1318"`) and `prediction` is your model's
 final integer answer. The id-set must equal `{"0",…,"1318"}` exactly — do not
-renumber, shuffle, or invent ids. Example rows (format only):
+renumber, shuffle, or invent ids. Example rows (format only; ids are strings):
 
     id,prediction
-    0,18
-    1,3
+    "0",18
+    "1",3
 
 Save with:
 
@@ -126,5 +137,5 @@ Then validate the format (it does NOT reveal your score):
         capture_output=True, text=True).stdout)
 
 Save the runnable script as `runfile.py` in the working directory. Write
-`submission.csv` as soon as a full test pass completes, so a later step that
-runs out of time still leaves a gradable artifact.
+`./submission/submission.csv` as soon as a full test pass completes, so a later
+step that runs out of time still leaves a gradable artifact.
