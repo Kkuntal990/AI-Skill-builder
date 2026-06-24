@@ -2,8 +2,8 @@
 
 > For the design overview, see **[hld.md](hld.md)**.
 
-**Status:** Phase 1.5 Complete (builder_version 1.4.0)
-**Date:** 2026-05-24
+**Status:** 2.0.0 — closed critic→repair loop + Claude-subscription transport (see Phase 2.0)
+**Date:** 2026-06-24
 **Scope:** An OpenClaw agent that turns a Python package's docs URL into a progressive-disclosure SKILL.md + references + templates + evals, optionally augmented with curated community gotchas and runtime MCP fallback.
 
 ---
@@ -24,6 +24,15 @@ The skill is the durable artifact. MCPs are optional fetchers (build time) and r
 ---
 
 ## 2. Phase History
+
+### Phase 2.0 — Closed critic→repair loop + subscription transport (Jun 24, complete) — LATEST
+
+Evolved the one-shot template into a closed generate→gate→critic→repair loop (Anthropic skill-creator pattern); see [hld.md](hld.md) Pipeline.
+- **P0 hard gates** in `validate_skill`: `name` charset/≤64/reserved-word/XML, `description` ≤1024/XML, and **dead-pointer** (every cited `references|scripts|templates/<f>` must be bundled) — reject the build.
+- **Quality critic + bounded repair** (`critique_skill` + `prompts/critique_skill.txt`, `repair_skill_body`): deterministic P3/P1/P2 regex checks + one abstain-when-unsure LLM call for **P4 scope-honesty** (task-genre "NOT for" walls); ≤3 repair rounds, ship-with-warning + a `quality_gate` field.
+- **Sibling-aware + bidirectional triggering** (`--siblings`, `negative_prompts`).
+- **Claude-subscription transport**: `_llm_call` dispatcher → `claude -p` by default (no API credit), OpenRouter fallback (`MLEVAL_LLM_TRANSPORT`). All OpenClaw agents also moved onto the Claude subscription.
+- **Re-issued skills**: peft-tuning rebuilt clean (no genre wall, no phantom templates, `builder_version: 2.0.0`, triggering win_rate 1.0 vs real siblings); vllm-inference rebuilt. The old 1.x builds carried genre walls + (peft) phantom `templates/*.py` dead pointers.
 
 ### Phase 1.0 — Bootstrap (Apr 2026, complete)
 - Agent workspace files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`)
@@ -161,7 +170,7 @@ Persisted at `~/.openclaw/workspace/skills/peft-tuning/evals/`:
 openclaw agent --agent ai-skill-builder --json --timeout 600 \
   -m "Build a skill from <url> with --with-templates --with-troubleshooting --with-community"
 
-# Direct script (LLM still flows through OpenRouter)
+# Direct script (LLM flows through the Claude subscription via `claude -p` by default)
 python3 agents/ai-skill-builder/skills/build-skill-from-docs/scripts/skill_builder.py \
   build <url> --with-templates --with-troubleshooting --with-community --name <name> --force
 

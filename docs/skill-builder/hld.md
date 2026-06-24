@@ -1,6 +1,6 @@
 # HLD: AI-Skill Builder — OpenClaw Agent
 
-**Status:** Phase 1.5 Complete (2026-05-24, BUILDER_VERSION 1.4.0)
+**Status:** 2.0.0 — closed critic→repair loop + Claude-subscription transport (2026-06-24)
 **Companion to:** [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills) · [plan.md](plan.md) (phase progression and open items) · [skill-shape-principles.md](skill-shape-principles.md) (authoring guidance)
 
 ## Goal
@@ -19,7 +19,7 @@ MCP appears in three distinct seams. The skill is still the durable artifact; MC
 
 **Reddit is intentionally not a build-time source.** Google's Apr 2026 indirect-prompt-injection research reports a 32% rise in IPI content in static blogs/forums Nov 2025→Feb 2026; five poisoned docs flip a RAG response 90% of the time. Stack Exchange (licensed, structured, vote-deduplicated, attribution-preserving) is the safer community substrate.
 
-**No MCP calls happen at build time today.** The script uses `urllib` (HTTP), `gh api` (GitHub CLI), Stack Exchange REST (`api.stackexchange.com`), and OpenRouter (LLM). MCP is a runtime concern only.
+**No MCP calls happen at build time today.** The script uses `urllib` (HTTP), `gh api` (GitHub CLI), Stack Exchange REST (`api.stackexchange.com`), and the Claude subscription via the local `claude -p` CLI (OpenRouter is a fallback transport). MCP is a runtime concern only.
 
 ## How It Works
 
@@ -28,33 +28,34 @@ MCP appears in three distinct seams. The skill is still the durable artifact; MC
 3. Script resolves `owner/repo` from the URL and fetches sources in parallel (doc, README, examples; optionally issues, changelog, Stack Exchange Q&As)
 4. Regex side-channel extracts hardware-relevant sentences (VRAM/GPU/memory) from doc + README for the body prompt
 5. One LLM call plans structure: `references/*.md` files + workflows + templates + section flags (hardware, when-to-use)
-6. Parallel LLM calls synthesize SKILL.md body, each reference file, each runnable template, evals, and (when `--with-community`) `community-gotchas.md` from Stack Exchange + GitHub issues
-7. Each template is validated with `python -m py_compile`
-8. Triggering eval loop judges the description against canned decoys per eval prompt; rewrites the description once if any prompt fails
+6. LLM drafts the SKILL.md body; a critic + repair loop (≤3 rounds) scores P1-P4 and auto-fixes any task-genre scope wall, then parallel LLM calls synthesize each reference file, runnable template/script, evals, and (when `--with-community`) `community-gotchas.md`
+7. Each template is validated with `python -m py_compile`; each script via `py_compile`/`bash -n`
+8. Triggering eval loop judges the description against the real co-resident siblings (`--siblings`) or canned decoys per eval prompt; rewrites the description once if any prompt fails (bidirectional — also catches over-triggering)
 9. Script assembles YAML frontmatter deterministically: `name`, `requires.bins`, `install`, runtime MCP declarations (`mcps.preferred`, `mcps.fallback`), and provenance (`source.{url, repo, fetched_at, content_sha256, builder_version}`, `coverage`)
-10. Script validates: security scan + frontmatter parse + line-count cap + shell-command fabrication check + template compile check + IPI scan on community sources + `openclaw skills check`
+10. Script validates with **P0 hard gates** (name/description rules + dead-pointer) plus the security scan + line-count cap + shell-command fabrication check + template/script compile check + IPI scan + `openclaw skills check`
 11. Script writes `SKILL.md + references/ + templates/ + evals/` to `~/.openclaw/workspace/skills/<name>/`
 12. Script updates `built-skills.json` lockfile and appends to `skill-builder-audit.log`
 
 ## Pipeline
 
+Since 2.0.0 the pipeline is a **closed generate → gate → critic → repair loop**, not a one-shot template:
+
 ```text
 RESOLVE -> FETCH (doc, README, examples, [issues], [changelog], [SE Q&As])
        -> EXTRACT hardware hints (regex side-channel on doc + README)
        -> IPI SCAN on community sources (drop poisoned docs before LLM ingest)
-       -> PLAN STRUCTURE (LLM — outputs references, workflows, templates, section flags)
+       -> PLAN STRUCTURE (LLM — references, workflows, decision tree, MCP triggers, scripts, flags)
+       -> WRITE BODY (LLM)
+       -> CRITIC + REPAIR loop (<=3 rounds):
+             critique P1-P4 (regex P3 + abstain-when-unsure LLM for P4 scope-honesty / P1)
+          |- if any BLOCK finding (task-genre wall): repair body (full regen) -> re-critique
        -> SYNTHESIZE in parallel:
-             body (with workflows, when-to-use, hardware, templates sections)
-           + references/*.md
-           + templates/*.py (when --with-templates)
-           + evals/evals.json
-           + [pitfalls.md] + [troubleshooting.md]
-           + [community-gotchas.md] (when --with-community)
-       -> VALIDATE templates with py_compile
-       -> EVAL TRIGGERING (LLM judge vs decoys)
+             references/*.md + [templates/*.py] + [scripts/*] + evals/evals.json
+           + [pitfalls.md] + [troubleshooting.md] + [community-gotchas.md]
+       -> EVAL TRIGGERING (LLM judge vs real siblings [--siblings] or canned decoys; bidirectional)
           |- if win_rate < 1.0: IMPROVE DESCRIPTION (LLM) -> RE-JUDGE -> accept if better
-       -> ASSEMBLE frontmatter (deterministic): name + install + mcps + provenance
-       -> VALIDATE (scan + parse + line cap + fabrication check + openclaw skills check)
+       -> ASSEMBLE frontmatter (deterministic): name + install + mcps + provenance (builder_version)
+       -> VALIDATE (P0 hard gates + dead-pointer + scan + line cap + fabrication + openclaw check)
        -> WRITE to workspace
        -> LOG
 ```
@@ -63,15 +64,16 @@ RESOLVE -> FETCH (doc, README, examples, [issues], [changelog], [SE Q&As])
 |-------|-------------|
 | Resolve | Parse URL → derive `owner/repo` when possible |
 | Fetch | `urllib` for doc HTML (regex-stripped to markdown); `gh api` for README, examples, issues, changelog |
-| Extract hardware hints | Regex-grep doc + README for VRAM / GPU memory / A100 / H100 / DeepSpeed / FSDP / quantization / parameter count mentions; returns up to 12 relevant sentences |
-| Plan structure | One LLM call returns: `references`, `workflows` (with checklists), `templates` (0-3), `include_hardware_section`, `include_when_to_use_section` |
-| Synthesize | Parallel OpenRouter (Claude Opus) calls — one per file. Body prompt receives workflows, templates list, hardware hints, and section flags |
-| Validate templates | Each generated Python template runs `python -m py_compile`; failures surface as warnings |
-| Eval triggering | Per eval prompt: LLM judges our description against 5 canned decoy skills |
-| Improve description | If `win_rate < 1.0`, one LLM call rewrites the description from failing prompts |
-| Assemble | Python writes YAML frontmatter; LLM never writes frontmatter |
-| Validate | Reuses Scout's 60-pattern scanner + ML-safe filter; line cap 500; blocks hallucinated shell commands |
-| Write | `~/.openclaw/workspace/skills/<name>/{SKILL.md, references/*.md, templates/*.py, evals/evals.json}` |
+| Extract hardware hints | Regex-grep doc + README for VRAM / GPU / A100 / H100 / DeepSpeed / FSDP / quantization mentions; up to 12 sentences |
+| Plan structure | One LLM call returns `references`, `workflows`, `decision_tree`, `mcp_workflow_triggers`, `templates`/`scripts` (0-3 each), and section flags |
+| Write body | One LLM call drafts the SKILL.md body from the plan |
+| Critic + repair | `critique_skill` scores P1-P4 (deterministic regex for P3 anti-patterns + mechanical P1/P2-bloat; one abstain-when-unsure LLM call for P4 scope-honesty + semantic P1). Any BLOCK (task-genre "NOT for" wall) triggers `repair_skill_body` (full regen, not diff-patch); loop ≤3 rounds. Residual ships as warnings + a `quality_gate` field |
+| Synthesize | Parallel `claude -p` (Claude subscription) calls — one per reference/template/script/evals file. Transport switchable via `MLEVAL_LLM_TRANSPORT` (claude default, openrouter fallback) |
+| Eval triggering | Per eval prompt the LLM judges our description against the real co-resident siblings (`--siblings`) or 5 canned decoys; bidirectional (also detects false positives on should-NOT-trigger prompts) |
+| Improve description | If `win_rate < 1.0`, one LLM call rewrites the description (third-person, pushy, what+when) from failing prompts |
+| Assemble | Python writes YAML frontmatter (LLM never writes frontmatter); stamps `builder_version` provenance |
+| Validate | **P0 hard gates** (`name` charset/≤64/reserved-word/XML, `description` ≤1024/XML, **dead-pointer**) reject the build; plus Scout's scanner + ML-safe filter, line cap 500, shell-fabrication check |
+| Write | `~/.openclaw/workspace/skills/<name>/{SKILL.md, references/*.md, [templates|scripts]/*, evals/evals.json}` |
 | Log | Append to `skill-builder-audit.log`; update `built-skills.json` lockfile |
 
 ## Sources Ingested
@@ -266,7 +268,7 @@ openclaw agent --agent ai-skill-builder --local -m "..."
 # Via dashboard
 openclaw dashboard
 
-# Direct script (LLM calls still happen via OpenRouter)
+# Direct script (LLM calls go through the Claude subscription via `claude -p` by default)
 python3 agents/ai-skill-builder/skills/build-skill-from-docs/scripts/skill_builder.py build <url>
 ```
 
@@ -287,7 +289,7 @@ python3 agents/ai-skill-builder/skills/build-skill-from-docs/scripts/skill_build
 - **LLM never writes frontmatter.** Python assembles it deterministically.
 - **Never auto-overwrite.** Name collisions require `--force`.
 - **No installation to workspace from non-default `--out`.** `openclaw skills check` is skipped for out-of-workspace writes.
-- **OpenRouter key required.** From `OPENROUTER_API_KEY` env var or OpenClaw's `openrouter:default` auth profile; build aborts with a clear error if missing. Default model: `anthropic/claude-sonnet-4.6`.
+- **LLM transport (no API credit by default).** Default: the local Claude Code CLI (`claude -p`) → Claude subscription. `MLEVAL_LLM_TRANSPORT=openrouter` switches to the paid OpenRouter path (`OPENROUTER_API_KEY` or the `openrouter:default` auth profile; model `OPENROUTER_MODEL`). Build aborts clearly if no transport is available.
 
 ## Honest Limitations
 

@@ -47,12 +47,17 @@ python3 scripts/skill_builder.py built           # list generated skills
 
 ## Pipeline
 
+A closed generate -> gate -> critic -> repair loop (not a one-shot template):
+
 ```
 RESOLVE -> FETCH (doc, README, examples, [issues], [changelog])
-       -> PLAN STRUCTURE (LLM: decide references/*.md files)
-       -> SYNTHESIZE in parallel (SKILL.md body + references + evals)
+       -> PLAN STRUCTURE (LLM: references, decision tree, MCP triggers, scripts)
+       -> WRITE BODY (LLM)
+       -> CRITIC + REPAIR (<=3 rounds: critique P1-P4 -> repair body if blocking)
+       -> SYNTHESIZE in parallel (references + templates + scripts + evals)
+       -> TRIGGERING eval (judge vs siblings/decoys; optimize description on a miss)
        -> ASSEMBLE frontmatter (deterministic, no LLM)
-       -> VALIDATE (security scan + YAML parse + line cap + openclaw skills check)
+       -> VALIDATE (P0 gates + dead-pointer + security scan + line cap + openclaw check)
        -> WRITE to ~/.openclaw/workspace/skills/<name>/
 ```
 
@@ -62,15 +67,21 @@ See `references/skill-anatomy.md` for progressive-disclosure rules.
 See `references/frontmatter-spec.md` for OpenClaw metadata schema.
 See `references/anti-patterns.md` for traps the script rejects automatically.
 
-Core rules enforced by the validator:
+Two gates run before a skill is written:
+
+**P0 — deterministic validator (hard-fail; rejects the build):**
 
 - SKILL.md body <= 500 lines (target 30-80)
-- Frontmatter must parse as YAML and include `name` + `description`
-- `name` matches `^[a-z0-9-]{1,64}$`, is not a reserved word (anthropic/claude), and is XML-free
-- `description` is <= 1024 chars and XML-free, written in the third person and stating both what the skill does and when to use it (a "Use when..." clause is expected, not forbidden)
+- Frontmatter parses as YAML; `name` matches `^[a-z0-9-]{1,64}$`, is not a reserved word (anthropic/claude), and is XML-free
+- `description` is <= 1024 chars and XML-free, third person, stating both what the skill does and when to use it (a "Use when..." clause is expected, not forbidden)
 - No dead pointers: every `references/`, `scripts/`, `templates/` path cited in the body must be bundled
-- No BLOCK-pattern shell commands in generated output
-- No shell commands absent from the source docs (catches LLM fabrication)
+- No BLOCK-pattern shell commands; no commands absent from the source docs (catches fabrication)
+
+**P1-P4 — quality critic + bounded repair (<=3 rounds; ship-with-warning):**
+
+- **Scope-honesty (P4)** — flags task-genre "NOT for" walls (e.g. an inference skill excluding fine-tuning); these are auto-repaired before shipping
+- **Description (P1)**, **content anti-patterns (P3:** ALL-CAPS directives, Windows paths, time-sensitive language**)**, **focus (P2:** >3 reference modules**)**
+- Residual findings ship as warnings; the build report's `quality_gate` field carries pass/fail. Deterministic checks are regex; only P4 + semantic P1 use one abstain-when-unsure LLM call.
 
 ## LLM
 
@@ -87,17 +98,21 @@ Synthesis runs through a single `_llm_call` dispatcher, selected by
 
 Script exits clearly if no transport is available.
 
-## Optional flags (new in 1.4.0)
+## Optional flags
 
 - `--with-scripts` -- generate 1-3 SHORT utility scripts in `scripts/` (executed, not
   read into context). Validated via `py_compile` / `bash -n`. Use for health checks,
-  validators, probes that the agent should run unattended.
-- `--with-version-notes` -- emit an `## Old Patterns` collapsed section listing
-  deprecated APIs (when the docs mention any).
+  validators, probes the agent should run unattended.
+- `--with-version-notes` -- emit an `## Old Patterns` collapsed section listing deprecated APIs.
+- `--with-pitfalls` / `--with-troubleshooting` / `--with-community` -- distill GitHub
+  issues / Stack Exchange Q&As into extra reference files.
+- `--siblings <dir>` -- run the triggering eval against the REAL co-resident skills in
+  `<dir>` (each `<dir>/<name>/SKILL.md`) instead of the canned decoys; also enables
+  false-positive (over-trigger) detection.
+- `--no-critic` -- skip the quality critic + repair loop (P1-P4).
 
-The planner also now emits `decision_tree` (routing table for choices between modes)
-and `mcp_workflow_triggers` (per-workflow inline MCP fallback instructions) when the
-library warrants them -- both default-on, no flag needed.
+The planner emits `decision_tree` (routing table for choices between modes) and
+per-workflow `mcp_workflow_triggers` when the library warrants them -- default-on, no flag.
 
 ## Output
 
