@@ -94,7 +94,7 @@ OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6"
 HTTP_TIMEOUT = 30
 LLM_TIMEOUT = 120
 USER_AGENT = "ai-skill-builder/1.0 (+https://github.com/Kkuntal990/AI-Skill-builder)"
-BUILDER_VERSION = "1.5.0"
+BUILDER_VERSION = "2.0.0"
 
 # Runtime MCP declarations. Skills *declare* expected MCPs in frontmatter; they
 # don't auto-install. The agent runtime decides whether to invoke them.
