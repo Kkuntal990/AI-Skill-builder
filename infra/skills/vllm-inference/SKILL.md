@@ -1,12 +1,12 @@
 ---
 name: vllm-inference
-description: "Serve and query large language models using vLLM's `LLM` class for offline batch inference or the OpenAI-compatible `vllm serve` CLI for online serving. Use when you need high-throughput token generation, multi-GPU tensor/pipeline parallelism, quantized inference (FP8, AWQ, GPTQ, BitsAndBytes), speculative decoding, automatic prefix caching, or structured outputs — and you want an OpenAI SDK-compatible endpoint without writing a custom server."
-metadata: {"openclaw": {"emoji": "🤖", "requires": {"bins": ["python3"]}, "mcps": {"preferred": [], "fallback": ["context7/get-library-docs"]}, "source": {"url": "https://docs.vllm.ai/en/latest/", "repo": "vllm-project/vllm", "fetched_at": "2026-05-25T05:32:18Z", "content_sha256": "f7f76f38df036e77f2a1c582ad0b97ccd631e181620889c8d2f8b584dfa744ae", "builder_version": "1.4.0"}, "coverage": ["html", "gh-readme", "gh-issues-bug-closed", "changelog"]}}
+description: "Serve and run large language models for fast, high-throughput inference using vLLM's `LLM` offline class and the OpenAI-compatible `vllm serve` server. Use when deploying a model behind an OpenAI-compatible API, running offline batched generation over a fixed dataset with `SamplingParams`, quantizing a model (AWQ, GPTQ, FP8, GGUF, BitsAndBytes) to fit limited VRAM, or scaling a large model across GPUs with tensor, pipeline, data, or expert parallelism. Reach for this skill whenever the user works with vLLM, `vllm serve`, `LLM.generate`/`LLM.chat`, batched LLM generation, LoRA serving, speculative decoding, or structured/tool-calling outputs — even if they don't explicitly mention vLLM, and even when fast inference is only one step of a larger task (for example, evaluating a fine-tuned checkpoint)."
+metadata: {"openclaw": {"emoji": "🤖", "requires": {"bins": ["python3"]}, "mcps": {"preferred": [], "fallback": ["context7/get-library-docs"]}, "source": {"url": "https://docs.vllm.ai/en/latest/", "repo": "vllm-project/vllm", "fetched_at": "2026-06-24T10:19:27Z", "content_sha256": "62043f6b79ffcaa5b1a926189c017bafbbb3d28934c8d6afba78fa0a7a524f54", "builder_version": "2.0.0"}, "coverage": ["html", "gh-readme", "changelog"]}}
 ---
 
-# vllm-inference
+# vLLM Inference
 
-Serve and query large language models using vLLM's `LLM` class for offline batch inference or the OpenAI-compatible `vllm serve` CLI for online serving. Use when you need high-throughput token generation, multi-GPU tensor/pipeline parallelism, quantized inference (FP8, AWQ, GPTQ, BitsAndBytes), speculative decoding, automatic prefix caching, or structured outputs — and you want an OpenAI SDK-compatible endpoint without writing a custom server.
+Serve and run large language models for fast, high-throughput inference using vLLM's `LLM` offline class and the OpenAI-compatible `vllm serve` server. Use when deploying a model behind an OpenAI-compatible API, running offline batched generation over a fixed dataset with `SamplingParams`, quantizing a model (AWQ, GPTQ, FP8, GGUF, BitsAndBytes) to fit limited VRAM, or scaling a large model across GPUs with tensor, pipeline, data, or expert parallelism. Reach for this skill whenever the user works with vLLM, `vllm serve`, `LLM.generate`/`LLM.chat`, batched LLM generation, LoRA serving, speculative decoding, or structured/tool-calling outputs — even if they don't explicitly mention vLLM, and even when fast inference is only one step of a larger task (for example, evaluating a fine-tuned checkpoint).
 
 ## Installation
 
@@ -16,119 +16,114 @@ pip install vllm
 
 ## Quick Start
 
-```bash
-# Online: start an OpenAI-compatible server
-vllm serve meta-llama/Llama-3-8B-Instruct --tensor-parallel-size 1
+Run offline batched generation against a model in a few lines:
 
-# Offline: batch inference in Python
+```python
 from vllm import LLM, SamplingParams
-llm = LLM(model="meta-llama/Llama-3-8B-Instruct")
-outputs = llm.generate(["Hello, world!"], SamplingParams(temperature=0.8, max_tokens=128))
-print(outputs[0].outputs[0].text)
+
+prompts = ["Hello, my name is", "The capital of France is"]
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+
+llm = LLM(model="facebook/opt-125m")
+outputs = llm.generate(prompts, sampling_params)
+
+for output in outputs:
+    print(output.outputs[0].text)
 ```
+
+To instead expose an OpenAI-compatible HTTP API, launch a server with `vllm serve <model>` (see the first workflow below).
 
 ## Decision Tree
 
 | If the user wants... | Choose... | Then see |
 |---|---|---|
-| Online API vs batch script | Online (`vllm serve`) if latency/streaming matters or clients use OpenAI SDK; offline (`LLM.generate`) if processing a fixed dataset or running evals | `references/serving-modes.md` |
-| Model too large for available VRAM | FP8 W8A8 for NVIDIA Hopper+ (best quality/speed); AWQ/GPTQ INT4 for older GPUs or extreme compression; BitsAndBytes for quick prototyping without pre-quantized weights | `references/quantization-and-memory.md` |
-| Multi-GPU deployment strategy | Tensor parallelism (TP) within a node for latency; pipeline parallelism (PP) across nodes for very large models; expert parallelism (EP) for MoE models; data parallelism (DP) for throughput scaling with smaller models | `references/parallelism-and-scaling.md` |
-| Faster decoding / lower latency per token | Speculative decoding with draft model (EAGLE/MLP/N-gram) if draft overhead is acceptable; prefix caching if prompts share long common prefixes; torch.compile + CUDA graphs for pure kernel throughput | `references/features-and-integrations.md` |
-| Disaggregated vs co-located prefill/decode | Disaggregated prefill (experimental) when prefill latency dominates and you have spare nodes; co-located (default) for simpler ops and moderate traffic | `references/serving-modes.md` |
-| Observability and production readiness | Prometheus + Grafana for metrics dashboards; OpenTelemetry for distributed tracing; benchmark CLI (`vllm benchmark serve/throughput/latency`) before go-live | `references/observability-and-tuning.md` |
+| Concurrent/streaming API traffic vs a one-shot batch over a fixed dataset | Online serving (`vllm serve`, OpenAI-compatible endpoints) for concurrent/streaming traffic; offline `LLM` class for fixed batches and pipelines | `references/online-serving.md` vs `references/offline-inference.md` |
+| To quantize a model to fit or run faster | FP8 on Hopper+ for near-lossless speedup; AWQ/GPTQ INT4 for broad GPU support and max compression; BitsAndBytes for on-the-fly load without calibration; GGUF for portability/CPU | `references/quantization.md` |
+| More throughput or to fit a model that doesn't fit on one GPU | Tensor parallel within one node with fast interconnect; pipeline parallel across nodes; data parallel to replicate for throughput; expert parallel for MoE | `references/distributed-and-tuning.md` |
+| To fix CUDA out-of-memory at startup or under load | Lower `--gpu-memory-utilization`, reduce `--max-model-len`, quantize weights/KV cache, or enable prefix caching | `references/distributed-and-tuning.md` |
+| To optimize for low latency vs high throughput | Speculative decoding (draft/EAGLE/MTP/n-gram) for latency; larger batches + chunked prefill for throughput | `references/advanced-features.md` |
+| JSON/grammar-constrained output or tool/function calling | Structured outputs for schema/regex/grammar constraints; tool calling for function invocation and reasoning | `references/advanced-features.md` |
 
 ## Common Workflows
 
-### Launch OpenAI-compatible online server
+### Deploy an OpenAI-compatible server
 
-Start a production-ready OpenAI-compatible HTTP server with optional quantization and multi-GPU parallelism. For detailed argument reference, see `references/serving-modes.md`.
-
-Copy this checklist:
-
-- [ ] Choose model and confirm VRAM budget; select quantization if needed (see `references/quantization-and-memory.md`)
-- [ ] Set parallelism flags (`--tensor-parallel-size`, `--pipeline-parallel-size`) based on GPU count
-- [ ] Run `vllm serve <model> [--quantization ...] [--tensor-parallel-size N]` and wait for `Application startup complete`
-- [ ] Validate with a curl POST to `/v1/chat/completions` and check `/metrics` endpoint for Prometheus scrape
-- [ ] **MCP fallback**: if the specific `--served-model-name` or server argument you need is not in `references/serving-modes.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned libraryId and `query="online serving server arguments"` — skip if references covered your case.
-
----
-
-### Offline batch inference
-
-Process a fixed prompt list with `LLM.generate` and collect `RequestOutput` objects. For engine arguments and quantization options, see `references/serving-modes.md` and `references/quantization-and-memory.md`.
+Stand up a streaming, concurrent inference API behind the OpenAI protocol. For server/engine arguments and deployment recipes, see `references/online-serving.md`.
 
 Copy this checklist:
 
-- [ ] Instantiate `LLM(model=..., quantization=..., tensor_parallel_size=N)` with desired engine arguments
-- [ ] Build a list of prompt strings or token-ID lists
-- [ ] Call `llm.generate(prompts, SamplingParams(...))` and collect `RequestOutput` objects
-- [ ] Post-process outputs and optionally save results; profile throughput with `vllm benchmark throughput`
-- [ ] **MCP fallback**: if the model architecture or quantization format you need is not in `references/quantization-and-memory.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned libraryId and `query="offline inference quantization <format>"` — skip if references covered your case.
+- [ ] Install vLLM and confirm GPU/driver visibility
+- [ ] Launch with `vllm serve <model>` and set key server args (`--max-model-len`, `--gpu-memory-utilization`)
+- [ ] Poll `/health` until ready and list `/v1/models`
+- [ ] Send a test request to `/v1/chat/completions` and verify output
+- [ ] **MCP fallback**: if a server or engine argument you need isn't in `references/online-serving.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned `libraryId` and `query="vllm serve <arg>"` — skip if references covered your case.
 
----
+### Offline batched inference
 
-### Multi-node distributed serving with Ray
-
-Deploy vLLM across multiple nodes using a Ray cluster for models that exceed single-node GPU capacity. For topology options and KubeRay setup, see `references/parallelism-and-scaling.md`.
+Run a fixed batch of prompts through the `LLM` class and persist results. For `SamplingParams` fields, `generate`/`chat`/beam search, and pooling models, see `references/offline-inference.md`.
 
 Copy this checklist:
 
-- [ ] Start Ray cluster: `ray start --head` on head node, `ray start --address=<head>` on workers
-- [ ] Confirm all nodes are visible via `ray status`
-- [ ] Launch vLLM with `--tensor-parallel-size` and `--pipeline-parallel-size` matching total GPU topology
-- [ ] Run a smoke-test request and verify load is distributed across nodes via `nvidia-smi` on each host
-- [ ] **MCP fallback**: if your Ray cluster topology or multi-node config is not covered in `references/parallelism-and-scaling.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned libraryId and `query="multi-node Ray distributed serving"` — skip if references covered your case.
+- [ ] Instantiate `LLM(model=...)` with dtype and memory settings
+- [ ] Build prompts and configure `SamplingParams`
+- [ ] Call `llm.generate()` / `llm.chat()` over the batch
+- [ ] Collect outputs and persist results
+- [ ] **MCP fallback**: if the `SamplingParams` field or `LLM` method you need isn't in `references/offline-inference.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned `libraryId` and `query="SamplingParams <field>"` — skip if references covered your case.
 
----
+### Serve a quantized model on limited VRAM
 
-### Enable and validate automatic prefix caching (APC)
-
-Reduce time-to-first-token for requests sharing a common system prompt by enabling the KV-cache prefix reuse. For eviction tuning and IndexCache variants, see `references/features-and-integrations.md`.
+Fit a model into a tight VRAM budget by quantizing weights and KV cache. For method recipes and LLM Compressor (W8A8/W4A16/W4A8), see `references/quantization.md`.
 
 Copy this checklist:
 
-- [ ] Add `--enable-prefix-caching` to the serve command (or `enable_prefix_caching=True` in `LLM` constructor)
-- [ ] Send repeated requests sharing a common system prompt to warm the cache
-- [ ] Check `vllm:cache_hit_rate` in Prometheus or logs for non-zero hit rate
-- [ ] Tune `--max-num-seqs` and `--gpu-memory-utilization` if cache eviction is too aggressive
-- [ ] **MCP fallback**: if the prefix caching eviction behavior or IndexCache variant you need is not in `references/features-and-integrations.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned libraryId and `query="automatic prefix caching configuration"` — skip if references covered your case.
+- [ ] Pick a quantization method for the GPU and quality budget
+- [ ] Load the prequantized checkpoint or apply LLM Compressor
+- [ ] Set `--gpu-memory-utilization`, `--max-model-len`, and optional quantized KV cache
+- [ ] Probe VRAM headroom and run a smoke request
+- [ ] **MCP fallback**: if your quantization format or LLM Compressor recipe isn't in `references/quantization.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned `libraryId` and `query="<quant-method> quantization"` — skip if references covered your case.
+
+### Multi-GPU distributed serving for a large model
+
+Spread a large model across GPUs (and nodes) without OOM. For parallelism modes and multi-node serving via Ray, see `references/distributed-and-tuning.md`.
+
+Copy this checklist:
+
+- [ ] Choose parallelism (tensor vs pipeline vs data vs expert) for the topology
+- [ ] Set `--tensor-parallel-size` / `--pipeline-parallel-size` (multi-node via Ray)
+- [ ] Launch and confirm all workers join the engine
+- [ ] Verify throughput and that the model fits without OOM
+- [ ] **MCP fallback**: if your parallelism or multi-node setup isn't covered in `references/distributed-and-tuning.md`, call `context7__resolve-library-id` with `libraryName="vllm"`, then `context7__query-docs` with the returned `libraryId` and `query="<tensor|pipeline|data|expert> parallel serving"` — skip if references covered your case.
 
 ## When to Use
 
-Invoke this skill when the user mentions serving LLMs, running inference at scale, OpenAI-compatible endpoints, quantized model deployment, multi-GPU parallelism, speculative decoding, or vLLM specifically.
+Use this skill whenever the user works with vLLM, `vllm serve`, `LLM.generate`/`LLM.chat`, batched LLM generation, quantized inference, LoRA serving, speculative decoding, or structured/tool-calling outputs — even as ONE STEP of a larger task.
 
 **Use this skill when:**
-- Deploying an OpenAI-compatible inference server (`vllm serve`) for production or development
-- Running offline batch inference over a dataset using `LLM.generate` and `SamplingParams`
-- Fitting a large model into available VRAM via FP8, AWQ, GPTQ, or BitsAndBytes quantization
-- Scaling across multiple GPUs or nodes with tensor, pipeline, expert, or data parallelism
-- Enabling speculative decoding (EAGLE, MLP Speculator, N-gram), prefix caching, or structured outputs
-- Integrating with LangChain, LlamaIndex, or Prometheus/OpenTelemetry observability stacks
+- Serving a model behind an OpenAI-compatible API for concurrent or streaming traffic.
+- Running offline batched generation, chat, beam search, or pooling/embedding/scoring over a fixed dataset.
+- Quantizing a model (AWQ, GPTQ, FP8, GGUF, BitsAndBytes, LLM Compressor) to fit limited VRAM or run faster.
+- Scaling a large model across GPUs or nodes with tensor/pipeline/data/expert parallelism.
+- Needing fast inference to evaluate a checkpoint, generate completions, or constrain output to JSON/grammar or tool calls.
 
-**NOT for (use alternatives instead):**
-- Supervised fine-tuning or LoRA training — use `transformers.Trainer` or Axolotl
-- Fast LoRA fine-tuning with minimal setup — use Unsloth
-- YAML-driven training configuration — use Axolotl
-- Embedding-only workloads without generation — use sentence-transformers
+**Reach for a different tool when the task needs a capability this skill does not provide:**
+- For training or fine-tuning model weights via gradient updates (SFT, LoRA training, RLHF) — use a trainer like Hugging Face `Trainer`, TRL, or PEFT, then serve the resulting checkpoint here.
+- For arbitrary access to model internals (hidden states, custom forward hooks, single-step debugging) beyond vLLM's exposed APIs — use raw `transformers` instead.
 
 ## Scripts
 
 Execute these — don't read them as reference. Each runs without consuming context tokens.
 
-- `scripts/check_vram.sh` — Query nvidia-smi for free VRAM on all GPUs and warn if any device has less than 16 GB free. Run when: before launching `vllm serve` or `LLM()` to confirm memory headroom.
+- `scripts/wait_for_server.sh` — Poll the `/health` endpoint until the server returns 200, then list `/v1/models`. Run when: right after `vllm serve` is launched, before sending requests.
+  ```bash
+  bash scripts/wait_for_server.sh
+  ```
+- `scripts/check_vram.sh` — Probe `nvidia-smi` for free VRAM per GPU and warn if headroom is below a threshold. Run when: before loading a model, to confirm the GPU can hold weights + KV cache.
   ```bash
   bash scripts/check_vram.sh
   ```
-
-- `scripts/health_check.sh` — Poll the vLLM `/health` endpoint in a loop until the server is ready or timeout is reached, then print latency. Run when: after starting `vllm serve`, before sending the first real request.
+- `scripts/estimate_model_vram.py` — Estimate weight + KV-cache memory from parameter count, dtype, and max-model-len and compare against available VRAM. Run when: during capacity planning, before choosing quantization or parallelism.
   ```bash
-  bash scripts/health_check.sh
-  ```
-
-- `scripts/validate_openai_endpoint.py` — Send a minimal chat-completion request to a running vLLM server and assert a non-empty response, printing token throughput. Run when: as a smoke test after server startup or after config changes.
-  ```bash
-  python scripts/validate_openai_endpoint.py
+  python scripts/estimate_model_vram.py
   ```
 
 ## Old Patterns
@@ -136,19 +131,18 @@ Execute these — don't read them as reference. Each runs without consuming cont
 <details>
 <summary>Deprecated APIs (kept for historical context)</summary>
 
-- **`AsyncLLMEngine` direct instantiation** (deprecated in 0.4.x) — use `vllm serve` CLI or `AsyncLLM` via the v1 engine path instead; direct `AsyncLLMEngine` construction is superseded by the new engine entrypoints.
-- **`LLMEngine` (synchronous) for production serving** (deprecated in 0.5.x) — use the OpenAI-compatible server (`vllm serve`) or `AsyncLLM` for async workloads; synchronous `LLMEngine` is for offline/testing only.
-- **`--worker-use-ray` flag** (deprecated in 0.3.x) — Ray workers are now selected automatically based on distributed config; remove the flag and rely on `--tensor-parallel-size` with Ray cluster active.
+- **V0 engine** (`LLMEngine`/`AsyncLLMEngine` legacy path, deprecated in 0.8.0) — use the V1 engine instead; it is the default since 0.8.x and enabled automatically.
+- **`SamplingParams(use_beam_search=True)`** (deprecated in 0.6.3) — use the dedicated beam search API / `BeamSearchParams` via `LLM.beam_search()` instead.
 
 </details>
 
 ## References
 
-- `references/serving-modes.md` — Offline `LLM` class, online OpenAI-compatible server, disaggregated prefill, data-parallel and context-parallel deployment
-- `references/quantization-and-memory.md` — FP8, AWQ, GPTQ, BitsAndBytes, INT4/INT8, quantized KV cache, VRAM conservation strategies, engine memory arguments
-- `references/parallelism-and-scaling.md` — Tensor, pipeline, expert, data, and context parallelism; multi-node serving; Ray and KubeRay cluster setup
-- `references/features-and-integrations.md` — Automatic prefix caching, LoRA adapters, speculative decoding, structured outputs, tool calling, multimodal inputs, reasoning outputs, LangChain/LlamaIndex integrations
-- `references/observability-and-tuning.md` — Prometheus metrics, OpenTelemetry, Grafana dashboards, benchmarking CLI, optimization and tuning knobs, environment variables
+- `references/offline-inference.md` — `LLM` class, `SamplingParams`, batched generate/chat, beam search, prompt embeds, and pooling/embedding/scoring models.
+- `references/online-serving.md` — `vllm serve`, OpenAI-compatible server endpoints, server/engine arguments, Docker and Kubernetes deployment.
+- `references/quantization.md` — AWQ, GPTQ, GGUF, BitsAndBytes, FP8, LLM Compressor (W8A8/W4A16/W4A8), and quantized KV cache.
+- `references/distributed-and-tuning.md` — tensor/pipeline/data/expert parallelism, multi-node serving, conserving memory, and throughput-vs-latency tuning.
+- `references/advanced-features.md` — LoRA adapters, speculative decoding, structured outputs, tool calling, automatic prefix caching, and multimodal inputs.
 
 ## Looking things up live (MCP fallback)
 
