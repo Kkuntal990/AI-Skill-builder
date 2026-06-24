@@ -1,6 +1,6 @@
 ---
 name: build-skill-from-docs
-description: "Generate an OpenClaw SKILL.md from a Python package's documentation URL. Fetches doc + README + examples (and optionally GitHub issues), synthesizes a progressive-disclosure skill (SKILL.md + references + evals), and installs safely. Use when: user says 'build a skill for X', 'turn this doc into a skill', or provides a package doc URL. NOT for: describing a skill interactively (use anthropic's skill-creator), finding existing skills (use find-ai-skill)."
+description: "Generate an OpenClaw SKILL.md from a Python package's documentation URL. Fetches doc + README + examples (and optionally GitHub issues), synthesizes a progressive-disclosure skill (SKILL.md + references + evals), and installs safely. Use when the user says 'build a skill for X', 'turn this doc into a skill', or provides a package doc URL. For describing a skill interactively rather than building one from docs, use anthropic's skill-creator; to discover skills that already exist, use find-ai-skill."
 metadata:
   {
     "openclaw":
@@ -66,9 +66,11 @@ Core rules enforced by the validator:
 
 - SKILL.md body <= 500 lines (target 30-80)
 - Frontmatter must parse as YAML and include `name` + `description`
+- `name` matches `^[a-z0-9-]{1,64}$`, is not a reserved word (anthropic/claude), and is XML-free
+- `description` is <= 1024 chars and XML-free, written in the third person and stating both what the skill does and when to use it (a "Use when..." clause is expected, not forbidden)
+- No dead pointers: every `references/`, `scripts/`, `templates/` path cited in the body must be bundled
 - No BLOCK-pattern shell commands in generated output
 - No shell commands absent from the source docs (catches LLM fabrication)
-- Description uses imperative action verbs, not "use when..."
 
 ## LLM
 
