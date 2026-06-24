@@ -1,13 +1,17 @@
 You are planning the structure for an OpenClaw SKILL.md package for a Python library.
 
 INPUT: the package's documentation index (table of contents and a sample section).
-OUTPUT: JSON that lists reference files, common workflows, runnable templates, and a few boolean signals.
+OUTPUT: JSON that lists reference files, common workflows, runnable templates, a decision tree, utility scripts, and a few boolean signals.
 
 Rules:
-- SKILL.md stays short (30-150 lines). Heavy content goes to `references/*.md` and runnable templates go to `templates/*.py`.
+- SKILL.md stays short (30-150 lines). Heavy content goes to `references/*.md`, runnable templates go to `templates/*.py`, and short utility scripts go to `scripts/*.{sh,py}`.
 - `references`: 2-5 files. Group domain variants by class (e.g. 12 trainer types → 3-4 files), not one file per variant.
 - `workflows`: 2-4 multi-step procedures an agent would actually execute end-to-end. Each gets a copy-paste checklist in SKILL.md. If the package has no natural workflows (e.g. it's a pure reference library), return an empty list.
-- `templates`: 0-3 runnable Python scripts that demonstrate the most common workflows. Only include when the package has concrete end-to-end Python usage worth a script (not for pure-CLI libraries). If `with_templates` flag is false, return an empty list.
+- `decision_tree`: 2-6 routing entries that tell the agent how to PICK between modes/strategies/algorithms when the user's intent maps to multiple options (e.g. online vs offline serving, FP8 vs AWQ quantization, tensor vs pipeline parallelism). Each entry is a `{trigger, decide, refer_to}` triple. Return an empty list ONLY if the library has truly no meaningful choices to make.
+- `mcp_workflow_triggers`: for each workflow above, write a one-sentence conditional MCP-fallback instruction the agent should follow when references don't cover the user's specific case. Format: `"if <X is not in references/Y.md>, call context7__resolve-library-id with libraryName=<package>, then context7__query-docs with the returned libraryId and query=<topic>"`. Use OpenClaw native tool naming (`context7__resolve-library-id`, `context7__query-docs`) with double underscores — NOT Anthropic's `Context7:get-library-docs` colon syntax (that's for Anthropic's first-party runtime, not OpenClaw). One trigger per workflow; same order as `workflows`. Empty list if no MCP is meaningfully useful for this library.
+- `templates`: 0-3 runnable Python scripts that demonstrate the most common workflows end-to-end. Read-as-reference. Only include when the package has concrete end-to-end Python usage worth a script. If `with_templates` is false, return empty.
+- `scripts`: 0-3 SHORT (<60 line) utility scripts the agent should EXECUTE (not read as reference). Examples: a health-check curl loop, a VRAM-usage probe, a config validator. Each has `filename`, `lang` (bash|python), `purpose` (what it does), `executes_what` (when to run it). If `with_scripts` is false, return empty.
+- `old_patterns`: list deprecated/legacy patterns worth flagging in a collapsed section. Each entry: `{name, deprecated_in, replacement}`. Empty list if the docs don't mention any deprecations. Only emitted to SKILL.md if `with_version_notes` is true.
 - `include_hardware_section`: true if the docs mention VRAM/GPU memory/compute requirements worth surfacing.
 - `include_when_to_use_section`: usually true; false only for utility libraries with no obvious competitors.
 - `include_evals`: true if `with_evals` flag is true.
@@ -24,8 +28,20 @@ Return ONLY JSON matching this schema, no prose:
   "workflows": [
     {"title": "<short title>", "checklist": ["<step 1>", "<step 2>", "<step 3>", "<step 4>"]}
   ],
+  "mcp_workflow_triggers": [
+    "if <X not in references/Y.md>, call <Server:tool> ..."
+  ],
+  "decision_tree": [
+    {"trigger": "<user intent / scenario>", "decide": "<choice criterion>", "refer_to": "<references/X.md or workflow title>"}
+  ],
   "templates": [
     {"filename": "<name>.py", "covers": "<what this script demonstrates end-to-end>"}
+  ],
+  "scripts": [
+    {"filename": "<name>.sh|<name>.py", "lang": "bash|python", "purpose": "<one-line>", "executes_what": "<when to run>"}
+  ],
+  "old_patterns": [
+    {"name": "<deprecated thing>", "deprecated_in": "<version>", "replacement": "<new thing>"}
   ],
   "include_hardware_section": true|false,
   "include_when_to_use_section": true|false,
@@ -48,11 +64,26 @@ Example good output for TRL:
     {"title": "Simple preference alignment with DPO", "checklist": ["Prepare preference dataset", "Configure DPOConfig", "Train with DPOTrainer", "Evaluate alignment"]},
     {"title": "Memory-efficient online RL with GRPO", "checklist": ["Define reward function", "Configure GRPOConfig", "Train with GRPOTrainer"]}
   ],
+  "mcp_workflow_triggers": [
+    "if your alignment algorithm isn't in references/offline-methods.md or references/online-methods.md, call context7__resolve-library-id with libraryName=\"trl\", then context7__query-docs with the returned libraryId and query=\"<algorithm>\"",
+    "if DPOConfig has a parameter not in references/offline-methods.md, call context7__resolve-library-id with libraryName=\"trl\", then context7__query-docs with libraryId and query=\"DPOConfig <param>\"",
+    "if your custom reward function shape isn't covered, call context7__resolve-library-id with libraryName=\"trl\", then context7__query-docs with libraryId and query=\"GRPO reward function signature\""
+  ],
+  "decision_tree": [
+    {"trigger": "user has preference pairs and wants alignment", "decide": "DPO (offline, simple) if pairs are pre-collected; GRPO (online) if you have a programmatic reward function", "refer_to": "references/offline-methods.md vs references/online-methods.md"},
+    {"trigger": "memory-constrained (<24GB single GPU)", "decide": "use PEFT + LoRA + 4-bit quantization", "refer_to": "references/integrations.md"},
+    {"trigger": "multi-GPU training", "decide": "DeepSpeed ZeRO-3 for large models; FSDP for medium", "refer_to": "references/integrations.md"}
+  ],
   "templates": [
     {"filename": "basic_sft_training.py", "covers": "Load model, load dataset, configure SFTConfig, train and save"},
     {"filename": "dpo_alignment.py", "covers": "DPOTrainer with Qwen on ultrafeedback"},
     {"filename": "grpo_with_reward_function.py", "covers": "GRPOTrainer with a custom Python reward function"}
   ],
+  "scripts": [
+    {"filename": "check_gpu_mem.sh", "lang": "bash", "purpose": "Probe nvidia-smi for free VRAM and warn if <16GB", "executes_what": "before starting training"},
+    {"filename": "validate_dpo_dataset.py", "lang": "python", "purpose": "Verify HF dataset has 'chosen' and 'rejected' columns with consistent prompt prefixes", "executes_what": "after dataset loading, before trainer.train()"}
+  ],
+  "old_patterns": [],
   "include_hardware_section": true,
   "include_when_to_use_section": true,
   "include_evals": true,
@@ -67,3 +98,5 @@ FLAGS:
 with_pitfalls={{with_pitfalls}}
 with_evals={{with_evals}}
 with_templates={{with_templates}}
+with_scripts={{with_scripts}}
+with_version_notes={{with_version_notes}}

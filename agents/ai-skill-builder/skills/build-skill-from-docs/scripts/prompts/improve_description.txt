@@ -6,9 +6,17 @@ messages trigger it, without becoming so broad it triggers on unrelated ones.
 
 Rules:
 - Keep it ONE paragraph (3-5 sentences).
+- Write in THIRD PERSON (no "I"/"you"/"we"). The description is injected into the
+  system prompt for skill selection; inconsistent point-of-view breaks discovery.
 - Start with an action verb ("Train...", "Apply...", "Generate...").
-- Include at least one "Use when..." OR "Invoke when..." clause with concrete
-  scenarios from the failing messages.
+- State BOTH what the skill does AND when to use it. Include at least one "Use when..."
+  OR "Invoke when..." clause with concrete scenarios from the failing messages, plus the
+  key terms (class / algorithm names) a user would actually mention.
+- Be a little "pushy" — agents tend to UNDER-trigger skills. A clause like "Use this
+  whenever the user works with <X>, even if they don't explicitly ask for it" raises recall.
+- Cut BOTH failure modes at once: rewrite so the failing messages now trigger (recall),
+  WITHOUT becoming so broad it fires on unrelated tasks (precision). If the judge picked
+  another skill because the description over-claimed someone else's territory, narrow that claim.
 - Name specific capabilities (class names, algorithm names) — not generic terms.
 - Don't list keywords separated by commas ("lora, qlora, sft"). Write prose.
 - Don't claim capabilities the skill doesn't have — stay within what the body describes.

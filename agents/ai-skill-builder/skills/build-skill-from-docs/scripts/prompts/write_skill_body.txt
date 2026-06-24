@@ -1,30 +1,46 @@
 You are writing the body of an OpenClaw SKILL.md file.
 
-INPUT: package documentation + README install section + list of reference files + workflows + templates + hardware hints.
+INPUT: package documentation + README install section + list of reference files + workflows + per-workflow MCP triggers + decision tree + templates + scripts + hardware hints + optional old patterns.
 OUTPUT: markdown body (NO frontmatter — that is added separately).
 
 Hard rules:
-- Target 60-150 lines. Hard cap 300.
+- Target 80-180 lines. Hard cap 300.
 - First section: `# <Skill Name>` + the description as the opening paragraph (see rules below).
 - Then sections in this order (include only those with content):
   1. `## Installation` — canonical install command from README
   2. `## Quick Start` — fastest zero-to-working example from the docs
-  3. `## Common Workflows` — each workflow as `### <title>`, one-sentence intro, a copy-paste checklist, and a pointer to the detailed reference file
-  4. `## When to Use` — when to use this skill + named alternative tools + "NOT for" cases (only if include_when_to_use_section is true)
-  5. `## Hardware Requirements` — concrete VRAM/GPU requirements from docs (only if include_hardware_section is true AND hardware hints are provided)
-  6. `## Templates` — list the runnable Python scripts in `templates/` with a one-line description each (only if templates are provided)
-  7. `## References` — short pointers to each reference file
-  8. `## Looking things up live (MCP fallback)` — runtime tail-coverage instructions; ALWAYS emit this section
+  3. `## Decision Tree` — only if decision_tree is non-empty. One row per trigger; tells the agent how to pick between options.
+  4. `## Common Workflows` — each workflow as `### <title>`, one-sentence intro, a copy-paste checklist (with inline MCP trigger as last step when provided), and a pointer to the detailed reference file
+  5. `## When to Use` — positive triggers ("use this when...") + method-level escape-hatches ("for <a capability this skill lacks>, use <tool> instead"). Do NOT exclude whole task genres. (only if include_when_to_use_section is true)
+  6. `## Hardware Requirements` — concrete VRAM/GPU requirements from docs (only if include_hardware_section is true AND hardware hints are provided)
+  7. `## Templates` — list the runnable Python scripts in `templates/` with a one-line description each (only if templates are provided)
+  8. `## Scripts` — list the EXECUTABLE utility scripts in `scripts/` with their command and one-line purpose. State clearly: "Execute these — don't read them as reference." (only if scripts are provided)
+  9. `## Old Patterns` — collapsed `<details>` block listing deprecated APIs (only if old_patterns is provided)
+  10. `## References` — short pointers to each reference file
+  11. `## Looking things up live (MCP fallback)` — SHORT tail-coverage section; emit only if mcp_workflow_triggers is non-empty
 - Imperative tone: "Run X", "Use Y" (not "X runs...", "Y is used for...").
 - Every shell/code block must come from the provided sources. Do not invent commands.
 - No marketing language. No trailing summary section.
+- No rigid ALL-CAPS directives (ALWAYS / NEVER / MUST). If a constraint matters, state it once and explain WHY in one clause — explained reasoning drives the agent better than heavy-handed caps.
 
 Description (opening paragraph) must:
+- Be written in THIRD PERSON (no "I"/"you"/"we"). It is injected into the system prompt for skill selection; inconsistent point-of-view breaks discovery.
 - Start with an action verb ("Train...", "Process...", "Convert...")
-- Include at least one concrete "Use when..." or "Invoke when..." clause
-- Name the specific capabilities (class names, algorithm names) — not generic terms.
+- State BOTH what the skill does AND when to use it: include at least one concrete "Use when..." / "Invoke when..." clause naming the triggering scenarios and key terms (class / algorithm names).
+- Be a little "pushy" about triggering — agents tend to UNDER-use skills. Add a clause like "Use this whenever the user works with <X>, <Y>, or <Z>, even if they don't explicitly ask for <feature>."
+- Name specific capabilities (class names, algorithm names) — not generic terms.
 
-Checklist format (inside `## Common Workflows`):
+Decision Tree format (only if decision_tree is non-empty):
+```
+## Decision Tree
+
+| If the user wants... | Choose... | Then see |
+|---|---|---|
+| <trigger 1> | <decide 1> | <refer_to 1> |
+| <trigger 2> | <decide 2> | <refer_to 2> |
+```
+
+Checklist format (inside `## Common Workflows` — append the MCP trigger as the LAST checklist item when provided):
 ```
 ### Full RLHF pipeline
 
@@ -36,23 +52,33 @@ Copy this checklist:
 - [ ] Step 2: Train reward model
 - [ ] Step 3: PPO reinforcement learning
 - [ ] Step 4: Evaluate aligned model
+- [ ] **MCP fallback**: <inline mcp_workflow_trigger for this workflow> — skip if references covered your case.
 ```
+
+CRITICAL — MCP tool naming (OpenClaw native, NOT Anthropic colon syntax):
+- Use double-underscore prefix: `context7__resolve-library-id` and `context7__query-docs`. NOT `Context7:get-library-docs` (that's Anthropic's first-party convention; OpenClaw's runtime uses double underscore).
+- The Context7 doc-fetch tool is named `query-docs`, NOT `get-library-docs`. Use the right name.
+- Library IDs are NOT predictable (`/<org>/<project>` does not generalize). The skill must instruct the agent to resolve the libraryId at runtime via `context7__resolve-library-id` first, then pass the returned id to `context7__query-docs`.
 
 When-to-Use format:
 ```
 ## When to Use
 
-Invoke this skill when the user mentions <concrete triggers>.
+Use this skill whenever the user works with <concrete triggers / key terms>, even as ONE STEP of a larger task.
 
 **Use this skill when:**
 - <specific case 1>
 - <specific case 2>
 
-**NOT for (use alternatives instead):**
-- Basic fine-tuning without RL — use `transformers.Trainer`
-- YAML-based training configuration — use Axolotl
-- Fast LoRA training — use Unsloth
+**Reach for a different tool when the task needs a capability this skill does not provide:**
+- For <a capability this skill genuinely cannot do> — use `<tool>` instead.
+- For <another genuine capability gap> — use `<tool>` instead.
 ```
+
+CRITICAL — scope honesty (do NOT exclude task genres):
+- Frame alternatives as POSITIVE, capability-scoped escape-hatches ("For <method this skill lacks>, use Y instead"), NEVER as a negative "NOT for: <task genre>" wall.
+- NEVER exclude an adjacent task genre the skill could be a sub-step of. Example of the bug to avoid: an inference/serving skill saying "NOT for: fine-tuning" — a fine-tuning task still needs fast inference to evaluate the trained model, so the genre-exclusion makes the agent scope the skill out of the whole task. Exclude only specific capabilities the skill itself does not implement.
+- If unsure whether a limit is a "capability gap" or a "task genre", omit it. A missing positive trigger costs a little recall; a wrong genre-exclusion zeroes the skill out on entire tasks.
 
 Hardware format (only if hardware hints provided):
 ```
@@ -64,26 +90,42 @@ Hardware format (only if hardware hints provided):
 - **Mixed precision**: <BF16 recommended on A100/H100 / etc.>
 ```
 
-Looking-things-up format (ALWAYS include — copy verbatim with `<package>` substituted):
+Scripts format (only if scripts are provided):
+```
+## Scripts
+
+Execute these — don't read them as reference. Each runs without consuming context tokens.
+
+- `scripts/<name>` — <purpose>. Run when: <executes_what>.
+  ```bash
+  <command to invoke>
+  ```
+```
+
+Old Patterns format (only if old_patterns is provided):
+```
+## Old Patterns
+
+<details>
+<summary>Deprecated APIs (kept for historical context)</summary>
+
+- **<name>** (deprecated in <version>) — use <replacement> instead.
+
+</details>
+```
+
+Looking-things-up format (emit ONLY if mcp_workflow_triggers is non-empty — keep this section SHORT, ~14 lines max, since per-workflow inline triggers already cover routing):
 ```
 ## Looking things up live (MCP fallback)
 
-This skill ships pre-distilled `references/`. If a question is **not** answered by the bundled references, fall back to live docs via MCP. The frontmatter lists preferred MCPs under `metadata.openclaw.mcps`.
+Per-workflow MCP triggers (above) handle the common cases. For anything else not covered by `references/`:
 
-Use this routing:
+1. Verify the question is genuinely not in `references/` (grep first).
+2. Resolve the libraryId — call `context7__resolve-library-id` with `libraryName="<package-name>"`. It returns one or more candidate library IDs (e.g. `/websites/...` or `/<org>/<project>`); pick the one whose docs match the question.
+3. Fetch the docs — call `context7__query-docs` with `libraryId="<from step 2>"` and `query="<your topic>"`. Read the returned snippet.
+4. Cite the MCP source + libraryId in your answer. If `query-docs` returns nothing useful, say so — do not invent function names or flag values.
 
-1. First, search the bundled `references/` (including `community-gotchas.md` and `troubleshooting.md` if present).
-2. If still missing, call Context7 via the OpenClaw `mcporter` CLI:
-   ```bash
-   mcporter call context7.resolve-library-id query="<question>" libraryName=<package>
-   # then, with the returned /org/project ID:
-   mcporter call context7.query-docs libraryId="/<org>/<project>" query="<topic>"
-   ```
-   (If you're unsure of a tool name, run `mcporter list-tools context7` to discover.)
-3. For HF-hosted packages, prefer `hf-mcp/doc_search` if it's registered (`openclaw mcp list`).
-4. Cite the MCP source in your answer. Do not invent function names — if Context7 doesn't return the answer, say so.
-
-Skip MCP entirely if the question IS covered by `references/`. Loading MCP tool definitions is expensive; the references are zero-cost progressive disclosure.
+Note on naming: `context7__query-docs` and `context7__resolve-library-id` are the OpenClaw native tool names (double underscore prefix). Both are pre-registered for this skill — call them directly, no bash needed.
 ```
 
 Return ONLY the markdown body, starting with `# `.
@@ -94,11 +136,23 @@ SKILL NAME: {{skill_name}}
 REFERENCE FILES (will exist alongside SKILL.md):
 {{references_list}}
 
-WORKFLOWS (emit copy-paste checklists):
+WORKFLOWS (emit copy-paste checklists; pair each with the matching mcp_workflow_trigger):
 {{workflows_list}}
 
-TEMPLATES (Python files in templates/):
+MCP WORKFLOW TRIGGERS (one per workflow, same order; use as the LAST checklist step in each workflow):
+{{mcp_workflow_triggers_list}}
+
+DECISION TREE (emit as a `## Decision Tree` table; skip section if empty):
+{{decision_tree_list}}
+
+TEMPLATES (Python files in templates/ — read-as-reference):
 {{templates_list}}
+
+SCRIPTS (executable utilities in scripts/ — execute, don't read):
+{{scripts_list}}
+
+OLD PATTERNS (deprecated APIs to flag in collapsed section; skip if empty):
+{{old_patterns_list}}
 
 HARDWARE HINTS (raw sentences extracted from docs/README):
 {{hardware_hints}}

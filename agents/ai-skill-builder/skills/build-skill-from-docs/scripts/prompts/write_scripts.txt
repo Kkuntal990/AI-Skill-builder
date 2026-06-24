@@ -1,0 +1,63 @@
+You are writing a SHORT utility script for an OpenClaw skill's `scripts/` directory.
+
+INPUT: filename, language (bash|python), purpose, when to execute, and the package documentation for grounding.
+OUTPUT: the script content — runnable, self-contained, under 60 lines.
+
+Hard rules:
+- Output ONLY the file content. No surrounding markdown, no explanation.
+- Shebang on line 1 (`#!/usr/bin/env bash` or `#!/usr/bin/env python3`).
+- One short comment block at top explaining purpose + usage. No paragraphs.
+- Under 60 lines. If a task needs more, simplify scope — utility scripts must be tight.
+- Bash: `set -euo pipefail` at top. Quote variables. Use `printf` not `echo -e`. Exit 0 on success, non-zero with a helpful stderr message on failure.
+- Python: stdlib-only unless absolutely required. Argparse for >1 arg. `if __name__ == "__main__":` guard.
+- No magic numbers. Justify any constant with a one-line comment (Ousterhout's law).
+- Handle the obvious failure modes (missing file, command not found) with an actionable error message, not a stacktrace.
+- Do NOT invent commands or APIs. Anything called must appear in the provided documentation OR be a standard system tool (nvidia-smi, curl, jq, grep).
+- No interactive prompts. Scripts must run unattended.
+
+Example good output (bash):
+```
+#!/usr/bin/env bash
+# Purpose: probe nvidia-smi for free VRAM; warn if any GPU < THRESHOLD_GB.
+# Usage: ./check_gpu_mem.sh [threshold_gb=16]
+set -euo pipefail
+
+THRESHOLD_GB=${1:-16}  # Default 16 GB — covers 7B QLoRA training + headroom.
+
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  printf "error: nvidia-smi not found (no NVIDIA driver?)\n" >&2
+  exit 2
+fi
+
+# Use --query-gpu instead of parsing nvidia-smi text — stable across driver versions.
+mapfile -t free_mib < <(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits)
+
+ok=0
+warned=0
+for i in "${!free_mib[@]}"; do
+  free_gb=$(( free_mib[i] / 1024 ))
+  if (( free_gb < THRESHOLD_GB )); then
+    printf "GPU %d: %d GB free (below %d GB threshold)\n" "$i" "$free_gb" "$THRESHOLD_GB" >&2
+    warned=1
+  else
+    printf "GPU %d: %d GB free — ok\n" "$i" "$free_gb"
+    ok=$(( ok + 1 ))
+  fi
+done
+
+exit $warned
+```
+
+Return ONLY the file content, starting with the shebang.
+
+---
+FILENAME: {{filename}}
+LANGUAGE: {{lang}}
+PURPOSE: {{purpose}}
+EXECUTES WHEN: {{executes_what}}
+
+PACKAGE README (for ground-truth tooling):
+{{readme_text}}
+
+PACKAGE DOCUMENTATION (for ground-truth commands):
+{{doc_text}}

@@ -1,0 +1,35 @@
+You are refining a decision tree for an OpenClaw SKILL.md.
+
+INPUT: a plan-stage list of decision-tree entries (trigger, decide, refer_to) + the package documentation for grounding.
+OUTPUT: a Markdown table the agent uses to ROUTE between modes/strategies/algorithms when the user's intent maps to multiple options.
+
+Hard rules:
+- Output ONLY the Markdown table — no `## Decision Tree` heading (the body prompt adds it), no commentary.
+- 3-column table with headers `If the user wants... | Choose... | Then see`.
+- 2-6 rows. Drop any row that isn't a genuine choice (single-option scenarios don't belong here).
+- Choice criterion must be concrete and decidable from user input (e.g. "VRAM < 24GB", "online vs offline", "needs streaming"), not vague ("depends on use case").
+- `Then see` points at a `references/<file>.md` or a workflow title — must match items that exist in the skill.
+- Use only facts from the provided documentation; do not invent options.
+
+Example good output:
+```
+| If the user wants... | Choose... | Then see |
+|---|---|---|
+| Serve a model to many clients with low latency | OpenAI-compatible server (`vllm serve`) | references/inference-modes.md |
+| Run batch inference on a fixed prompt set | Offline `LLM.generate()` | references/inference-modes.md |
+| Fit a 70B model on a single H100 80GB | FP8 quantization (hardware-native on Hopper) | references/models-and-quantization.md |
+| Scale to multiple GPUs intra-node with NVLink | `--tensor-parallel-size N` | references/deployment-and-scaling.md |
+| Scale across nodes or memory > intra-node capacity | `--pipeline-parallel-size N` | references/deployment-and-scaling.md |
+```
+
+Return ONLY the table.
+
+---
+PLAN-STAGE ENTRIES:
+{{decision_tree_entries}}
+
+REFERENCE FILES AVAILABLE:
+{{references_list}}
+
+DOCUMENTATION:
+{{doc_text}}

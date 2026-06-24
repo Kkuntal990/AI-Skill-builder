@@ -133,17 +133,18 @@ def _read_sidecar_log(log_file: Path | None) -> list[dict]:
 
 
 def _extract_tool_signals(reply: dict, declared_mcps: list[str]) -> dict:
-    """Combine three MCP-usage signals into one classified verdict per trial.
+    """Combine four MCP-usage signals into one classified verdict per trial.
 
-    1. openclaw tool_summary (first-class tool tracking — misses Bash subprocesses)
-    2. reply-text regex (`mcporter call` — catches agent narration, false-positive-prone)
-    3. sidecar wrapper log (ground truth — every actual mcporter invocation)
+    1. openclaw tool_summary native MCP calls (e.g. `context7__query-docs`) — ground truth for native runtime MCP
+    2. reply-text regex (`mcporter call` or `context7__` — catches agent narration of MCP usage)
+    3. sidecar wrapper log (ground truth for bash `mcporter call ...`)
+    4. relevant-mcp filter (tool name matches a declared server)
 
-    Cross-signal classification:
-      - best_case   : sidecar log AND text mention   (called + narrated)
-      - stealth_use : sidecar log only               (called, not narrated)
-      - lip_service : text mention only              (claimed, not called)
-      - clean_miss  : neither                        (no MCP usage)
+    Cross-signal classification (ground truth = native OR sidecar):
+      - best_case   : MCP actually called AND narrated in reply text
+      - stealth_use : MCP actually called, but not narrated
+      - lip_service : narrated, but no actual call evidence
+      - clean_miss  : neither
     """
     ts = reply.get("tool_summary") or {}
     tools_used = list(ts.get("tools") or [])
@@ -155,18 +156,50 @@ def _extract_tool_signals(reply: dict, declared_mcps: list[str]) -> dict:
         t for t in mcp_calls if any(srv.lower() in t.lower() for srv in declared_mcps)
     ]
 
-    # Signal 2: text regex
+    # Signal 2: text-based MCP detection. Matches three patterns:
+    #   (a) bash CLI form ("mcporter call")
+    #   (b) native OpenClaw tool form ("<server>__" with double underscore)
+    #   (c) outcome narration ("Fetched via Context7", "LibraryId: /...", "via MCP")
+    # Pattern (c) is the realistic case: a competent agent calls the tool and
+    # reports the answer, not the tool name. OpenClaw's toolSummary is sometimes
+    # null for multi-step responses (subagent spawning, etc.) so text narration
+    # is often the only signal that MCP actually fired.
     text = reply.get("text") or ""
     text_lower = text.lower()
     text_mcp_hits: list[str] = []
-    if "mcporter call" in text_lower:
+    saw_mcporter_text = "mcporter call" in text_lower
+    saw_native_text = False
+    for srv in declared_mcps:
+        if not srv:
+            continue
+        if f"{srv.lower()}__" in text_lower or f"`{srv.lower()}__" in text_lower:
+            saw_native_text = True
+            text_mcp_hits.append(srv)
+    if saw_mcporter_text:
         for srv in declared_mcps:
-            if srv and srv.lower() in text_lower:
+            if srv and srv.lower() in text_lower and srv not in text_mcp_hits:
                 text_mcp_hits.append(srv)
-        if not text_mcp_hits and "mcporter call" in text_lower:
+        if not text_mcp_hits:
             text_mcp_hits.append("mcporter")
+    # Outcome-narration patterns — these prove the agent fetched live data
+    # via MCP even when no tool-name appears in the reply. Conservative list
+    # to avoid false positives from generic mentions of "MCP".
+    _OUTCOME_PATTERNS = (
+        "fetched via ", "fetched live via ", "fetched from ",
+        "via the registered ", "via context7", "via mcp ", "via mcporter",
+        "from context7", "queried context7", "queried via",
+        "libraryid:", "libraryid =", "libraryid=\"/", "libraryid='/",
+    )
+    saw_outcome_text = any(pat in text_lower for pat in _OUTCOME_PATTERNS)
+    if saw_outcome_text:
+        for srv in declared_mcps:
+            if srv and srv.lower() in text_lower and srv not in text_mcp_hits:
+                text_mcp_hits.append(srv)
+        if not text_mcp_hits:
+            # Outcome was narrated but no specific server name; still credit it
+            text_mcp_hits.append("outcome-only")
 
-    # Signal 3: sidecar wrapper log — ground truth
+    # Signal 3: sidecar wrapper log — ground truth for bash mcporter
     sidecar_calls: list[dict] = []
     sidecar_servers: set[str] = set()
     sidecar_relevant_servers: set[str] = set()
@@ -184,12 +217,20 @@ def _extract_tool_signals(reply: dict, declared_mcps: list[str]) -> dict:
                     sidecar_relevant_servers.add(server)
 
     has_sidecar = bool(sidecar_calls)
+    has_native = bool(relevant_mcp_calls)
     has_text = bool(text_mcp_hits)
-    if has_sidecar and has_text:
+    # Ground truth: MCP actually fired iff sidecar (bash) OR native runtime tool call
+    # OR the reply contains specific outcome narration (e.g. libraryId, "Fetched via Context7").
+    # The latter is required because OpenClaw's toolSummary is sometimes null for
+    # multi-step or subagent-spawning responses, so sidecar + native_runtime alone
+    # under-counts. Outcome narration about a *specific* libraryId is high-confidence
+    # because the agent only knows the libraryId by actually calling Context7.
+    actually_called = has_sidecar or has_native or saw_outcome_text
+    if actually_called and has_text:
         classification = "best_case"
-    elif has_sidecar and not has_text:
+    elif actually_called and not has_text:
         classification = "stealth_use"
-    elif has_text and not has_sidecar:
+    elif has_text and not actually_called:
         classification = "lip_service"
     else:
         classification = "clean_miss"
@@ -201,13 +242,13 @@ def _extract_tool_signals(reply: dict, declared_mcps: list[str]) -> dict:
         "mcp_calls": mcp_calls,
         "mcp_called": bool(mcp_calls),
         "relevant_mcp_calls": relevant_mcp_calls,
-        "relevant_mcp_called": bool(relevant_mcp_calls),
+        "relevant_mcp_called": has_native,
         "text_mcp_hits": text_mcp_hits,
         "sidecar_calls": sidecar_calls,
         "sidecar_call_count": len(sidecar_calls),
         "sidecar_servers": sorted(sidecar_servers),
         "sidecar_relevant_servers": sorted(sidecar_relevant_servers),
-        "mcp_actually_called": has_sidecar,  # ground truth (Signal 3)
+        "mcp_actually_called": actually_called,  # ground truth: native OR sidecar
         "mcp_classification": classification,
         # Preserved for back-compat with prior reports:
         "mcp_evidence": has_sidecar or bool(mcp_calls) or has_text,
@@ -437,6 +478,7 @@ def cmd_functional(args: argparse.Namespace) -> dict:
         signals = _extract_tool_signals(reply, declared_mcps)
         return {
             "reply_chars": len(reply.get("text", "")),
+            "reply_text": reply.get("text", ""),  # preserve for offline re-grading + diagnosis
             "score": score,
             "tool_signals": signals,
             "usage": reply.get("usage"),

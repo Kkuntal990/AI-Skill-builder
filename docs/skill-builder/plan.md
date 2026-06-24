@@ -2,8 +2,8 @@
 
 > For the design overview, see **[hld.md](hld.md)**.
 
-**Status:** Phase 1.4 Complete
-**Date:** 2026-05-07
+**Status:** Phase 1.5 Complete (builder_version 1.4.0)
+**Date:** 2026-05-24
 **Scope:** An OpenClaw agent that turns a Python package's docs URL into a progressive-disclosure SKILL.md + references + templates + evals, optionally augmented with curated community gotchas and runtime MCP fallback.
 
 ---
@@ -66,6 +66,34 @@ The skill is the durable artifact. MCPs are optional fetchers (build time) and r
 - **L3 Path C — skill-as-MCP:** new `skill_builder.py serve <skill-dir>` subcommand running an MCP stdio server (stdlib only, no `mcp` SDK dep) that exposes `search_skill_refs(query)` over the skill's `references/`. Token-overlap ranking, no embeddings.
 - **Custom-domain map:** `_DOCS_DOMAIN_MAP` static dict for non-HF / non-RTD package subdomains (vllm, unsloth, dspy, langchain, ray, lightning, langgraph, crewai, smolagents, haystack, guardrails, lmdeploy, bentoml, litellm).
 - **Default model switched to `anthropic/claude-sonnet-4.6`** (faster, cheaper than Opus for synthesis; Opus available as override).
+
+### Phase 1.5 — Skill-shape SOTA pattern + eval-harness fixes (May 24, complete)
+
+Triggered by literature review (Anthropic Skills best-practices, LlamaIndex Skills-vs-MCP empirical work) showing the May 7 "MCP tail section" pattern was bolted-on and not driving agent behavior. Validated by an A/B against the rebuilt vLLM skill. See companion doc [skill-shape-principles.md](skill-shape-principles.md).
+
+**Builder upgrades (`scripts/skill_builder.py`, BUILDER_VERSION 1.3.0 → 1.4.0):**
+- **Decision tree section** — new `## Decision Tree` slot before `## Common Workflows`. Planner emits 2-6 routing rows for libraries with meaningful choices to make. New prompt: `prompts/write_decision_tree.txt` (refiner, optional second-pass).
+- **Inline per-workflow MCP triggers** — each workflow checklist now ends with a `**MCP fallback**: if X is not in references/Y.md, call ...` step. Replaces the bolted-on tail section that agents were ignoring.
+- **OpenClaw native MCP naming** — prompts now teach `context7__resolve-library-id` and `context7__query-docs` (double underscore), not Anthropic's `Context7:get-library-docs` colon syntax. This was the single biggest defect in the May 7 1.4 release: agents read the instructions but couldn't call the named tools.
+- **`scripts/` tier** — new `--with-scripts` flag generates 1-3 SHORT utility scripts (<60 lines, bash or python) that the agent **executes** (not reads as reference). Validated via `py_compile` / `bash -n`. New prompt: `prompts/write_scripts.txt`.
+- **`old_patterns` section** — under `--with-version-notes`, planner emits deprecated APIs as a collapsed `<details>` block.
+- **Auto-ToC** — `_inject_toc_if_long` post-processor prepends `## Contents` to any reference >100 lines that lacks one (per Anthropic best-practices: agents previewing with `head -N` miss content past the cutoff).
+
+**Security-scanner false-positive fixes (`scripts/skill_builder.py`):**
+- `_is_ml_safe` now whitelists `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` env-var-name references unless paired with an actual `sk-...` value. Previously blocked legitimate OpenAI-compatible API docs (e.g. vLLM).
+- New `_DEMOTE_TO_CAUTION` set demotes HTTP/networking patterns (`curl POST`, `curl pipe`, `curl data send`, `requests.post`, `netcat`, `socket.connect`) from BLOCK to warning. These are inherent to any REST API + distributed-system docs; skill-scout's scanner was calibrated for low-trust skill discovery, not high-trust first-party generation. Real exfiltration patterns (SSH key cat, reverse shells, sudo, setuid, `.env` reads) remain BLOCK.
+
+**Eval-harness fixes (`scripts/eval_skill.py`):**
+- `_extract_tool_signals` extended with a fourth signal: **outcome narration**. Detects "Fetched via Context7", "LibraryId: /...", and similar patterns that prove MCP fired even when OpenClaw's `agentMeta.toolSummary` returns `null` (a runtime bug observed on multi-step / subagent-spawning responses). Without this signal, ~50% of real MCP calls were misclassified as `clean_miss`.
+- Trial output now preserves full `reply_text` (previously only `reply_chars` length). Enables offline re-grading when assertions or detection patterns change — necessary because rebuilding to re-run costs $2-4 per pass.
+
+**vLLM skill rebuild (artifact at `infra/skills/vllm-inference/`):**
+- 6 references (vs 4 previously), 3 executable scripts, 6-row decision tree, 4 inline MCP triggers (per workflow), old-patterns section, ToCs on all 5 references >100 lines. `builder_version: 1.4.0` in frontmatter.
+
+**Empirical findings worth carrying forward:**
+- **Ambient-MCP confound** — when the test agent has `mcporter` bundled (as `skill-tester` does), Context7 is reachable regardless of which skill is loaded. The "with_skill vs without_skill" A/B for MCP-must-use prompts shows MCP firing in **both** cells. Use `main` agent for clean MCP-triggering A/B.
+- **DeepSeek V4 Pro day-to-day variance is huge** — same prompts, same skill, different days produced median reply lengths of 430 chars vs 28 chars. Single-run absolute-pass-rate comparisons across days are unreliable.
+- **`toolSummary` is unreliable on OpenClaw** — null for multi-step responses; the outcome-narration signal is required to recover the false negatives. Worth filing upstream.
 
 ---
 

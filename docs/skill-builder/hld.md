@@ -1,7 +1,7 @@
 # HLD: AI-Skill Builder — OpenClaw Agent
 
-**Status:** Phase 1.4 Complete (2026-05-07)
-**Companion to:** [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills) · [plan.md](plan.md) (phase progression and open items)
+**Status:** Phase 1.5 Complete (2026-05-24, BUILDER_VERSION 1.4.0)
+**Companion to:** [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills) · [plan.md](plan.md) (phase progression and open items) · [skill-shape-principles.md](skill-shape-principles.md) (authoring guidance)
 
 ## Goal
 
@@ -106,15 +106,20 @@ URL validation: `http(s)` only, ≤2048 chars, no `file://` or local paths.
 
 Every generated skill includes:
 
-- `SKILL.md` (60-150 line target) with sections:
+- `SKILL.md` (80-180 line target, hard cap 300) with sections:
   - Description + Installation + Quick Start
-  - **Common Workflows** — 2-4 named workflows, each with a copy-paste checklist and a pointer to the detailed reference file
+  - **Decision Tree** — 2-6 routing rows (Phase 1.5+) for libraries with meaningful choices between modes/strategies/algorithms
+  - **Common Workflows** — 2-4 named workflows, each with a copy-paste checklist that ends with a **per-workflow MCP-fallback step** (Phase 1.5+) using OpenClaw-native naming `context7__resolve-library-id` / `context7__query-docs`
   - **When to Use** — "Use when..." cases + "NOT for (use alternatives instead)" cases naming concrete competitor tools
   - **Hardware Requirements** — included when regex-extracted hardware hints exist; lists GPU/VRAM/multi-GPU/mixed-precision guidance
-  - **Templates** — bullet list of runnable Python scripts in `templates/`
+  - **Templates** — bullet list of runnable Python scripts in `templates/` (read-as-reference)
+  - **Scripts** — bullet list of executable utilities in `scripts/` (Phase 1.5+, executed via bash — *not* read into context)
+  - **Old Patterns** — collapsed `<details>` listing deprecated APIs (Phase 1.5+, when `--with-version-notes` and the docs mention deprecations)
   - **References** — bullet list of `references/*.md` files
-- `references/*.md` — 2-5 topical deep-dives (domain-variant decomposition)
+  - **Looking things up live** — short tail-coverage MCP fallback section (Phase 1.5: tightened from 18 to ~14 lines; native OpenClaw naming)
+- `references/*.md` — 2-5 topical deep-dives (domain-variant decomposition). Auto-prepended `## Contents` ToC when ≥100 lines (Phase 1.5+) so agents previewing with `head -N` see the full scope.
 - `templates/*.py` — 0-3 runnable, `py_compile`-validated Python scripts with `# TODO:` customization points (when `--with-templates` is set)
+- `scripts/*.{sh,py}` — 0-3 SHORT (<60 line) utility scripts (Phase 1.5+, when `--with-scripts` is set). Bash via `bash -n`, Python via `py_compile` validated. `chmod 0o755`. Authoring guidance in [skill-shape-principles.md](skill-shape-principles.md).
 - `evals/evals.json` — 2-3 realistic user prompts (unless `--no-evals`)
 - `references/pitfalls.md` — closed bug fixes (when `--with-pitfalls`)
 - `references/troubleshooting.md` — open issues + stack traces (when `--with-troubleshooting`)
@@ -136,7 +141,7 @@ metadata:
       repo: huggingface/peft
       fetched_at: 2026-05-07T18:30:00Z
       content_sha256: <hex>
-      builder_version: 1.3.0
+      builder_version: 1.4.0
     coverage: [html, gh-readme, gh-issues-open, stackexchange, gh-issues-question-closed]
 ```
 
@@ -150,7 +155,7 @@ Three layers must be wired for an agent to actually invoke MCP when using a skil
 |---|---|---|
 | **L1 — Declaration** | `metadata.openclaw.mcps` in SKILL.md frontmatter | ✅ Auto-emitted by `assemble_frontmatter`. |
 | **L2 — Server registration** | MCP server reachable from agent's shell environment | ✅ `mcporter config add context7 --command npx --arg "-y" --arg "@upstash/context7-mcp"` + duplicate via `openclaw mcp set context7 ...`. |
-| **L3 — Agent runtime glue** | Routing logic the agent reads and acts on | ✅ Path A: `## Looking things up live (MCP fallback)` block in SKILL.md body, emitted verbatim from `prompts/write_skill_body.txt`. Tells the agent to invoke `mcporter call context7.<tool>` via its `bash` tool when references miss. |
+| **L3 — Agent runtime glue** | Routing logic the agent reads and acts on | ✅ Phase 1.5 rewrite: **per-workflow inline MCP-fallback steps** (each `## Common Workflows` checklist ends with a `**MCP fallback**: ...` step) plus a short tail `## Looking things up live` section. Both use OpenClaw-native tool naming (`context7__resolve-library-id` / `context7__query-docs`, double underscore — NOT Anthropic's `Context7:get-library-docs` colon syntax). The May 7 tail-section-only pattern was bolted on and didn't drive behavior; inline triggers + correct naming were the fix. See [skill-shape-principles.md](skill-shape-principles.md). |
 
 Path C (skill-as-MCP) is also wired: `python3 skill_builder.py serve <skill-dir>` runs an MCP stdio server (stdlib only, no `mcp` SDK dependency) exposing `search_skill_refs(query)` over the skill's `references/`. Register with `mcporter config add <name> --command python3 --arg <abs-path-to-skill_builder.py> --arg serve --arg <abs-path-to-skill-dir> --transport stdio`.
 

@@ -8,11 +8,21 @@ Hard rules:
 - 50-300 lines. Longer than SKILL.md; this file holds the depth.
 - Start with `# <Human-readable title>` matching the topic.
 - Then: one-sentence summary of what this file covers.
+- IF the file will exceed ~100 lines (which is the common case), include a `## Contents` table of contents listing each `##` section by name BEFORE diving into content. The wrapper auto-injects a ToC if you omit it, but yours will be better — write it yourself.
 - Then: content organized by sub-topic with `##` headings.
 - Every code block must come from the source docs. Do not invent APIs.
 - Imperative examples: show code + what it does + typical next step.
 - No re-explaining what the package is at a high level (that's in SKILL.md).
 - No links to URLs unless present in source.
+
+ToC format (use this if you include one):
+```
+## Contents
+
+- Section heading 1
+- Section heading 2
+- Section heading 3
+```
 
 Return ONLY the markdown content, starting with `# `.
 
