@@ -74,9 +74,18 @@ Core rules enforced by the validator:
 
 ## LLM
 
-Claude Sonnet 4.6 via OpenRouter (constant at `scripts/skill_builder.py:OPENROUTER_MODEL`).
-API key from `OPENROUTER_API_KEY` env var or OpenClaw auth store (`openrouter:default`
-profile). Script exits clearly if missing -- synthesis has no useful fallback.
+Synthesis runs through a single `_llm_call` dispatcher, selected by
+`MLEVAL_LLM_TRANSPORT`:
+
+- `claude` (**default**) -- the local Claude Code CLI (`claude -p`), which uses your
+  Claude **subscription** (no per-token API credit) and Claude models (the CLI's
+  default, typically Opus; override with `MLEVAL_LLM_MODEL`). Falls back to OpenRouter
+  if the `claude` binary is missing/fails and an OpenRouter key is configured.
+- `openrouter` -- direct OpenRouter API (**paid credit**). Key from `OPENROUTER_API_KEY`
+  or the OpenClaw `openrouter:default` auth profile; model = `OPENROUTER_MODEL`
+  (`anthropic/claude-sonnet-4.6`).
+
+Script exits clearly if no transport is available.
 
 ## Optional flags (new in 1.4.0)
 

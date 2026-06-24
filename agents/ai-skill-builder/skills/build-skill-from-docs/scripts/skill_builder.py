@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -648,6 +649,65 @@ def _openrouter_call(prompt: str, max_tokens: int = 4000, temperature: float = 0
         return ""
 
 
+def _claude_cli_call(prompt: str, max_tokens: int = 4000, temperature: float = 0.3) -> str:  # noqa: ARG001
+    """One-shot inference via the local Claude Code CLI (`claude -p`).
+
+    Routes through the user's Claude SUBSCRIPTION (no per-token API credit) using
+    Claude models (the CLI's configured default — typically Opus — unless
+    MLEVAL_LLM_MODEL overrides via `--model`). `claude -p` does not expose
+    temperature/max_tokens, so those are accepted for signature parity and ignored.
+    The prompt fits well under ARG_MAX (doc text is capped at ~15k chars), so it is
+    passed as an argument, matching the verified smoke test.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        raise FileNotFoundError("`claude` CLI not found on PATH")
+    cmd = [claude_bin, "-p", prompt, "--output-format", "text"]
+    model = os.environ.get("MLEVAL_LLM_MODEL", "").strip()
+    if model:
+        cmd += ["--model", model]
+    timeout_s = max(LLM_TIMEOUT * 3, 300)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"claude CLI call timed out after {timeout_s}s") from e
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or '')[:300]}")
+    return proc.stdout
+
+
+def _llm_call(prompt: str, max_tokens: int = 4000, temperature: float = 0.3) -> str:
+    """Dispatch one LLM call to the configured transport.
+
+    MLEVAL_LLM_TRANSPORT selects the backend:
+      - "claude" (default): local Claude Code CLI -> Claude SUBSCRIPTION (no API
+        credit), Claude models. Falls back to OpenRouter if the CLI is missing/fails
+        and an OpenRouter key is configured.
+      - "openrouter": direct OpenRouter API -> PAID credit. Needs OPENROUTER_API_KEY
+        (or the openrouter:default OpenClaw auth profile); model = OPENROUTER_MODEL.
+
+    All synthesis steps (plan/body/reference/critique/repair/triggering/evals/...)
+    funnel through here, so the transport is a single switch.
+    """
+    transport = os.environ.get("MLEVAL_LLM_TRANSPORT", "claude").strip().lower()
+    if transport == "openrouter":
+        return _openrouter_call(prompt, max_tokens=max_tokens, temperature=temperature)
+    # default: Claude subscription via CLI, with OpenRouter as the paid fallback.
+    if shutil.which("claude"):
+        try:
+            return _claude_cli_call(prompt, max_tokens=max_tokens, temperature=temperature)
+        except (FileNotFoundError, RuntimeError) as e:
+            if _load_openrouter_key():
+                return _openrouter_call(prompt, max_tokens=max_tokens, temperature=temperature)
+            _die(f"claude CLI transport failed and no OpenRouter fallback configured: {e}")
+            return ""
+    if _load_openrouter_key():
+        return _openrouter_call(prompt, max_tokens=max_tokens, temperature=temperature)
+    _die("No LLM transport available: `claude` CLI not on PATH and no OpenRouter key "
+         "(set MLEVAL_LLM_TRANSPORT=openrouter + OPENROUTER_API_KEY, or install/login `claude`).")
+    return ""
+
+
 def _strip_fences(text: str) -> str:
     """Remove surrounding ```markdown or ```json fences if present."""
     t = text.strip()
@@ -683,7 +743,7 @@ def plan_structure(
         with_scripts=str(with_scripts).lower(),
         with_version_notes=str(with_version_notes).lower(),
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=3500, temperature=0.2))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=3500, temperature=0.2))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         _die(f"plan_structure returned non-JSON: {raw[:300]}")
@@ -855,7 +915,7 @@ def write_body(
         readme_install=readme_install[:3000] or "(README install section not found)",
         doc_text=doc_text[:15000],
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=5000, temperature=0.3))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=5000, temperature=0.3))
     idx = raw.find("# ")
     if idx > 0:
         raw = raw[idx:]
@@ -881,7 +941,7 @@ def write_template(
         doc_text=doc_text[:14000],
         examples_text=examples_text[:2000] or "(not available)",
     )
-    raw = _openrouter_call(prompt, max_tokens=4000, temperature=0.2)
+    raw = _llm_call(prompt, max_tokens=4000, temperature=0.2)
     # The LLM may still wrap in ```python fences despite instructions — strip them.
     raw = _strip_fences(raw)
     return raw.strip() + "\n"
@@ -906,7 +966,7 @@ def write_utility_script(
         readme_text=readme_text[:2000] or "(not available)",
         doc_text=doc_text[:12000],
     )
-    raw = _openrouter_call(prompt, max_tokens=2500, temperature=0.2)
+    raw = _llm_call(prompt, max_tokens=2500, temperature=0.2)
     raw = _strip_fences(raw)
     return raw.strip() + "\n"
 
@@ -1031,7 +1091,7 @@ def write_reference(
         readme_text=readme_text[:3000],
         examples_text=examples_text[:2000],
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=5000, temperature=0.3))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=5000, temperature=0.3))
     idx = raw.find("# ")
     if idx > 0:
         raw = raw[idx:]
@@ -1041,7 +1101,7 @@ def write_reference(
 def write_evals(skill_name: str, skill_body: str) -> dict:
     tpl = _read_prompt("write_evals.txt")
     prompt = _fill_prompt(tpl, skill_name=skill_name, skill_body=skill_body[:4000])
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=1000, temperature=0.5))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=1000, temperature=0.5))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         return {"skill_name": skill_name, "prompts": []}
@@ -1058,7 +1118,7 @@ def distill_pitfalls(package_name: str, issues: list[dict]) -> str:
         body = (i.get("body") or "")[:500].replace("\n", " ")
         lines.append(f"- #{i['number']} {i['title']}\n  {body}\n  ({i['url']})")
     prompt = _fill_prompt(tpl, package_name=package_name, issues_text="\n".join(lines))
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=3000, temperature=0.3))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=3000, temperature=0.3))
     idx = raw.find("# ")
     if idx > 0:
         raw = raw[idx:]
@@ -1099,7 +1159,7 @@ def write_community_gotchas(
         stackexchange_text=qa_text,
         github_issues_text=issue_text,
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=4000, temperature=0.3))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=4000, temperature=0.3))
     idx = raw.find("# ")
     if idx > 0:
         raw = raw[idx:]
@@ -1130,7 +1190,7 @@ def write_troubleshooting(
         open_issues_text=open_text,
         stack_traces_text=traces_text,
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=4000, temperature=0.3))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=4000, temperature=0.3))
     idx = raw.find("# ")
     if idx > 0:
         raw = raw[idx:]
@@ -1173,7 +1233,7 @@ def judge_triggering(user_message: str, skills: list[dict]) -> dict:
         f"- `{s['name']}`: {s['description']}" for s in skills
     )
     prompt = _fill_prompt(tpl, user_message=user_message, skills_list=skills_text)
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=400, temperature=0.0))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=400, temperature=0.0))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         return {"choice": "none", "reason": "judge returned no JSON", "confidence": 0.0}
@@ -1272,7 +1332,7 @@ def improve_description(
         failing_prompts=failing_prompts,
         judge_reasons=judge_reasons,
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=800, temperature=0.4))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=800, temperature=0.4))
     # Take the first non-empty paragraph
     for para in raw.split("\n\n"):
         p = para.strip()
@@ -1361,7 +1421,7 @@ def critique_skill(
         try:
             tpl = _read_prompt("critique_skill.txt")
             prompt = _fill_prompt(tpl, skill_name=skill_name, skill_body=body[:12000])
-            raw = _strip_fences(_openrouter_call(prompt, max_tokens=1200, temperature=0.0))
+            raw = _strip_fences(_llm_call(prompt, max_tokens=1200, temperature=0.0))
             match = re.search(r"\[.*\]", raw, re.DOTALL)
             if match is None:
                 raise ValueError("critic returned no JSON array")
@@ -1403,7 +1463,7 @@ def repair_skill_body(body: str, findings: list[dict], skill_name: str) -> str:
     prompt = _fill_prompt(
         tpl, skill_name=skill_name, findings=findings_text, skill_body=body,
     )
-    raw = _strip_fences(_openrouter_call(prompt, max_tokens=5000, temperature=0.2))
+    raw = _strip_fences(_llm_call(prompt, max_tokens=5000, temperature=0.2))
     idx = raw.find("# ")
     if idx > 0:
         raw = raw[idx:]
