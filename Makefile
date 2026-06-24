@@ -167,11 +167,14 @@ pip-warm: _require_ns
 # Drive task/seed/skill-path via TASK, SEEDS, SKILL_PATH variables; e.g.:
 #     make ab-plan  TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md
 #     make ab-apply TASK=mytask SEEDS="0 1" SKILL_PATH=/results/skills/peft/SKILL.md
+# gsm8k (QLoRA + batched decode): raise caps — e.g. TIME_LIMIT=5400 EXEC_TIMEOUT=2400
 
 TASK         ?= _template
 SEEDS        ?= 0 1
 SKILL_PATH   ?=
+SKILL_LIBRARY ?=
 TIME_LIMIT   ?= 1800
+EXEC_TIMEOUT ?= 0
 STEP_LIMIT   ?= 5
 PROFILE      ?= gpu
 LLM_TIMEOUT  ?= 120
@@ -180,7 +183,9 @@ ab-plan: _require_ns
 	python3 -m infra.orchestrator.run_ab \
 	    --task $(TASK) --seeds $(SEEDS) \
 	    --skill-path "$(SKILL_PATH)" \
+	    --skill-library "$(SKILL_LIBRARY)" \
 	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --exec-timeout-sec $(EXEC_TIMEOUT) \
 	    --llm-timeout-sec $(LLM_TIMEOUT) \
 	    --profile $(PROFILE)
 
@@ -188,7 +193,9 @@ ab-apply: _require_ns _require_api_key
 	python3 -m infra.orchestrator.run_ab \
 	    --task $(TASK) --seeds $(SEEDS) \
 	    --skill-path "$(SKILL_PATH)" \
+	    --skill-library "$(SKILL_LIBRARY)" \
 	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --exec-timeout-sec $(EXEC_TIMEOUT) \
 	    --llm-timeout-sec $(LLM_TIMEOUT) \
 	    --profile $(PROFILE) \
 	    --apply
@@ -197,7 +204,9 @@ ab-wait: _require_ns _require_api_key
 	python3 -m infra.orchestrator.run_ab \
 	    --task $(TASK) --seeds $(SEEDS) \
 	    --skill-path "$(SKILL_PATH)" \
+	    --skill-library "$(SKILL_LIBRARY)" \
 	    --time-limit-sec $(TIME_LIMIT) --step-limit $(STEP_LIMIT) \
+	    --exec-timeout-sec $(EXEC_TIMEOUT) \
 	    --llm-timeout-sec $(LLM_TIMEOUT) \
 	    --profile $(PROFILE) \
 	    --apply --wait
