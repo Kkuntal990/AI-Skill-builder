@@ -86,15 +86,21 @@ spec:
           # across nodes — 32Gi was idle headroom. Note: the mem_sampler's
           # pgrp_rss column undercounts (it misses the node SUBPROCESS that does
           # the training); trust cgroup memory.peak, not that CSV, for sizing.
+          # 2026-06-26: bumped 16Gi -> 32Gi. mvp-029 gsm8k with_skill ran at
+          # cgroup.current=13.0/16 GiB (81%) and its first pod died abruptly
+          # mid-LoRA-node (no traceback/finalize = OOMKill signature) -> Job
+          # restart-from-scratch. gsm8k with_skill is HEAVIER than the spike-024
+          # sizing assumed (and heavier than this run's without_skill peak,
+          # 11.9 GiB), so 16Gi left no transient-spike margin. 32Gi restores it.
           resources:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "16Gi"
+              memory: "32Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "16Gi"
+              memory: "32Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
