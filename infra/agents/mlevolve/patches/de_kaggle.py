@@ -65,6 +65,37 @@ _GPU_SAFETY = (
     "    pass\\n"
 )
 
+# Determinism fix: BYPASS the LLM task-desc rewrite (utils/data_preview.py
+# clean_task_desc). It piped instruction.md through an LLM ONCE per run, cached
+# as self.task_desc for every node, with NO empty-output guard (only catches
+# exceptions). On OpenRouter/DeepSeek temp=0 is not reproducible, so it
+# occasionally returned "" and silently GUTTED the instruction (mvp-029
+# with-skill: cleaned to 2 chars -> agent saw only the id,prediction stub ->
+# tabular regressor, all nodes invalid; spike-025: hallucinated "Unihandecode
+# Ecosphere"). Our instruction.md is authored clean (docs/eval/task-authoring.md),
+# so the rewrite buys nothing and only adds nondeterminism. Replace ONLY the
+# query() block with `cleaned_desc = task_desc`; the submission_format append
+# that follows is untouched -> task_desc is deterministic & identical across
+# cells/runs. (data_preview.py is NOT under agents/, hence an explicit path.)
+_CLEAN_TASK_DESC_OLD = '''    try:
+        cleaned_desc = query(
+            system_message=prompt,
+            user_message=None,
+            model=acfg.code.model,
+            temperature=0.0,
+            cfg=cfg
+        )
+        logger.info(f"Task description cleaned for code review")
+        cleaned_desc = cleaned_desc.strip()
+    except Exception as e:
+        logger.warning(f"Failed to clean task_desc with LLM: {e}. Using original.")
+        cleaned_desc = task_desc'''
+
+_CLEAN_TASK_DESC_NEW = '''    # de_kaggle: BYPASS the nondeterministic LLM task-desc rewrite (see de_kaggle.py
+    # note). Use the already-clean instruction.md verbatim; submission_format is
+    # still appended below.
+    cleaned_desc = task_desc'''
+
 # (path-relative-to-ROOT, old, new, required, min_count)
 RULES = [
     # --- recurring competition persona across draft/improve/evolution/fusion/
@@ -148,6 +179,10 @@ RULES = [
      "As an expert ML engineer, make MEANINGFUL improvements that boost the task's stated metric", False, 0),
     ("agents/improve_agent.py", "distilled from the kaggle award-winning solutions",
      "distilled from strong ML solutions", False, 0),
+    # --- DETERMINISM: bypass the clean_task_desc LLM rewrite (see note above).
+    #     Required: if upstream refactors this block, FAIL the build loudly so the
+    #     nondeterministic task-desc rewrite can never silently come back. ---
+    ("utils/data_preview.py", _CLEAN_TASK_DESC_OLD, _CLEAN_TASK_DESC_NEW, True, 1),
 ]
 
 

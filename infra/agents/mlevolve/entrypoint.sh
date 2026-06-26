@@ -134,12 +134,13 @@ done
 # appended to that same impl_guideline via mlevolve_sidecar/eval_harness.py
 # (injected by skill_injector's wrapper), so they reach BOTH cells identically
 #
-# Why this matters: MLEvolve runs an LLM "clean_task_desc" (de_kaggle) rewrite
-# over description.md at init. Front-loading it with ~3 KB of removable-genre
-# harness boilerplate pushed it out of distribution and it hallucinated the whole
-# task into garbage (spike-025: "Unihandecode Ecosphere"), blinding the skill
-# selector + metric-direction. Keeping description.md = clean task keeps de_kaggle
-# in-distribution (as in every prior samsum run + vanilla MLE-Bench).
+# Why this matters: MLEvolve USED to run an LLM "clean_task_desc" rewrite over
+# description.md at init — nondeterministic and prone to gutting the task
+# (spike-025: hallucinated "Unihandecode Ecosphere"; mvp-029 with-skill: cleaned
+# to ~empty -> agent built a tabular regressor, all nodes invalid). That LLM
+# rewrite is now BYPASSED at build time (patches/de_kaggle.py), so description.md
+# reaches the agent VERBATIM and identically across cells/runs. We still keep
+# description.md = clean task only (harness rules ride the impl_guideline).
 cp -f "$INSTRUCTION_PATH" "$PUBLIC_DIR/description.md"
 echo "[entrypoint] description.md = task instruction only (harness via impl_guideline)"
 
