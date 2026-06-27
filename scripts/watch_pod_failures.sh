@@ -9,10 +9,11 @@
 # the Job swaps in a new pod, it snapshots the forensics to a persistent log
 # and EXITS — so the background runner re-invokes the caller to report.
 #
-# Usage:  scripts/watch_pod_failures.sh [RUN_ID] [TASK] [POLL_SEC]
+# Usage:  scripts/watch_pod_failures.sh [RUN_ID] [TASK] [POLL_SEC] [SEED]
 #   RUN_ID    defaults to MLEVAL_RUN_ID from .env
 #   TASK      defaults to gsm8k
 #   POLL_SEC  defaults to 30
+#   SEED      defaults to 0 (run one watcher per seed)
 # Run it in the BACKGROUND so it keeps watching across turns:
 #   (the Bash tool's run_in_background re-invokes on exit = on incident/done)
 #
@@ -27,10 +28,11 @@ cd "$(dirname "$0")/.." 2>/dev/null || true
 RUN="${1:-${MLEVAL_RUN_ID:-mvp-029}}"
 TASK="${2:-gsm8k}"
 POLL="${3:-30}"
+SEED="${4:-0}"
 NS="${K8S_NAMESPACE:-ecepxie}"
-LOG="${PODWATCH_LOG:-$(dirname "$0")/../.podwatch_${RUN}.log}"
+LOG="${PODWATCH_LOG:-$(dirname "$0")/../.podwatch_${RUN}_s${SEED}.log}"
 
-JOBS="${RUN}-${TASK}-with-skill-s0 ${RUN}-${TASK}-without-skill-s0"
+JOBS="${RUN}-${TASK}-with-skill-s${SEED} ${RUN}-${TASK}-without-skill-s${SEED}"
 SEEN=""          # pod names already captured (space-delimited)
 PREV_ACTIVE=""   # "job=podname" pairs from last poll
 
