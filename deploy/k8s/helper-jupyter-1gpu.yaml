@@ -132,16 +132,14 @@ spec:
   nodeSelector:
     nvidia.com/gpu.product: ${GPU_PRODUCT}
 
-  tolerations:
-    # Only tolerate taints we're authorized for. Do NOT add
-    # `nautilus.io/reservation` (lets pods poach other groups' reserved nodes)
-    # or `nautilus.io/hardware=large-gpu` (a hardware-class taint we don't need
-    # for a 1-GPU pod and aren't entitled to blanket-tolerate). Per NRP policy
-    # you may only tolerate a reservation value if your group is approved for
-    # it. Run on unreserved capacity only.
-    - key: nvidia.com/gpu
-      operator: Exists
-      effect: PreferNoSchedule
+  # NO taint tolerations — NRP admin directive (2026-06-26). Tolerating
+  # `nautilus.io/issue` lands pods on BROKEN nodes / broken networks and is
+  # heavily prohibited ("Users cannot tolerate these"); `nautilus.io/system`,
+  # `nautilus.io/reservation`, and `nautilus.io/hardware=*` are also not
+  # permitted. GPU scheduling is via the `nvidia.com/gpu` RESOURCE REQUEST —
+  # it needs NO toleration on NRP.
+  # Policy: https://nrp.ai/documentation/userdocs/running/special/
+  # Do NOT add a `tolerations:` block.
 
   volumes:
     - name: cache-volume

@@ -64,11 +64,13 @@ make k8s-delete-helper
 
 ## Conventions
 
-- **Tolerations** — only `nvidia.com/gpu` (PreferNoSchedule). Do **not** add
-  `nautilus.io/reservation` or `nautilus.io/hardware=large-gpu`: per NRP policy
-  you may only tolerate a reservation value if your group is approved for it, and
-  a value-less `Exists` toleration poaches other groups' reserved nodes (cluster
-  policy violation). Run on unreserved capacity only.
+- **Tolerations** — **none.** Per NRP admin directive (2026-06-26), do **not** add
+  *any* taint toleration. `nautilus.io/issue` lands pods on BROKEN nodes / broken
+  networks and is heavily prohibited ("Users cannot tolerate these");
+  `nautilus.io/system`, `nautilus.io/reservation`, and `nautilus.io/hardware=*`
+  are also not permitted. GPU scheduling is via the `nvidia.com/gpu` **resource
+  request** (`resources.requests`), which needs no toleration. Manifests carry no
+  `tolerations:` block. Policy: <https://nrp.ai/documentation/userdocs/running/special/>
 - **No namespace in YAML** — every command uses `kubectl -n $K8S_NAMESPACE`.
 - **No image tag in YAML** — every image reference is `${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}`.
 - **Image pull secret**: every pod that pulls our private image sets
