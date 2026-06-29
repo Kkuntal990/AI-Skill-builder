@@ -10,7 +10,7 @@ Hard rules:
   1. `## Installation` — canonical install command from README
   2. `## Quick Start` — fastest zero-to-working example from the docs
   3. `## Decision Tree` — only if decision_tree is non-empty. One row per trigger; tells the agent how to pick between options.
-  4. `## Common Workflows` — each workflow as `### <title>`, one-sentence intro, a copy-paste checklist (with inline MCP trigger as last step when provided), and a pointer to the detailed reference file
+  4. `## Common Workflows` — each workflow as `### <title>`, one-sentence intro, then steps. Use a copy-paste `- [ ]` checklist ONLY for a genuinely multi-step procedure or a list of fragile must-not-skip invariants; a single conditional choice should be prose that states its condition, not a checklist (a checklist reads as "run every step" and strips the condition). Append the inline MCP trigger as the last step when provided, and point to the detailed reference file. If the workflow applies only under a condition — it is the branch of a `## Decision Tree` row, or it is a resource-heavy/optional technique (quantization, 4-bit/QLoRA, 8-bit, distributed/multi-GPU, a separate inference engine, a large-model path) — the intro MUST restate that condition first ("Use this only when <condition>") and the first step MUST be the precondition check. The gate travels with the action; never leave it stranded in the Decision Tree.
   5. `## When to Use` — positive triggers ("use this when...") + method-level escape-hatches ("for <a capability this skill lacks>, use <tool> instead"). Do NOT exclude whole task genres. (only if include_when_to_use_section is true)
   6. `## Hardware Requirements` — concrete VRAM/GPU requirements from docs (only if include_hardware_section is true AND hardware hints are provided)
   7. `## Templates` — list the runnable Python scripts in `templates/` with a one-line description each (only if templates are provided)
@@ -22,6 +22,8 @@ Hard rules:
 - Every shell/code block must come from the provided sources. Do not invent commands.
 - No marketing language. No trailing summary section.
 - No rigid ALL-CAPS directives (ALWAYS / NEVER / MUST). If a constraint matters, state it once and explain WHY in one clause — explained reasoning drives the agent better than heavy-handed caps.
+- Default to the cheapest path that works, then escape-hatch. When the docs offer several approaches, pick ONE default (the simplest/lightest that solves the common case) and present the rest as conditional escape-hatches ("if <the default doesn't fit>, use <alternative>"). A resource-heavy or memory-saving technique — 4-bit/QLoRA, 8-bit, DeepSpeed/FSDP/distributed, a separate inference server — is NEVER the headline default; it is an escape-hatch gated on its precondition (e.g. "only if the full-precision model doesn't fit in GPU memory"). Presenting a heavy/optional technique as the default makes the agent pay its cost (slower, more fragile) when it isn't needed.
+- Match constraint strength to step fragility. Reserve firm directives for genuinely brittle, easy-to-break steps (and explain why they break); leave context-dependent choices (which fits the user's hardware/data) as a default + escape-hatch, not a mandate.
 
 Description (opening paragraph) must:
 - Be written in THIRD PERSON (no "I"/"you"/"we"). It is injected into the system prompt for skill selection; inconsistent point-of-view breaks discovery.
@@ -30,6 +32,7 @@ Description (opening paragraph) must:
 - Name 2-3 DISTINCT situations the skill should fire on, not just one. User phrasing varies a lot, and the description is matched against many different wordings; covering several concrete scenarios (different tasks/entry-points the skill applies to) raises the chance it triggers on whichever way the user phrases their request.
 - Be a little "pushy" about triggering — agents tend to UNDER-use skills. Add a clause like "Use this whenever the user works with <X>, <Y>, or <Z>, even if they don't explicitly ask for <feature>."
 - Name specific capabilities (class names, algorithm names) — not generic terms.
+- Keep the whole description under ~900 characters (hard cap 1024 — over 1024 rejects the build, and the skill listing truncates it). Be specific but compact: name the few highest-value capabilities and triggers; do not enumerate every feature of a broad library.
 
 Decision Tree format (only if decision_tree is non-empty):
 ```
@@ -53,6 +56,21 @@ Copy this checklist:
 - [ ] Step 2: Train reward model
 - [ ] Step 3: PPO reinforcement learning
 - [ ] Step 4: Evaluate aligned model
+- [ ] **MCP fallback**: <inline mcp_workflow_trigger for this workflow> — skip if references covered your case.
+```
+
+Conditional / resource-heavy workflow — restate the gate; do NOT present it as a default (this is the #1 measured failure: a "Memory-efficient QLoRA" checklist with no restated precondition made an agent train in 4-bit on a 48GB GPU it never needed):
+```
+### Fit a large model on a small GPU (QLoRA)
+
+Use this only when the full-precision / bf16 base model does not fit in GPU memory (e.g. a single <24GB GPU). With memory headroom, use the plain LoRA workflow above — 4-bit adds dequantization overhead and a more fragile k-bit grad path, for no benefit when memory isn't the constraint.
+
+Copy this checklist:
+
+- [ ] Step 1: Confirm the precondition — the bf16 base + LoRA + optimizer state won't fit (otherwise use plain LoRA)
+- [ ] Step 2: Load base in 4-bit (`BitsAndBytesConfig`) and call `prepare_model_for_kbit_training`
+- [ ] Step 3: Attach `LoraConfig` and `get_peft_model`
+- [ ] Step 4: Train and save the adapter
 - [ ] **MCP fallback**: <inline mcp_workflow_trigger for this workflow> — skip if references covered your case.
 ```
 

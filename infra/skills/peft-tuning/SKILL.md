@@ -1,133 +1,101 @@
 ---
 name: peft-tuning
-description: "Fine-tune large pretrained models parameter-efficiently with Hugging Face PEFT, adapting LLMs, vision, and diffusion models by training a small set of extra parameters instead of all weights. Use this whenever a task involves LoRA, QLoRA, AdaLoRA, DoRA, soft prompts (prompt/prefix/P-tuning), or IA3 — building a `LoraConfig` and calling `get_peft_model`, running memory-constrained 4-bit training via `prepare_model_for_kbit_training`, loading or merging trained adapters with `AutoPeftModel` and `merge_and_unload`, or serving several adapters on one base model with `set_adapter`, `add_weighted_adapter`, or X-LoRA routing. Invoke this whenever the user fine-tunes, adapts, or customizes a pretrained model on limited GPU memory, even if they never say \"PEFT\" or \"LoRA\" — it is the default approach for efficient fine-tuning on consumer or single-GPU hardware."
-metadata: {"openclaw": {"emoji": "🤖", "requires": {"bins": ["python3"]}, "mcps": {"preferred": ["hf-mcp/doc_search", "hf-mcp/doc_fetch"], "fallback": ["context7/get-library-docs"]}, "source": {"url": "https://huggingface.co/docs/peft/index", "repo": "huggingface/peft", "fetched_at": "2026-06-24T09:56:39Z", "content_sha256": "7abab03572bbbf6a03419874470ec8043cc6c975b8572df61001eaa072b37726", "builder_version": "2.0.0"}, "coverage": ["html", "gh-readme"]}}
+description: "Adapt large pretrained models with parameter-efficient fine-tuning — train a small set of extra weights instead of all parameters, yielding performance comparable to full fine-tuning at a fraction of the compute, memory, and storage cost. Use this whenever the user fine-tunes, adapts, or customizes an LLM or diffusion model with LoRA, DoRA, AdaLoRA, QLoRA, IA3, or soft-prompt methods (prefix tuning, P-tuning, prompt tuning), wraps a base model with `get_peft_model` / `LoraConfig`, loads or merges an adapter with `PeftModel`, or needs to fit a model on a single consumer GPU. Invoke it even when the user only says \"fine-tune this model\" or \"train an adapter\" without naming PEFT — it is the default for any sub-task that trains, saves, or runs inference with adapter weights."
+metadata: {"openclaw": {"emoji": "🤖", "requires": {"bins": ["python3"]}, "mcps": {"preferred": ["hf-mcp/doc_search", "hf-mcp/doc_fetch"], "fallback": ["context7/get-library-docs"]}, "source": {"url": "https://huggingface.co/docs/peft/index", "repo": "huggingface/peft", "fetched_at": "2026-06-28T14:51:24Z", "content_sha256": "5373ec162f1fbfc72aff74bc96d27a344135826dc0fc282799b15f4d1f67400e", "builder_version": "2.1.0"}, "coverage": ["html", "gh-readme", "changelog"]}}
 ---
 
-# peft-tuning
+# PEFT Tuning
 
-Fine-tune large pretrained models parameter-efficiently with Hugging Face PEFT, adapting LLMs, vision, and diffusion models by training a small set of extra parameters instead of all weights. Use this whenever a task involves LoRA, QLoRA, AdaLoRA, DoRA, soft prompts (prompt/prefix/P-tuning), or IA3 — building a `LoraConfig` and calling `get_peft_model`, running memory-constrained 4-bit training via `prepare_model_for_kbit_training`, loading or merging trained adapters with `AutoPeftModel` and `merge_and_unload`, or serving several adapters on one base model with `set_adapter`, `add_weighted_adapter`, or X-LoRA routing. Invoke this whenever the user fine-tunes, adapts, or customizes a pretrained model on limited GPU memory, even if they never say "PEFT" or "LoRA" — it is the default approach for efficient fine-tuning on consumer or single-GPU hardware.
-
-## Installation
-
-```bash
-pip install peft
-```
+Adapt large pretrained models with parameter-efficient fine-tuning — train a small set of extra weights instead of all parameters, yielding performance comparable to full fine-tuning at a fraction of the compute, memory, and storage cost. Use this whenever the user fine-tunes, adapts, or customizes an LLM or diffusion model with LoRA, DoRA, AdaLoRA, QLoRA, IA3, or soft-prompt methods (prefix tuning, P-tuning, prompt tuning), wraps a base model with `get_peft_model` / `LoraConfig`, loads or merges an adapter with `PeftModel`, or needs to fit a model on a single consumer GPU. Invoke it even when the user only says "fine-tune this model" or "train an adapter" without naming PEFT — it is the default for any sub-task that trains, saves, or runs inference with adapter weights.
 
 ## Quick Start
 
-Fastest path: attach a LoRA adapter to a causal LM, confirm the trainable-parameter count is tiny, then save just the adapter.
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import LoraConfig, get_peft_model, TaskType
-
-model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf")
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-
-peft_config = LoraConfig(
-    task_type=TaskType.CAUSAL_LM,
-    r=8,
-    lora_alpha=16,
-    target_modules=["q_proj", "v_proj"],
-)
-
-model = get_peft_model(model, peft_config)
-model.print_trainable_parameters()   # confirm only a small fraction is trainable
-# ... train with Trainer / SFTTrainer ...
-model.save_pretrained("./my-lora-adapter")
-```
+The fastest path is plain LoRA: load a base model with `AutoModelForCausalLM.from_pretrained`, build a `LoraConfig` (`task_type`, `r`, `lora_alpha`, `target_modules`), wrap it with `get_peft_model`, train with the Transformers `Trainer` (or TRL `SFTTrainer`), and save with `model.save_pretrained` — the adapter is only ~MBs. See **Fine-tune a model with LoRA** below for the full checklist.
 
 ## Decision Tree
 
 | If the user wants... | Choose... | Then see |
 |---|---|---|
-| to fine-tune but isn't sure which method | LoRA as the default for most LLM/vision tasks; soft prompts (prompt/prefix tuning) for very low-parameter task adaptation; IA3 when you want fewer params than LoRA | `references/lora-methods.md` vs `references/prompt-and-other-methods.md` |
-| to train on a memory-constrained GPU (e.g. <24GB single GPU) | load the base model in 4-bit and use QLoRA via `prepare_model_for_kbit_training` | `references/quantization-and-distributed.md` |
-| lowest inference latency in production | `merge_and_unload` the adapter into base weights for zero overhead; keep the adapter separate if you need to swap tasks | `references/model-lifecycle.md` |
-| to serve multiple tasks/adapters on one base model | `set_adapter` for one-at-a-time switching, `add_weighted_adapter` to blend, X-LoRA for learned routing, hotswapping for fast runtime swaps | `references/model-lifecycle.md` |
-| multi-GPU / large-model distributed training | DeepSpeed ZeRO-3 for very large models; FSDP for medium models | `references/quantization-and-distributed.md` |
+| parameter-efficient fine-tuning but hasn't picked a method | LoRA as the default; DoRA/AdaLoRA for higher quality at slightly more cost; IA3 or soft prompts (prefix/P-tuning) when you need the fewest trainable params | `references/lora-methods.md` vs `references/prompt-and-other-methods.md` |
+| to train when the base model does not fit in VRAM (single GPU <24GB) | QLoRA — load the base in 4-bit and train a LoRA adapter on top | **Fit a large model on a small GPU (QLoRA)** below |
+| to train a model too large for one GPU even quantized, with multi-GPU available | DeepSpeed ZeRO-3 for the largest models; FSDP for medium models | `references/integrations-and-scaling.md` |
+| to deploy the tuned model | `merge_and_unload` into one model for zero-overhead inference (LoRA-family only, not on a quantized base); keep the adapter separate and swap with `set_adapter` when serving multiple tasks from one base | `references/integrations-and-scaling.md` |
 
 ## Common Workflows
 
 ### Fine-tune a model with LoRA
 
-Standard adapter training from a base model. For per-method `target_modules`/rank/alpha settings, see `references/lora-methods.md`.
+The default for parameter-efficient fine-tuning — train low-rank adapters and save only the adapter weights. For per-method parameters (DoRA, AdaLoRA, VeRA, target_modules selection), see `references/lora-methods.md`.
 
 Copy this checklist:
 
-- [ ] Load base model and tokenizer
-- [ ] Build `LoraConfig` (`task_type`, `r`, `lora_alpha`, `target_modules`)
-- [ ] Wrap with `get_peft_model` and inspect trainable params
-- [ ] Train with `Trainer`/`SFTTrainer`
-- [ ] Save adapter with `save_pretrained`
-- [ ] **MCP fallback**: if the PEFT method or `LoraConfig` parameter you need isn't in `references/lora-methods.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="<method> LoraConfig target_modules"` — skip if references covered your case.
+- [ ] Step 1: Load the base model and tokenizer (e.g. `AutoModelForCausalLM.from_pretrained`)
+- [ ] Step 2: Build a `LoraConfig` (`task_type`, `r`, `lora_alpha`, `target_modules`) and wrap with `get_peft_model`
+- [ ] Step 3: Train with the Transformers `Trainer` (or TRL `SFTTrainer`)
+- [ ] Step 4: Save the adapter with `model.save_pretrained` (adapter weights only, ~MBs)
+- [ ] **MCP fallback**: if the PEFT method or `LoraConfig` parameter you need isn't in `references/lora-methods.md` or `references/prompt-and-other-methods.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="<method or LoraConfig param>"` — skip if references covered your case.
 
-### Memory-efficient QLoRA fine-tuning
+### Fit a large model on a small GPU (QLoRA)
 
-Fit large models on small GPUs by quantizing the frozen base to 4-bit and training a LoRA adapter on top. Details in `references/quantization-and-distributed.md`.
-
-Copy this checklist:
-
-- [ ] Load base model in 4-bit (`BitsAndBytesConfig`)
-- [ ] Call `prepare_model_for_kbit_training`
-- [ ] Attach `LoraConfig` and `get_peft_model`
-- [ ] Train and save the adapter
-- [ ] **MCP fallback**: if a quantization or k-bit training detail isn't in `references/quantization-and-distributed.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="QLoRA prepare_model_for_kbit_training"` — skip if references covered your case.
-
-### Load a trained adapter and run inference
-
-Bring an adapter back for generation, optionally merging it into the base for deployment. Details in `references/model-lifecycle.md`.
+Use this only when the full-precision / bf16 base model does not fit in GPU memory (e.g. a single <24GB GPU). With memory headroom, use the plain LoRA workflow above — 4-bit adds dequantization overhead and a more fragile k-bit grad path, for no benefit when memory isn't the constraint. For backend specifics (nf4 vs GPTQ vs AWQ bases), see `references/quantization.md`.
 
 Copy this checklist:
 
-- [ ] Load adapter with `AutoPeftModelForCausalLM.from_pretrained`
-- [ ] Optionally `merge_and_unload` for zero-overhead inference
-- [ ] Run `generate`
-- [ ] Save merged model if deploying standalone
-- [ ] **MCP fallback**: if your adapter loading or merging case isn't in `references/model-lifecycle.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="AutoPeftModel merge_and_unload"` — skip if references covered your case.
+- [ ] Step 1: Confirm the precondition — the bf16 base + LoRA + optimizer state won't fit (otherwise use plain LoRA)
+- [ ] Step 2: Load the base in 4-bit via `BitsAndBytesConfig` (`load_in_4bit`, nf4, double-quant)
+- [ ] Step 3: Call `prepare_model_for_kbit_training` on the loaded model
+- [ ] Step 4: Attach a `LoraConfig` with `get_peft_model`
+- [ ] Step 5: Train, then save the adapter (keep the quantized base separate)
+- [ ] **MCP fallback**: if your quantization backend (bitsandbytes nf4 variant, GPTQ, or AWQ) isn't in `references/quantization.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="QLoRA <backend> quantization"` — skip if references covered your case.
 
-### Manage and combine multiple adapters
+### Load and run inference with a trained adapter
 
-Host several adapters on one base model and switch, blend, or route between them. Details in `references/model-lifecycle.md`.
+Attach a saved adapter to its base model and generate. For `AutoPeftModel`, merging, and serving multiple adapters from one base, see `references/integrations-and-scaling.md`.
 
 Copy this checklist:
 
-- [ ] Load base model and add multiple named adapters
-- [ ] Switch active adapter with `set_adapter`
-- [ ] Combine with `add_weighted_adapter` or route via X-LoRA
-- [ ] Hotswap adapters at inference time
-- [ ] **MCP fallback**: if your multi-adapter routing or combining case isn't in `references/model-lifecycle.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="add_weighted_adapter set_adapter hotswap"` — skip if references covered your case.
+- [ ] Step 1: Load the base model (or use `AutoPeftModelForCausalLM.from_pretrained` for one-call loading)
+- [ ] Step 2: Attach the adapter with `PeftModel.from_pretrained(base, adapter_path)`
+- [ ] Step 3: Optionally call `merge_and_unload()` to fold weights in for zero inference overhead (LoRA-family only, not on a quantized base)
+- [ ] Step 4: Run `generate()`
+- [ ] **MCP fallback**: if the adapter loading or merging API you need isn't in `references/integrations-and-scaling.md`, call `context7__resolve-library-id` with `libraryName="peft"`, then `context7__query-docs` with the returned libraryId and `query="PeftModel <load or merge topic>"` — skip if references covered your case.
 
 ## When to Use
 
-Use this skill whenever the user works with LoRA, QLoRA, adapters, `LoraConfig`, `get_peft_model`, soft prompts, IA3, or efficient fine-tuning on limited GPU memory — even as one step of a larger task (for example, adapting a model before evaluating or serving it).
+Use this skill whenever the user works with LoRA, QLoRA, DoRA, AdaLoRA, IA3, or soft-prompt tuning, or wraps a model with `get_peft_model` / loads an adapter with `PeftModel` — even as ONE STEP of a larger task (e.g. fine-tuning a model that will then be evaluated or served).
 
 **Use this skill when:**
-- Fine-tuning an LLM, vision, or diffusion model without updating all of its weights.
-- Memory is tight and the base model must be loaded in 4-bit (QLoRA) to fit.
-- A trained adapter needs to be loaded, merged, or swapped at inference time.
-- Multiple adapters must coexist on one base model and be switched, blended, or routed.
+- Fine-tuning an LLM or diffusion model on a downstream task without touching all weights.
+- Training is memory-constrained and needs 4-bit/8-bit quantized base loading (QLoRA).
+- Loading, merging, or swapping adapter checkpoints for inference or multi-task serving.
 
 **Reach for a different tool when the task needs a capability this skill does not provide:**
-- For full-parameter fine-tuning where every weight is updated — use the `transformers` `Trainer` directly.
-- For the RLHF/alignment training loop itself (reward modeling, PPO, DPO) — use `trl`'s `SFTTrainer`/`PPOTrainer`; PEFT supplies the adapter config they wrap.
-- For high-throughput production serving — use `vllm` after `merge_and_unload` folds the adapter into the base weights.
+- For the RL/preference-optimization loop itself (PPO, DPO, reward models) — use `trl` instead; PEFT supplies the adapter that trl trains.
+- For high-throughput production serving of the merged model — use a dedicated inference engine (e.g. vLLM) instead.
 
 ## Hardware Requirements
 
-- **GPU**: NVIDIA, including consumer GPUs — PEFT is designed to keep large-model training accessible on a single card.
-- **VRAM**: QLoRA fine-tuning of Llama-2-7B fits on a 16GB GPU (with TRL); 20B-parameter RLHF runs on a 24GB consumer GPU; larger models and Stable Diffusion LoRA were profiled on an A100 80GB with >64GB CPU RAM.
-- **Memory savings**: a 3B-parameter PEFT model performs comparably to full fine-tuning at a fraction of the GPU memory; the saved adapter checkpoint is ~19MB versus ~11GB for the full `bigscience/T0_3B` model.
-- **4-bit / k-bit**: load the frozen base in 4-bit (QLoRA) to fit large models on small GPUs — see `references/quantization-and-distributed.md`.
-- **Multi-GPU**: via DeepSpeed ZeRO-3 (very large models) or FSDP (medium models).
+- **GPU**: Runs on consumer GPUs; an A100 80GB (with >64GB CPU RAM) is referenced for larger models and Stable Diffusion + LoRA.
+- **VRAM**: Llama-2-7B with QLoRA + TRL fits on a 16GB GPU; 20B-parameter RLHF with PEFT + TRL fits on a 24GB consumer GPU; a 3B model trained with PEFT is comparable to a fully fine-tuned model at a fraction of the GPU memory.
+- **Checkpoint size**: Adapters are tiny — e.g. a 19MB final checkpoint vs 11GB for the full `bigscience/T0_3B` model.
+- **Multi-GPU**: Supported via DeepSpeed ZeRO and FSDP (see `references/integrations-and-scaling.md`).
+
+## Old Patterns
+
+<details>
+<summary>Deprecated APIs (kept for historical context)</summary>
+
+- **`prepare_model_for_int8_training`** (deprecated in 0.4.0) — use `prepare_model_for_kbit_training` instead.
+- **`load_in_8bit` / `load_in_4bit` kwargs passed directly to `from_pretrained`** (deprecated in transformers 4.30) — use `BitsAndBytesConfig` passed via `quantization_config` instead.
+
+</details>
 
 ## References
 
-- `references/lora-methods.md` — the LoRA family and `LoraConfig`: LoRA, QLoRA, AdaLoRA, LoHa, LoKr, VeRA, X-LoRA, DoRA, RandLora, GraLoRA, and their `target_modules`/rank/alpha settings.
-- `references/prompt-and-other-methods.md` — soft-prompt methods (prompt tuning, prefix tuning, P-tuning, multitask prompt tuning) plus IA3 and OFT/BOFT reparameterization tuners.
-- `references/quantization-and-distributed.md` — k-bit/QLoRA quantization with bitsandbytes, `prepare_model_for_kbit_training`, and DeepSpeed/FSDP distributed training.
-- `references/model-lifecycle.md` — `AutoPeftModel` loading/saving, adapter injection, model merging, `merge_and_unload`, mixed adapter types, hotswapping, and checkpoint format.
+- `references/lora-methods.md` — LoRA and its variants (DoRA, AdaLoRA, LoHa, LoKr, VeRA, X-LoRA) with `LoraConfig` parameters (`r`, `lora_alpha`, `target_modules`, `init`).
+- `references/prompt-and-other-methods.md` — soft-prompt methods (prompt tuning, prefix tuning, P-tuning, multitask prompt tuning), IA3, and OFT/BOFT orthogonal fine-tuning.
+- `references/quantization.md` — QLoRA: 4-bit/8-bit bitsandbytes base loading, `prepare_model_for_kbit_training`, and training adapters on GPTQ/AWQ quantized bases.
+- `references/integrations-and-scaling.md` — DeepSpeed ZeRO and FSDP multi-GPU training, adapter save/load (`PeftModel`, `AutoPeftModel`), model merging, and Transformers/Diffusers integration.
 
 ## Looking things up live (MCP fallback)
 

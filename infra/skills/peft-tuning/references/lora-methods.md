@@ -1,281 +1,169 @@
-# LoRA Methods and LoraConfig
+# LoRA and Reparameterization Methods
 
-Configuration and parameter reference for PEFT's LoRA family — standard LoRA plus QLoRA, DoRA, rsLoRA, AdaLoRA, LoHa, LoKr, VeRA, X-LoRA, RandLora, and GraLoRA — focused on which config class to instantiate and how to set `r`, `alpha`, and `target_modules`.
+How to configure LoRA and its low-rank reparameterization variants in PEFT — LoRA, DoRA, AdaLoRA, LoHa, LoKr, VeRA, and X-LoRA — including the `LoraConfig` parameters (`r`, `lora_alpha`, `target_modules`, weight init) that govern every run.
 
 ## Contents
 
-- The shared LoRA mechanism
+- The shared workflow
 - LoraConfig core parameters
+- DoRA — weight-decomposed LoRA
+- AdaLoRA — budget-allocated rank
+- LoHa — Hadamard-product low rank
+- LoKr — Kronecker-product low rank
+- VeRA — vector-based shared random matrices
+- X-LoRA — mixture of LoRA experts
 - Choosing target_modules
-- r and lora_alpha
-- Standard LoRA (quickstart)
-- QLoRA (4-bit base + LoRA)
-- DoRA (use_dora)
-- rsLoRA (use_rslora)
-- AdaLoRA (AdaLoraConfig)
-- LoHa (LoHaConfig)
-- LoKr (LoKrConfig)
-- VeRA (VeraConfig)
-- X-LoRA (XLoraConfig)
-- RandLora (RandLoraConfig)
-- GraLoRA
-- init_lora_weights initialization schemes
 - Picking a method
 
-## The shared LoRA mechanism
+## The shared workflow
 
-Every method here freezes the base weights and trains small added parameters, then wraps the base model with `get_peft_model(model, peft_config)`. They differ in *how* the trainable update is parameterized (two low-rank matrices, a Hadamard product, a Kronecker product, shared random bases, a router over experts, etc.). The wrapping call is identical across all of them — only the config class and its fields change. After wrapping, call `model.print_trainable_parameters()` to confirm how few parameters you are actually training.
-
-## LoraConfig core parameters
-
-`LoraConfig` is the base for standard LoRA, DoRA, rsLoRA, and (by inheritance) AdaLoRA. The fields you will set most often:
-
-- `r` — rank of the update matrices. Higher rank = more capacity and more trainable params.
-- `lora_alpha` — scaling numerator; the update is scaled by `lora_alpha / r` (or `lora_alpha / sqrt(r)` with rsLoRA).
-- `lora_dropout` — dropout applied on the LoRA path.
-- `target_modules` — which submodules to adapt (list of names, a regex string, or `"all-linear"`).
-- `bias` — `"none"` (default), `"all"`, or `"lora_only"`.
-- `task_type` — e.g. `TaskType.CAUSAL_LM`, `"SEQ_CLS"`, `"SEQ_2_SEQ_LM"`, `"TOKEN_CLS"`. Set this so PEFT attaches the right head behavior.
-- `modules_to_save` — extra modules (e.g. a new classifier head) to train fully and save alongside the adapter.
-- `use_rslora`, `use_dora` — toggle the variants below.
-- `rank_pattern`, `alpha_pattern` — per-module overrides of `r`/`alpha` keyed by module name.
-- `init_lora_weights` — initialization scheme (see the final section).
-
-## Choosing target_modules
-
-`target_modules` is the single highest-impact knob. Options:
-
-- An explicit list of submodule name suffixes, e.g. `["q_proj", "v_proj"]` for attention-only adaptation, or `["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]` to also cover the MLP.
-- The string `"all-linear"` to target every linear layer (excluding the output head). This is the common QLoRA default and usually the strongest single choice.
-- A regex string matched against module names for fine control.
-
-If you omit `target_modules`, PEFT falls back to architecture-specific defaults for many known model types, but being explicit is safer for unfamiliar architectures.
-
-## r and lora_alpha
-
-`r` sets capacity; `lora_alpha` sets how strongly the update is applied. A widely used heuristic is `lora_alpha = 2 * r` (e.g. `r=16, lora_alpha=32`). With `use_rslora=True` the scaling becomes `alpha / sqrt(r)`, which keeps the effective scale stable as you raise `r`, so larger ranks stay trainable without exploding the update.
-
-Use `rank_pattern` / `alpha_pattern` to give specific modules a different rank:
-
-```python
-config = LoraConfig(
-    r=8,
-    lora_alpha=16,
-    target_modules=["q_proj", "v_proj"],
-    rank_pattern={"v_proj": 16},     # v_proj gets r=16, q_proj stays r=8
-    alpha_pattern={"v_proj": 32},
-)
-```
-
-## Standard LoRA (quickstart)
-
-The canonical setup — wrap a causal LM and train ~0.1–1% of parameters:
+Every method in this file is a *reparameterization* adapter: it freezes the base weights and injects a small set of trainable parameters into selected linear layers. They all plug into the same three-step flow — build a config, wrap the base model with `get_peft_model`, then train and print the trainable-parameter count.
 
 ```python
 from transformers import AutoModelForCausalLM
 from peft import LoraConfig, TaskType, get_peft_model
 
+device = torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
 model_id = "Qwen/Qwen2.5-3B-Instruct"
-model = AutoModelForCausalLM.from_pretrained(model_id, device_map="cuda")
+model = AutoModelForCausalLM.from_pretrained(model_id, device_map=device)
 peft_config = LoraConfig(
     r=16,
     lora_alpha=32,
     task_type=TaskType.CAUSAL_LM,
-    # target_modules=["q_proj", "v_proj"]  # optionally indicate target modules
+    # target_modules=["q_proj", "v_proj", ...]  # optionally indicate target modules
 )
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 ```
 
-Next step: hand `model` to a standard `Trainer`/`SFTTrainer` and train as usual. Save with `model.save_pretrained(path)` — only the adapter is written.
+This trains only a fraction of the model's parameters (PEFT cites ~0.19% for `bigscience/mt0-large`). The variants below swap `LoraConfig` for a variant-specific config class but keep `get_peft_model(model, peft_config)` and the same training loop. After training, save with `model.save_pretrained(out_dir)`; reload the adapter onto the base model with `PeftModel.from_pretrained(base_model, out_dir)`.
 
-## QLoRA (4-bit base + LoRA)
+`task_type` must match the head: `TaskType.CAUSAL_LM`, `TaskType.SEQ_2_SEQ_LM`, `TaskType.SEQ_CLS`, `TaskType.TOKEN_CLS`, `TaskType.QUESTION_ANS`, or `TaskType.FEATURE_EXTRACTION`.
 
-QLoRA is not a separate config; it is LoRA applied on top of a 4-bit-quantized base model. Quantize with `BitsAndBytesConfig`, prepare the model, then attach a normal `LoraConfig`:
+## LoraConfig core parameters
 
-```python
-import torch
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+These four knobs determine capacity, scaling, placement, and initialization. They are the parameters you tune first.
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_use_double_quant=True,
-)
-model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=bnb_config)
-model = prepare_model_for_kbit_training(model)
+- **`r`** (int) — the rank of the update matrices `A` (down-projection) and `B` (up-projection). Trainable parameter count grows roughly linearly with `r`. Common values: 8, 16, 32, 64. Higher `r` adds capacity at the cost of more parameters; start low and raise only if the adapter underfits.
+- **`lora_alpha`** (int) — the scaling factor for the LoRA update. The injected delta is scaled by `lora_alpha / r`. A common heuristic is `lora_alpha = 2 * r` (e.g. `r=16`, `lora_alpha=32`, as in the snippet above), which keeps the effective scale at 2.
+- **`target_modules`** — which submodules receive adapters. Pass a list of module name suffixes (e.g. `["q_proj", "v_proj"]`) or a regex string. If omitted, PEFT applies a model-type default (often the attention query/value projections). See *Choosing target_modules*.
+- **`init_lora_weights`** — controls how `A`/`B` are initialized. Default `True` uses Kaiming-uniform on `A` and zeros on `B`, so the initial update is zero (training starts from the unmodified base model). Set to `"gaussian"` for normal init, or to PiSSA/OLoRA/LoftQ-style strings to initialize from a decomposition of the base weights for faster convergence.
 
-config = LoraConfig(r=16, lora_alpha=32, target_modules="all-linear", task_type="CAUSAL_LM")
-model = get_peft_model(model, config)
-```
+Other frequently-used `LoraConfig` fields:
 
-This is the recipe for fitting large models on a single consumer GPU. `prepare_model_for_kbit_training` casts layernorms, enables gradient checkpointing compatibility, and makes the quantized base trainable through the LoRA path.
+- **`lora_dropout`** (float) — dropout applied to the LoRA input; regularizes the adapter.
+- **`bias`** — `"none"` (default), `"all"`, or `"lora_only"`; whether and which bias terms are made trainable.
+- **`modules_to_save`** — extra modules (e.g. a freshly-initialized classifier head) to train fully and save alongside the adapter.
+- **`use_rslora`** (bool) — use rank-stabilized scaling (`lora_alpha / sqrt(r)` instead of `lora_alpha / r`), which stabilizes training at higher ranks.
+- **`use_dora`** (bool) — enable DoRA (see below).
 
-## DoRA (use_dora)
+## DoRA — weight-decomposed LoRA
 
-DoRA (Weight-Decomposed Low-Rank Adaptation) splits each weight into magnitude and direction and applies LoRA to the direction. It often improves on LoRA at low rank. Enable it with one flag:
+DoRA decomposes each pretrained weight into a magnitude vector and a direction matrix, then applies LoRA only to the direction while training the magnitude separately. It typically improves over plain LoRA at low ranks. It is not a separate config class — it is a flag on `LoraConfig`:
 
 ```python
-config = LoraConfig(
-    r=8, lora_alpha=16,
-    target_modules=["q_proj", "v_proj"],
+from peft import LoraConfig
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
     use_dora=True,
+    task_type="CAUSAL_LM",
 )
 ```
 
-DoRA adds a small amount of overhead per step versus plain LoRA. It is compatible with quantization and the other `LoraConfig` fields.
+Notes: DoRA adds the magnitude parameters, so it is somewhat slower and uses more memory than plain LoRA at the same `r`. For inference speed you can merge the adapter back into the base weights with `model.merge_and_unload()`, which collapses the DoRA update into the frozen weights.
 
-## rsLoRA (use_rslora)
+## AdaLoRA — budget-allocated rank
 
-Rank-stabilized LoRA changes only the scaling to `alpha / sqrt(r)`, which lets you increase `r` for more capacity without the update shrinking too much:
-
-```python
-config = LoraConfig(r=64, lora_alpha=16, use_rslora=True, target_modules="all-linear")
-```
-
-Reach for this when you want higher rank than usual and find standard scaling underperforms at that rank.
-
-## AdaLoRA (AdaLoraConfig)
-
-AdaLoRA starts at a higher rank and prunes it down to a target budget during training, allocating more rank to important modules. It needs a training-step schedule and a call inside your loop.
+AdaLoRA starts every target module at a higher rank, then prunes ranks during training so the parameter budget is spent where it helps most (importance-scored singular values). Use `AdaLoraConfig`; it requires knowing the total number of training steps so the schedule can be planned.
 
 ```python
 from peft import AdaLoraConfig, get_peft_model
 
-config = AdaLoraConfig(
-    init_r=12,          # starting rank
-    target_r=8,         # final average rank budget
-    tinit=200,          # steps before pruning starts
-    tfinal=1000,        # steps after which rank is fixed
-    deltaT=10,          # prune every deltaT steps
-    lora_alpha=32,
-    target_modules=["q_proj", "v_proj"],
-    total_step=2000,    # total optimizer steps (required)
+peft_config = AdaLoraConfig(
+    init_r=12,        # starting rank per module
+    target_r=8,       # average rank after pruning
+    tinit=200,        # steps before pruning begins
+    tfinal=1000,      # step at which pruning stops
+    total_step=3000,  # total training steps (required)
     task_type="CAUSAL_LM",
 )
-model = get_peft_model(model, config)
+model = get_peft_model(model, peft_config)
 ```
 
-In the training loop, after `optimizer.step()` call `model.update_and_allocate(global_step)` so the rank schedule advances. Set `total_step` to your real step count.
+Set `total_step` to the actual number of optimizer steps in your run; an incorrect value desynchronizes the rank schedule. AdaLoRA is most useful when you want LoRA-level quality under a tight parameter budget and are willing to let the method decide the per-layer allocation.
 
-## LoHa (LoHaConfig)
+## LoHa — Hadamard-product low rank
 
-LoHa (from the LyCORIS family) parameterizes the update as a Hadamard product of two low-rank pairs, giving higher effective rank for the same budget. Note the field is `alpha`, not `lora_alpha`:
+LoHa (from the LyCORIS family) factors the update as the element-wise (Hadamard) product of two low-rank decompositions, giving more expressive updates than a single low-rank product at the same rank. Use `LoHaConfig`:
 
 ```python
 from peft import LoHaConfig, get_peft_model
 
-config = LoHaConfig(
-    r=8,
-    alpha=16,
+peft_config = LoHaConfig(
+    r=16,
+    alpha=32,
     target_modules=["q_proj", "v_proj"],
-    rank_dropout=0.0,
-    module_dropout=0.0,
+    task_type="CAUSAL_LM",
 )
-model = get_peft_model(model, config)
+model = get_peft_model(model, peft_config)
 ```
 
-`use_effective_conv2d=True` enables the conv-specific decomposition for vision/diffusion models.
+LoHa was developed for diffusion/image models but works on transformers. `r` and `alpha` play the same capacity/scaling roles as in LoRA.
 
-## LoKr (LoKrConfig)
+## LoKr — Kronecker-product low rank
 
-LoKr (also LyCORIS) uses a Kronecker product, which can express large updates very parameter-efficiently and is popular for diffusion models:
+LoKr (also LyCORIS) builds the update from a Kronecker product, which can represent large weight deltas with very few parameters. Use `LoKrConfig`:
 
 ```python
 from peft import LoKrConfig, get_peft_model
 
-config = LoKrConfig(
-    r=8,
-    alpha=16,
+peft_config = LoKrConfig(
+    r=16,
+    alpha=32,
     target_modules=["q_proj", "v_proj"],
-    decompose_both=True,    # decompose both Kronecker factors
-    decompose_factor=-1,    # -1 lets PEFT choose the factorization
+    task_type="CAUSAL_LM",
 )
-model = get_peft_model(model, config)
+model = get_peft_model(model, peft_config)
 ```
 
-## VeRA (VeraConfig)
+LoKr is the most parameter-frugal of the reparameterization methods here; reach for it when storage/parameter count is the binding constraint.
 
-VeRA shares a single pair of *frozen random* matrices across all adapted layers and only trains tiny per-layer scaling vectors, so its adapter is far smaller than LoRA's. Because the random matrices are shared, the targeted modules must have compatible shapes.
+## VeRA — vector-based shared random matrices
+
+VeRA freezes a single pair of random low-rank matrices shared across all adapted layers and trains only small per-layer scaling vectors. This makes the trainable footprint dramatically smaller than LoRA's, since the large `A`/`B` matrices are not learned. Use `VeraConfig`:
 
 ```python
 from peft import VeraConfig, get_peft_model
 
-config = VeraConfig(
-    r=256,                              # VeRA uses a much higher rank than LoRA
+peft_config = VeraConfig(
+    r=256,            # VeRA typically uses a much larger r than LoRA
     target_modules=["q_proj", "v_proj"],
-    d_initial=0.1,                      # init value for trainable scaling vector
-    save_projection=True,               # store the shared random matrices in the checkpoint
+    task_type="CAUSAL_LM",
 )
-model = get_peft_model(model, config)
+model = get_peft_model(model, peft_config)
 ```
 
-Use a high `r` (256 is typical) — the trained parameter count stays small regardless because only the scaling vectors are learned.
+Because only the scaling vectors are trained, VeRA tolerates (and benefits from) a much larger `r` than LoRA while keeping the checkpoint tiny — useful when you need to serve many adapters.
 
-## X-LoRA (XLoraConfig)
+## X-LoRA — mixture of LoRA experts
 
-X-LoRA is a mixture-of-experts router *over already-trained LoRA adapters*: a learned gate produces per-token, per-layer scalings that blend the experts. You first train several LoRA adapters, then configure X-LoRA to combine them.
+X-LoRA layers a learned, token/layer-wise gating ("dense gate") over a set of pre-trained LoRA adapters, mixing them per input rather than committing to one. It is built on top of existing LoRA adapters via `XLoraConfig` (you supply the paths/identifiers of the constituent adapters and the base hidden size). Use it when you have several specialized LoRA adapters and want the model to blend them dynamically at inference time instead of swapping a single adapter in and out.
 
-```python
-from peft import XLoraConfig, get_peft_model
+## Choosing target_modules
 
-config = XLoraConfig(
-    hidden_size=model.config.hidden_size,
-    adapters={
-        "adapter_1": "/path/to/lora_adapter_1",
-        "adapter_2": "/path/to/lora_adapter_2",
-    },
-    xlora_depth=8,
-    layerwise_scalings=True,
-)
-model = get_peft_model(model, config)
-```
-
-Only the router is trained at this stage; the underlying expert adapters stay frozen.
-
-## RandLora (RandLora)
-
-RandLora trains coefficients over a set of fixed random bases to recover full-rank-like updates while keeping the trainable count low — conceptually a full-rank cousin of VeRA. Instantiate `RandLoraConfig` and set `r` and `target_modules` as with the others; consult the RandLora entry in the PEFT Adapters API reference for the exact dropout/alpha and sparsity fields, which differ from `LoraConfig`:
-
-```python
-from peft import RandLoraConfig, get_peft_model
-
-config = RandLoraConfig(
-    r=32,
-    target_modules=["q_proj", "v_proj"],
-)
-model = get_peft_model(model, config)
-```
-
-## GraLoRA
-
-GraLoRA ("granular" LoRA) partitions each weight into a grid of blocks and gives each block its own small low-rank adapter, increasing expressivity at fixed rank and improving locality. It is configured via its own config class (see the GraLoRA entry in the PEFT Adapters API reference for the block-granularity field and exact parameter names) and then wrapped with `get_peft_model` like every other method. Prefer it when standard LoRA underfits at a given rank but you do not want to raise the global rank.
-
-## init_lora_weights initialization schemes
-
-`init_lora_weights` controls how the adapter is initialized and is available on `LoraConfig`:
-
-- `True` (default) — LoRA-paper init (one matrix random, the other zero, so the model starts unchanged).
-- `False` — random init for both (the model output changes immediately; mainly for testing).
-- `"gaussian"` — Gaussian init scaled by rank.
-- `"pissa"` — initialize from the principal singular components of the base weight; can converge faster.
-- `"olora"`, `"eva"`, `"loftq"` — data- or decomposition-aware schemes; `"loftq"` pairs with quantization and needs `loftq_config`.
-
-Example:
-
-```python
-config = LoraConfig(r=16, lora_alpha=32, init_lora_weights="pissa", target_modules="all-linear")
-```
+- **Start with attention projections.** Leaving `target_modules` unset uses the model-type default, usually the query/value projections. Naming them explicitly — `["q_proj", "v_proj"]` for Llama/Qwen-style models — is the conservative, well-tested baseline.
+- **Add more modules for more capacity.** Including key/output projections (`k_proj`, `o_proj`) and MLP layers (`gate_proj`, `up_proj`, `down_proj`) increases adapter capacity and parameter count. `"all-linear"` targets every linear layer.
+- **Match the architecture's actual names.** Module suffixes differ across model families (`c_attn` for GPT-2, `query`/`value` for BERT). Inspect `model.named_modules()` to confirm the suffixes before setting `target_modules`, or pass a regex string to match a pattern.
 
 ## Picking a method
 
-- General fine-tuning, single GPU, limited memory → **QLoRA** (4-bit base + LoRA, `target_modules="all-linear"`).
-- Want a bit more quality than LoRA at the same rank → **DoRA** (`use_dora=True`) or **rsLoRA** at higher rank.
-- Want the optimizer to spend rank where it matters → **AdaLoRA**.
-- Smallest possible adapter / many tasks to store → **VeRA** (or RandLora).
-- Diffusion / vision models → **LoKr** or **LoHa**.
-- Combine several specialist adapters at inference → **X-LoRA**.
+- **Default / unsure** → plain `LoraConfig` (`r=16`, `lora_alpha=32`). It is the most-tested and best-supported path.
+- **Want better low-rank quality** → `use_dora=True`, or `use_rslora=True` for stability at higher `r`.
+- **Tight parameter budget, let the method allocate** → AdaLoRA.
+- **Smallest possible checkpoint** → LoKr or VeRA.
+- **More expressive update at fixed rank** → LoHa.
+- **Several specialized adapters to blend at inference** → X-LoRA.
 
-For exact field lists and defaults of each config class, see the corresponding entries (LoRA, AdaLoRA, LoHa, LoKr, VeRA, X-LoRA, RandLora, GraLoRA) in the PEFT Adapters API reference.
+Faster convergence with any of these comes from initializing from a base-weight decomposition via `init_lora_weights` (PiSSA/OLoRA/LoftQ) rather than from zero.

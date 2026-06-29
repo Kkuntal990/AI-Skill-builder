@@ -10,7 +10,7 @@ should carry); this doc covers *the reliability bar* the creator must enforce.
 
 **Legend** — Source: `[A]` Anthropic-primary · `[P]` peer-reviewed paper · `[C]` community · `[D]` our derivation.
 Enforce: `det` deterministic string check (hard-fail) · `llm` LLM-check at build (warn/gate).
-Our status: ✅ done · ⚠️ partial · ❌ missing/wrong. **As of builder 2.0.0 (2026-06-24) the P0 gates, the P4 scope-honesty critic, and the P1/P3 mechanical checks are enforced in `validate_skill` + `critique_skill`; validated live (vllm-inference genre wall caught; peft-tuning rebuilt clean).**
+Our status: ✅ done · ⚠️ partial · ❌ missing/wrong. **As of builder 2.0.0 (2026-06-24) the P0 gates, the P4 scope-honesty critic, and the P1/P3 mechanical checks are enforced in `validate_skill` + `critique_skill`; validated live (vllm-inference genre wall caught; peft-tuning rebuilt clean).** **Builder 2.1.0 (2026-06-28) adds the P3 conditional-gating critic (block→repair): a resource-heavy/optional technique presented as a default, or a workflow whose precondition is stranded in the Decision Tree, is flagged — the fix for the mvp-029 QLoRA RCA where an ungated "Memory-efficient QLoRA" checklist trained 4-bit on a 48GB GPU.**
 
 ---
 
@@ -59,7 +59,8 @@ bash without loading their contents** into context.
 | Check | Rule | Enforce | Ours |
 |---|---|---|---|
 | **No rigid ALL-CAPS** | ALWAYS/NEVER/MUST in caps + "super rigid structures" are a yellow flag → **explain the *why*** instead (theory of mind) | det+llm | ✅ critic P3-allcaps + prompt rule |
-| One default, not many options | prefer a single default + an escape-hatch alternative; don't enumerate every option | llm | ⚠️ in principles, not gated |
+| One default; heavy path = escape-hatch | prefer a single **cheapest-that-works** default + escape-hatches; a resource-heavy/optional technique (4-bit/QLoRA, 8-bit, distributed, separate inference engine) is gated on its precondition, never the headline default | llm | ✅ prompt rule + critic P3-conditional-gating (block) |
+| **Precondition travels with action** | a workflow that is the conditional branch of a Decision Tree row (or a heavy/optional technique) must restate its gate in the intro + first step — not leave the condition stranded in the Decision Tree (the mvp-029 QLoRA failure) | llm | ✅ critic P3-conditional-gating BLOCK → repair loop |
 | No time-sensitive info | nothing that goes stale ("after July 2026 …"); use an `## Old Patterns` `<details>` for legacy | det+llm | ✅ critic P3-time-sensitive |
 | Consistent terminology | pick one term per concept, use it throughout | llm | ❌ |
 | No Windows paths | forward slashes only | det | ✅ critic P3-windows-path |

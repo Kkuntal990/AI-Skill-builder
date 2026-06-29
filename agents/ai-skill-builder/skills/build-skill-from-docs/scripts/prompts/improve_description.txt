@@ -20,6 +20,7 @@ Rules:
 - Name specific capabilities (class names, algorithm names) — not generic terms.
 - Don't list keywords separated by commas ("lora, qlora, sft"). Write prose.
 - Don't claim capabilities the skill doesn't have — stay within what the body describes.
+- Keep it under ~900 characters (hard cap 1024 — over 1024 rejects the build, and the listing truncates it). Compact and specific beats long and exhaustive.
 
 Return ONLY the new description as a single plain text paragraph. No quotes,
 no markdown, no prose before/after.

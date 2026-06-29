@@ -1,85 +1,75 @@
-# Offline Batched Inference
+# Offline Inference with the LLM Class
 
-How to run vLLM in-process (no server) for generation, chat, beam search, prompt-embedding inputs, and pooling/embedding/scoring — all driven by the `LLM` class and `SamplingParams`.
+How to run batched, in-process LLM inference with `vllm.LLM` — sampling configuration, text and chat generation, multimodal and embedding inputs, and beam search.
 
 ## Contents
 
-- The LLM class
-- SamplingParams
-- Batched generate
-- Chat over conversations
-- Beam search
+- Creating an LLM instance
+- Configuring generation with SamplingParams
+- Batch text generation with generate()
+- Chat-style generation with chat()
+- Multimodal inputs
 - Prompt embedding inputs
-- Pooling models: embed, classify, score, reward, encode
-- Output object shapes
-- Determinism notes
+- Beam search
+- Reading outputs
 
-## The LLM class
+## Creating an LLM instance
 
-`LLM` loads a model once and serves many requests in-process. Construct it once, reuse it for every batch — initialization (weight load + CUDA-graph capture) is the expensive step.
+The `LLM` class loads model weights once and holds the engine for the lifetime of the process. Construct it a single time and reuse it for every batch — re-instantiating reloads weights and re-allocates the KV cache.
 
 ```python
 from vllm import LLM, SamplingParams
 
-llm = LLM(model="facebook/opt-125m")
+llm = LLM(model="meta-llama/Llama-2-7b-hf")
 ```
 
-Frequently-used constructor arguments:
+Common constructor arguments:
 
-| Arg | Purpose |
-|---|---|
-| `model` | HF repo id or local path. |
-| `tensor_parallel_size` | Number of GPUs to shard the model across. |
-| `dtype` | `"auto"`, `"half"`, `"bfloat16"`, `"float16"`, `"float32"`. |
-| `quantization` | `"awq"`, `"gptq"`, `"fp8"`, etc. |
-| `max_model_len` | Cap the context length (lowers KV-cache memory). |
-| `gpu_memory_utilization` | Fraction of GPU memory for weights + KV cache (default 0.9). |
-| `enforce_eager` | Disable CUDA graphs (slower, less memory, faster startup). |
-| `trust_remote_code` | Allow custom model code from the HF repo. |
-| `seed` | RNG seed for sampling. |
-| `task` | Select model role: `"generate"`, `"embed"`, `"classify"`, `"score"`, `"reward"`. |
-| `enable_prefix_caching` | Reuse KV across prompts sharing a prefix. |
+- `model` — HF repo id or local path to the weights.
+- `tensor_parallel_size` — number of GPUs to shard the model across (default `1`).
+- `dtype` — `"auto"`, `"float16"`, `"bfloat16"`, etc.
+- `gpu_memory_utilization` — fraction of GPU memory reserved for weights + KV cache (default `0.9`).
+- `max_model_len` — cap the context length to fit a smaller KV cache.
+- `quantization` — e.g. `"awq"`, `"gptq"`, `"fp8"` for quantized checkpoints.
+- `trust_remote_code` — required for models that ship custom modeling code.
+- `seed` — engine-level seed for reproducibility.
+- `enable_prompt_embeds` — must be `True` to pass `prompt_embeds` (see below).
 
-Typical next step after construction is to build a `SamplingParams` and call `llm.generate(...)`.
+Typical next step: build a `SamplingParams` and call `generate()`.
 
-## SamplingParams
+## Configuring generation with SamplingParams
 
-`SamplingParams` controls decoding. Pass one shared object for the whole batch, or a list aligned 1:1 with the prompts for per-prompt control.
+`SamplingParams` controls decoding. Pass one instance shared across all prompts, or a list aligned per-prompt.
 
 ```python
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95, max_tokens=256)
 ```
 
-Key fields:
+Frequently used fields:
 
-| Field | Meaning |
-|---|---|
-| `n` | Number of output sequences to return per prompt. |
-| `temperature` | 0 = greedy/deterministic; higher = more random. |
-| `top_p`, `top_k`, `min_p` | Nucleus / top-k / min-probability truncation. |
-| `max_tokens` | Max tokens to generate per output. |
-| `min_tokens` | Force at least this many tokens before EOS allowed. |
-| `stop`, `stop_token_ids` | Stop strings / token ids that end generation. |
-| `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Penalize repetition. |
-| `seed` | Per-request seed (overrides engine seed for this request). |
-| `logprobs` | Return this many top logprobs per generated token. |
-| `prompt_logprobs` | Return logprobs for the prompt tokens too. |
-| `ignore_eos` | Keep generating past the EOS token. |
-| `skip_special_tokens` | Strip special tokens from decoded text (default True). |
+- `temperature` — `0.0` gives greedy (deterministic) decoding; higher is more random.
+- `top_p` / `top_k` — nucleus / top-k truncation of the sampling distribution.
+- `n` — number of output sequences to return per prompt (parallel sampling).
+- `max_tokens` — maximum number of tokens to generate.
+- `min_tokens` — minimum tokens before an EOS / stop string can end generation.
+- `stop` / `stop_token_ids` — strings or token ids that halt generation.
+- `presence_penalty`, `frequency_penalty`, `repetition_penalty` — repetition controls.
+- `seed` — per-request seed.
+- `logprobs` — number of top logprobs to return per generated token.
 
-For greedy, reproducible decoding set `temperature=0`.
+For greedy decoding, set `temperature=0`. For sampling several candidates, set `n>1` and read all of `output.outputs`.
 
-## Batched generate
+## Batch text generation with generate()
 
-`llm.generate` takes a single prompt or a list of prompts and runs them through continuous batching automatically — you do not manage batches yourself.
+Pass a list of prompts; vLLM batches them internally with continuous batching, so submitting many prompts at once is far faster than looping one at a time.
 
 ```python
 prompts = [
     "Hello, my name is",
+    "The president of the United States is",
     "The capital of France is",
     "The future of AI is",
 ]
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 
 outputs = llm.generate(prompts, sampling_params)
 
@@ -89,11 +79,11 @@ for output in outputs:
     print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
 ```
 
-Output order matches input order. To get multiple completions per prompt, set `SamplingParams(n=k)` and read `output.outputs[0..k-1]`. Pass `use_tqdm=False` to silence the progress bar in scripts.
+`generate()` returns one `RequestOutput` per input prompt, in the same order. Use `use_tqdm=False` to silence the progress bar in scripted runs. Typical next step: extract `output.outputs[0].text` for each result.
 
-## Chat over conversations
+## Chat-style generation with chat()
 
-`llm.chat` applies the model's chat template, so you pass role/content messages instead of a pre-formatted string.
+`chat()` applies the model's chat template to a message list before generating — use it for instruction-tuned / chat models instead of hand-formatting the prompt string.
 
 ```python
 conversation = [
@@ -104,117 +94,109 @@ conversation = [
 ]
 
 outputs = llm.chat(conversation, sampling_params)
+
 for output in outputs:
     print(output.outputs[0].text)
 ```
 
-To batch many independent conversations, pass a list of conversations (a list of message-lists). Useful keyword arguments:
+To batch multiple independent conversations, pass a list of message lists. Useful keyword arguments:
 
 - `chat_template` — override the model's default template.
-- `add_generation_prompt` — append the assistant-turn prompt (default True).
-- `use_tqdm` — progress bar toggle.
+- `add_generation_prompt` — append the assistant turn marker (default `True`).
+- `use_tqdm` — toggle the progress bar.
+
+## Multimodal inputs
+
+For vision-language models, pass a dict with the templated `prompt` (including the model's image placeholder token) and a `multi_modal_data` entry.
+
+```python
+from vllm import LLM
+from vllm.assets.image import ImageAsset
+
+llm = LLM(model="llava-hf/llava-1.5-7b-hf")
+
+image = ImageAsset("stop_sign").pil_image
+prompt = "USER: <image>\nWhat is the content of this image?\nASSISTANT:"
+
+outputs = llm.generate({
+    "prompt": prompt,
+    "multi_modal_data": {"image": image},
+})
+
+for output in outputs:
+    print(output.outputs[0].text)
+```
+
+To send several images to a model that supports it, pass a list under the key:
+
+```python
+outputs = llm.generate({
+    "prompt": prompt,
+    "multi_modal_data": {"image": [image1, image2]},
+})
+```
+
+Other modalities use the same shape with keys like `"video"` or `"audio"`, depending on model support. The placeholder token in `prompt` must match the number of media items provided.
+
+## Prompt embedding inputs
+
+Instead of token ids, you can feed precomputed input embeddings. The engine must be created with `enable_prompt_embeds=True`, and each prompt is passed as a dict with a `prompt_embeds` tensor of shape `(sequence_length, hidden_size)`.
+
+```python
+from vllm import LLM
+
+llm = LLM(model="meta-llama/Llama-3.2-1B-Instruct", enable_prompt_embeds=True)
+
+# inputs_embeds: a torch.Tensor produced from the model's embedding layer
+outputs = llm.generate({"prompt_embeds": inputs_embeds})
+
+for output in outputs:
+    print(output.outputs[0].text)
+```
+
+This is for advanced cases (e.g. soft prompts or embeddings produced by a separate module). For ordinary text, prefer plain string prompts.
 
 ## Beam search
 
-Beam search is a separate method (not a `SamplingParams` mode) and uses `BeamSearchParams`.
+Beam search is a separate method from `generate()` and takes a `BeamSearchParams` rather than `SamplingParams`.
 
 ```python
+from vllm import LLM
 from vllm.sampling_params import BeamSearchParams
 
+llm = LLM(model="meta-llama/Llama-2-7b-hf")
+
 outputs = llm.beam_search(
-    prompts,
-    BeamSearchParams(beam_width=4, max_tokens=50),
+    ["The capital of France is"],
+    BeamSearchParams(beam_width=4, max_tokens=64),
 )
 
 for output in outputs:
     for seq in output.sequences:
-        print(seq.text, seq.cum_logprob)
+        print(seq.text)
 ```
 
-`BeamSearchParams` fields include `beam_width`, `max_tokens`, `ignore_eos`, `temperature`, and `length_penalty`. Each result exposes `.sequences`, ranked best-first, where every sequence has `.text`, `.tokens`, and `.cum_logprob`.
+`beam_width` sets the number of beams kept at each step; `max_tokens` caps generation length. Each entry in the returned list carries its beams under `.sequences`.
 
-## Prompt embedding inputs
+## Reading outputs
 
-Instead of token ids, you can feed precomputed embeddings (e.g. from an upstream encoder or a soft prompt). Enable the feature on the engine, then pass a `prompt_embeds` tensor of shape `(seq_len, hidden_size)`.
+Both `generate()` and `chat()` return a list of `RequestOutput`, one per prompt, in input order. The useful fields:
 
-```python
-from vllm import LLM, SamplingParams
+- `output.prompt` — the original prompt string.
+- `output.prompt_token_ids` — token ids of the prompt.
+- `output.outputs` — list of completions (length `n` from `SamplingParams`).
 
-llm = LLM(model="meta-llama/Llama-3.2-1B-Instruct", enable_prompt_embeds=True)
+Each completion in `output.outputs` exposes:
 
-# embeds: torch.Tensor with shape (seq_len, hidden_size), dtype matching the model
-outputs = llm.generate(
-    {"prompt_embeds": embeds},
-    SamplingParams(max_tokens=64),
-)
-print(outputs[0].outputs[0].text)
-```
-
-Pass a list of `{"prompt_embeds": tensor}` dicts to batch multiple embedding prompts. The hidden size must match the model's embedding dimension.
-
-## Pooling models: embed, classify, score, reward, encode
-
-Pooling models return vectors or scalars instead of generated text. Load the model with the matching `task`, then call the corresponding method. These methods are unavailable on a model loaded for plain generation.
-
-**Embeddings** — load with `task="embed"`:
+- `.text` — the generated string.
+- `.token_ids` — generated token ids.
+- `.cumulative_logprob` — summed logprob of the sequence.
+- `.finish_reason` — `"stop"`, `"length"`, etc.
 
 ```python
-llm = LLM(model="intfloat/e5-mistral-7b-instruct", task="embed")
-
-outputs = llm.embed(["Follow the white rabbit."])
 for output in outputs:
-    embedding = output.outputs.embedding   # list[float]
-    print(len(embedding))
+    for completion in output.outputs:
+        print(completion.finish_reason, completion.text)
 ```
 
-**Classification** — load with `task="classify"`; returns per-class probabilities:
-
-```python
-llm = LLM(model="jason9693/Qwen2.5-1.5B-apeach", task="classify")
-
-outputs = llm.classify(["Hello, my name is"])
-for output in outputs:
-    probs = output.outputs.probs           # list[float]
-    print(probs)
-```
-
-**Scoring / reranking** — load with `task="score"`; scores a query against one or more candidate texts:
-
-```python
-llm = LLM(model="BAAI/bge-reranker-v2-m3", task="score")
-
-outputs = llm.score(
-    "What is the capital of France?",
-    [
-        "The capital of France is Paris.",
-        "The capital of Brazil is Brasilia.",
-    ],
-)
-for output in outputs:
-    print(output.outputs.score)            # float
-```
-
-**Reward models** — load with `task="reward"`:
-
-```python
-llm = LLM(model="<reward-model>", task="reward")
-outputs = llm.reward(["The quick brown fox."])
-```
-
-**Raw pooler output** — `llm.encode` returns the unprocessed pooled tensor and accepts an optional `PoolingParams`:
-
-```python
-outputs = llm.encode(["Hello, my name is"])
-for output in outputs:
-    data = output.outputs.data             # raw pooled tensor
-```
-
-## Output object shapes
-
-- **Generation** (`generate`, `chat`): each result has `.prompt`, `.prompt_token_ids`, and `.outputs` — a list of completions, each with `.text`, `.token_ids`, `.cumulative_logprob`, and `.finish_reason`.
-- **Beam search**: each result has `.sequences`, each with `.text`, `.tokens`, `.cum_logprob`.
-- **Pooling**: each result has a single `.outputs` object — `.embedding` (embed), `.probs` (classify), `.score` (score), or `.data` (encode).
-
-## Determinism notes
-
-For reproducible runs, set both the engine `seed` (`LLM(..., seed=0)`) and use greedy decoding (`SamplingParams(temperature=0)`). A per-request `SamplingParams(seed=...)` overrides the engine seed for that request only. Note that changing `tensor_parallel_size`, batch composition, or hardware can still shift floating-point results even with a fixed seed.
+When `n>1`, iterate all of `output.outputs` rather than only index `0` to capture every sampled candidate.

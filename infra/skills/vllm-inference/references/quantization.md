@@ -1,91 +1,82 @@
 # Quantization in vLLM
 
-How to run weight- and activation-quantized models in vLLM — producing checkpoints with AutoAWQ, GPTQModel, LLM Compressor (FP8/INT8/INT4), or BitsAndBytes, loading GGUF files, and enabling an FP8 KV cache.
+How to load and serve quantized checkpoints (AWQ, GPTQ, FP8, BitsAndBytes, GGUF), quantize a model yourself with LLM Compressor, and enable a quantized KV cache — to cut VRAM and raise throughput on a fixed GPU.
 
 ## Contents
 
 - Choosing a method
-- AWQ (4-bit weights, AutoAWQ)
-- GPTQ (4-bit weights, GPTQModel)
-- LLM Compressor: FP8 W8A8 (dynamic, no calibration)
-- LLM Compressor: INT8 W8A8 (SmoothQuant + GPTQ)
-- LLM Compressor: INT4 W4A16
-- BitsAndBytes (4-bit, in-flight or pre-quantized)
-- GGUF (experimental, out-of-tree plugin)
-- Quantized KV cache (FP8)
-- Gotchas
+- Loading a pre-quantized checkpoint
+- AWQ
+- GPTQ
+- FP8 (online and offline)
+- BitsAndBytes
+- GGUF
+- Quantized KV cache
+- LLM Compressor: W4A16, W8A8, W4A8
+- Marlin kernels and method aliases
+- Quick reference
 
 ## Choosing a method
 
-All methods below either (a) load an already-quantized checkpoint from the Hub, or (b) quantize a full-precision model yourself first, then load the result. vLLM auto-detects most formats from the checkpoint's config — the explicit `quantization=` argument is only needed for AWQ and in-flight BitsAndBytes.
+Weight-only 4-bit (AWQ, GPTQ, W4A16) shrinks weights ~4× and is the best fit when you are **VRAM-bound** and want to fit a larger model on one card. Weight+activation 8-bit (FP8, INT8 W8A8) keeps more accuracy and is best when you are **throughput-bound** on a card with FP8/INT8 tensor-core support (Ada/Hopper for FP8, Ampere+ for INT8). BitsAndBytes is the fastest path to *any* 4-bit run because it quantizes in-flight (no pre-quantized checkpoint needed) but is slower at serve time. GGUF is for importing llama.cpp checkpoints. Reach for these only after the model in full precision does not fit — quantization always costs some accuracy.
 
-| Goal | Method | Calibration data? | Load arg |
-|---|---|---|---|
-| 4-bit weights, ready-made checkpoints | AWQ | yes (in author's script) | `quantization="auto_awq"` |
-| 4-bit weights, broad model coverage | GPTQ (GPTQModel) | yes | auto-detected |
-| FP8 weights+activations, fastest setup | LLM Compressor `FP8_DYNAMIC` | **no** | auto-detected |
-| INT8 weights+activations | LLM Compressor `W8A8` | yes | auto-detected |
-| INT4 weights only | LLM Compressor `W4A16` | yes | auto-detected |
-| Quick 4-bit, no separate quant step | BitsAndBytes in-flight | no | `quantization="bitsandbytes"` |
-| llama.cpp-style single-file weights | GGUF (plugin) | no | `--tokenizer` required |
+## Loading a pre-quantized checkpoint
 
-FP8 KV cache is orthogonal — it can be combined with any weight method to shrink the cache.
+For most pre-quantized models on the Hub, vLLM auto-detects the format from the checkpoint config and you do not need to pass `quantization` at all:
 
-## AWQ (4-bit weights, AutoAWQ)
+```python
+from vllm import LLM
 
-Quantize a model with AutoAWQ, then serve the saved directory.
+llm = LLM(model="TheBloke/Llama-2-7b-Chat-AWQ")
+out = llm.generate("Hello, my name is")
+```
+
+Pass `quantization=` explicitly only to force a specific method/kernel (e.g. `"awq"` vs `"awq_marlin"`). On the server it is the `--quantization` flag. Next step: confirm the kernel actually selected by reading the startup log line that reports the quantization method.
+
+## AWQ
+
+Serve an AWQ checkpoint:
+
+```python
+from vllm import LLM
+
+llm = LLM(model="TheBloke/Llama-2-7b-Chat-AWQ", quantization="awq")
+```
 
 ```bash
-pip install autoawq
+vllm serve TheBloke/Llama-2-7b-Chat-AWQ --quantization awq
 ```
+
+Quantize your own model with AutoAWQ first, then point vLLM at the output dir:
 
 ```python
 from awq import AutoAWQForCausalLM
 from transformers import AutoTokenizer
 
-model_path = "mistralai/Mistral-7B-Instruct-v0.2"
-quant_path = "mistral-instruct-v0.2-awq"
+model_path = "meta-llama/Llama-2-7b-hf"
+quant_path = "llama-2-7b-awq"
 quant_config = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": "GEMM"}
 
-# Load model
-model = AutoAWQForCausalLM.from_pretrained(
-    model_path,
-    low_cpu_mem_usage=True,
-    use_cache=False,
-)
-tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
-# Quantize
+model = AutoAWQForCausalLM.from_pretrained(model_path)
+tokenizer = AutoTokenizer.from_pretrained(model_path)
 model.quantize(tokenizer, quant_config=quant_config)
-
-# Save quantized model
 model.save_quantized(quant_path)
 tokenizer.save_pretrained(quant_path)
-
-print(f'Model is quantized and saved at "{quant_path}"')
 ```
 
-This writes a 4-bit AWQ checkpoint to `quant_path`. Next, load it in vLLM (works on both freshly-quantized dirs and Hub checkpoints like `TheBloke/Llama-2-7b-Chat-AWQ`):
+Next step: load `quant_path` with `quantization="awq"`. Note AWQ in vLLM is described as under-optimized vs FP8/INT8 — prefer it for VRAM savings, not peak throughput.
+
+## GPTQ
+
+Serving is identical in shape to AWQ; pass `quantization="gptq"` (or let auto-detect handle it):
 
 ```python
-from vllm import LLM, SamplingParams
+from vllm import LLM
 
-prompts = ["Hello, my name is", "The capital of France is"]
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
-
-llm = LLM(model="TheBloke/Llama-2-7b-Chat-AWQ", quantization="auto_awq")
-outputs = llm.generate(prompts, sampling_params)
-for output in outputs:
-    print(f"Prompt: {output.prompt!r}, Generated text: {output.outputs[0].text!r}")
+llm = LLM(model="TheBloke/Llama-2-7B-Chat-GPTQ", quantization="gptq")
 ```
 
-## GPTQ (4-bit weights, GPTQModel)
-
-GPTQModel uses a calibration dataset to fit the 4-bit weights. Note `--no-build-isolation` on install.
-
-```bash
-pip install -U gptqmodel --no-build-isolation -v
-```
+Quantize with GPTQModel, which needs calibration data:
 
 ```python
 from datasets import load_dataset
@@ -103,338 +94,176 @@ calibration_dataset = load_dataset(
 quant_config = QuantizeConfig(bits=4, group_size=128)
 
 model = GPTQModel.load(model_id, quant_config)
-
-# increase `batch_size` to match gpu/vram specs to speed up quantization
 model.quantize(calibration_dataset, batch_size=2)
-
 model.save(quant_path)
 ```
 
-Loading needs no `quantization=` argument — vLLM detects GPTQ from the checkpoint config:
+Next step: serve `quant_path`; vLLM will pick the GPTQ Marlin kernel automatically on supported GPUs (see Marlin section).
 
-```python
-from vllm import LLM, SamplingParams
+## FP8 (online and offline)
 
-sampling_params = SamplingParams(temperature=0.6, top_p=0.9)
-llm = LLM(model="ModelCloud/DeepSeek-R1-Distill-Qwen-7B-gptqmodel-4bit-vortex-v2")
-outputs = llm.generate(["The future of AI is"], sampling_params)
-for output in outputs:
-    print(f"{output.prompt!r}\n{output.outputs[0].text!r}")
-```
-
-## LLM Compressor: FP8 W8A8 (dynamic, no calibration)
-
-The fastest path — `FP8_DYNAMIC` quantizes weights statically and activations dynamically at runtime, so **no calibration dataset is needed**.
-
-```bash
-pip install llmcompressor
-```
-
-```python
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
-MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
-
-model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-```
-
-```python
-from llmcompressor import oneshot
-from llmcompressor.modifiers.quantization import QuantizationModifier
-
-# Configure the simple PTQ quantization
-recipe = QuantizationModifier(
-  targets="Linear", scheme="FP8_DYNAMIC", ignore=["lm_head"])
-
-# Apply the quantization algorithm.
-oneshot(model=model, recipe=recipe)
-
-# Save the model.
-SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-FP8-Dynamic"
-model.save_pretrained(SAVE_DIR)
-tokenizer.save_pretrained(SAVE_DIR)
-```
-
-Then load the saved directory directly — the format is auto-detected:
+**Online (dynamic) FP8** quantizes a full-precision checkpoint to FP8 at load time — no pre-quantized files needed. Weights go to 8-bit and you reclaim ~half the weight memory:
 
 ```python
 from vllm import LLM
-model = LLM("./Meta-Llama-3-8B-Instruct-FP8-Dynamic")
-model.generate("Hello my name is")
+
+llm = LLM(model="meta-llama/Meta-Llama-3-8B-Instruct", quantization="fp8")
 ```
 
-## LLM Compressor: INT8 W8A8 (SmoothQuant + GPTQ)
-
-INT8 activations need calibration. The recipe is a list: SmoothQuant first to redistribute outliers, then GPTQ for `W8A8`.
+This is convenient but the docs note dynamic FP8 may have a small accuracy cost vs an offline-calibrated checkpoint, so for production prefer an offline FP8 checkpoint produced by LLM Compressor:
 
 ```python
-from datasets import load_dataset
+from llmcompressor.transformers import oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
 
-NUM_CALIBRATION_SAMPLES=512
-MAX_SEQUENCE_LENGTH=2048
+recipe = QuantizationModifier(
+    targets="Linear", scheme="FP8_DYNAMIC", ignore=["lm_head"]
+)
+oneshot(model=model, recipe=recipe, output_dir="Meta-Llama-3-8B-Instruct-FP8-Dynamic")
+```
 
-# Load dataset.
-ds = load_dataset("HuggingFaceH4/ultrachat_200k", split=f"train_sft[:{NUM_CALIBRATION_SAMPLES}]")
-ds = ds.shuffle(seed=42)
+FP8 requires a GPU with FP8 tensor cores (compute capability 8.9+/Hopper). Next step: load the `output_dir` directly — the produced checkpoint is in `compressed-tensors` format and auto-detected.
 
-# Preprocess the data into the format the model is trained with.
-def preprocess(example):
-    return {"text": tokenizer.apply_chat_template(example["messages"], tokenize=False)}
-ds = ds.map(preprocess)
+## BitsAndBytes
 
-# Tokenize the data (be careful with bos tokens - we need add_special_tokens=False since the chat_template already added it).
-def tokenize(sample):
-    return tokenizer(sample["text"], padding=False, max_length=MAX_SEQUENCE_LENGTH, truncation=True, add_special_tokens=False)
-ds = ds.map(tokenize, remove_columns=ds.column_names)
+BitsAndBytes can quantize **in-flight**, so you can 4-bit any HF model without a pre-quantized checkpoint:
+
+```python
+from vllm import LLM
+
+llm = LLM(
+    model="huggyllama/llama-7b",
+    quantization="bitsandbytes",
+    load_format="bitsandbytes",
+)
+```
+
+```bash
+vllm serve huggyllama/llama-7b --quantization bitsandbytes --load-format bitsandbytes
+```
+
+For an already-quantized bnb checkpoint, the same two flags load it:
+
+```python
+llm = LLM(
+    model="unsloth/tinyllama-bnb-4bit",
+    quantization="bitsandbytes",
+    load_format="bitsandbytes",
+)
+```
+
+Use this when you need a quick fit on a small card and serve-time speed is secondary. Next step: if throughput matters more than convenience, re-quantize the same model to AWQ/GPTQ/FP8 instead.
+
+## GGUF
+
+GGUF support is experimental. Point vLLM at the `.gguf` file and supply the matching HF tokenizer (GGUF files do not carry a vLLM-compatible tokenizer):
+
+```bash
+vllm serve ./tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
+    --tokenizer TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
 ```python
-from llmcompressor import oneshot
-from llmcompressor.modifiers.gptq import GPTQModifier
-from llmcompressor.modifiers.transform.smoothquant import SmoothQuantModifier
+from vllm import LLM
 
-# Configure the quantization algorithms to run.
+llm = LLM(
+    model="./tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+    tokenizer="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+)
+```
+
+For a model split into multiple GGUF shards, merge them with `gguf-split --merge` first, then pass the single merged file. Next step: verify generations look sane — quantization type strings vary across GGUF producers and not all are supported.
+
+## Quantized KV cache
+
+The KV cache often dominates memory at long context, so quantizing it to FP8 frees room for more concurrent sequences. This is orthogonal to weight quantization — combine it with any of the above:
+
+```python
+from vllm import LLM
+
+llm = LLM(model="meta-llama/Meta-Llama-3-8B-Instruct", kv_cache_dtype="fp8")
+```
+
+```bash
+vllm serve meta-llama/Meta-Llama-3-8B-Instruct --kv-cache-dtype fp8
+```
+
+`fp8` defaults to the `e4m3` format on CUDA. By default vLLM uses dynamic per-tensor scaling; for better accuracy, load a checkpoint that carries calibrated KV scales or enable scale calculation:
+
+```python
+llm = LLM(
+    model="meta-llama/Meta-Llama-3-8B-Instruct",
+    kv_cache_dtype="fp8",
+    calculate_kv_scales=True,
+)
+```
+
+Next step: measure accuracy on your eval — FP8 KV cache is a memory/throughput win but can degrade quality on long-context tasks, so confirm before shipping.
+
+## LLM Compressor: W4A16, W8A8, W4A8
+
+LLM Compressor is the recommended tool for producing `compressed-tensors` checkpoints that vLLM loads natively. The pattern is always: build a `recipe`, run `oneshot`, save.
+
+**W4A16** (4-bit weights, 16-bit activations) — VRAM savings, uses GPTQ-style weight quantization:
+
+```python
+from llmcompressor.modifiers.quantization import GPTQModifier
+
+recipe = GPTQModifier(targets="Linear", scheme="W4A16", ignore=["lm_head"])
+```
+
+**W8A8 INT8** (8-bit weights and activations) — throughput on Ampere+; pair GPTQ with SmoothQuant to protect activation outliers:
+
+```python
+from llmcompressor.modifiers.quantization import GPTQModifier
+from llmcompressor.modifiers.smoothquant import SmoothQuantModifier
+
 recipe = [
     SmoothQuantModifier(smoothing_strength=0.8),
     GPTQModifier(targets="Linear", scheme="W8A8", ignore=["lm_head"]),
 ]
+```
 
-# Apply quantization.
+**W4A8 INT8** — 4-bit weights with 8-bit activations, balancing the memory of W4A16 against the activation-quant speedup. Build the recipe with the corresponding `W4A8` scheme, then run the same oneshot flow.
+
+Drive any of these recipes through `oneshot` with a calibration dataset, then serve the output dir:
+
+```python
+from llmcompressor.transformers import oneshot
+
 oneshot(
     model=model,
-    dataset=ds,
+    dataset="open_platypus",
     recipe=recipe,
-    max_seq_length=MAX_SEQUENCE_LENGTH,
-    num_calibration_samples=NUM_CALIBRATION_SAMPLES,
+    output_dir="Llama-3-8B-W4A16",
+    max_seq_length=2048,
+    num_calibration_samples=512,
 )
-
-# Save to disk compressed.
-SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-W8A8-Dynamic-Per-Token"
-model.save_pretrained(SAVE_DIR, save_compressed=True)
-tokenizer.save_pretrained(SAVE_DIR)
 ```
 
-Load in vLLM, then optionally check accuracy with `lm_eval`:
+Next step: `LLM(model="Llama-3-8B-W4A16")` — `compressed-tensors` is auto-detected, no `quantization=` flag required. Always keep `lm_head` in `ignore` unless you have measured it is safe to quantize.
 
-```python
-from vllm import LLM
-model = LLM("./Meta-Llama-3-8B-Instruct-W8A8-Dynamic-Per-Token")
-```
+## Marlin kernels and method aliases
+
+On Ampere+ GPUs vLLM upgrades AWQ/GPTQ to fast Marlin kernels automatically, reported as `awq_marlin` / `gptq_marlin` in the startup log. You can force a path explicitly:
 
 ```bash
-lm_eval --model vllm \
-  --model_args pretrained="./Meta-Llama-3-8B-Instruct-W8A8-Dynamic-Per-Token",add_bos_token=true \
-  --tasks gsm8k \
-  --num_fewshot 5 \
-  --limit 250 \
-  --batch_size 'auto'
+vllm serve TheBloke/Llama-2-7B-Chat-GPTQ --quantization gptq_marlin
 ```
 
-## LLM Compressor: INT4 W4A16
+Force the plain (non-Marlin) kernel with `--quantization gptq` if you hit a Marlin compatibility issue (e.g. an unsupported group size). The `compressed-tensors` format produced by LLM Compressor likewise dispatches to Marlin kernels where available.
 
-Weights to 4-bit, activations kept at 16-bit. Reuses the same calibration `ds` from the INT8 section. GPTQ alone — no SmoothQuant.
+## Quick reference
 
-```python
-from llmcompressor import oneshot
-from llmcompressor.modifiers.gptq import GPTQModifier
+| Method | `quantization=` | Need pre-quantized file? | Best for |
+|---|---|---|---|
+| AWQ | `"awq"` / `"awq_marlin"` | yes (AutoAWQ) | 4-bit VRAM savings |
+| GPTQ | `"gptq"` / `"gptq_marlin"` | yes (GPTQModel) | 4-bit VRAM savings |
+| FP8 (online) | `"fp8"` | no | quick FP8 on Hopper/Ada |
+| FP8 (offline) | auto (compressed-tensors) | yes (LLM Compressor) | production FP8 |
+| BitsAndBytes | `"bitsandbytes"` (+ `load_format`) | no (in-flight) | fastest 4-bit fit |
+| GGUF | auto | yes (+ `--tokenizer`) | importing llama.cpp |
+| W4A16 / W8A8 / W4A8 | auto (compressed-tensors) | yes (LLM Compressor) | tuned weight/act trade-offs |
+| KV cache FP8 | `kv_cache_dtype="fp8"` | no | long-context memory |
 
-# Configure the quantization algorithm to run.
-recipe = GPTQModifier(targets="Linear", scheme="W4A16", ignore=["lm_head"])
-
-# Apply quantization.
-oneshot(
-    model=model, dataset=ds,
-    recipe=recipe,
-    max_seq_length=MAX_SEQUENCE_LENGTH,
-    num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-)
-
-# Save to disk compressed.
-SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-W4A16-G128"
-model.save_pretrained(SAVE_DIR, save_compressed=True)
-tokenizer.save_pretrained(SAVE_DIR)
-```
-
-```python
-from vllm import LLM
-model = LLM("./Meta-Llama-3-8B-Instruct-W4A16-G128")
-```
-
-## BitsAndBytes (4-bit, in-flight or pre-quantized)
-
-Lowest-friction 4-bit: no separate quantize-and-save step. Either load a pre-quantized `bnb` checkpoint, or quantize on the fly at load time.
-
-```bash
-pip install bitsandbytes>=0.49.2
-```
-
-Reading a pre-quantized checkpoint (no `quantization=` arg needed):
-
-```python
-from vllm import LLM
-import torch
-# unsloth/tinyllama-bnb-4bit is a pre-quantized checkpoint.
-model_id = "unsloth/tinyllama-bnb-4bit"
-llm = LLM(
-    model=model_id,
-    dtype=torch.bfloat16,
-    trust_remote_code=True,
-)
-```
-
-In-flight quantization of a full-precision model — pass `quantization="bitsandbytes"`:
-
-```python
-from vllm import LLM
-import torch
-model_id = "huggyllama/llama-7b"
-llm = LLM(
-    model=model_id,
-    dtype=torch.bfloat16,
-    trust_remote_code=True,
-    quantization="bitsandbytes",
-)
-```
-
-For the OpenAI-compatible server, pass the same flag:
-
-```
---quantization bitsandbytes
-```
-
-## GGUF (experimental, out-of-tree plugin)
-
-GGUF support in vLLM is highly experimental and under-optimized, and has moved to the out-of-tree `vllm-gguf-plugin`. Always pass `--tokenizer` pointing at the base model — the base tokenizer avoids slow/unreliable conversion.
-
-```
-uv pip install vllm-gguf-plugin
-```
-
-Serve a GGUF quant directly from a Hub repo (`repo:QUANT` syntax):
-
-```
-vllm serve unsloth/Qwen3-0.6B-GGUF:Q4_K_M --tokenizer Qwen/Qwen3-0.6B
-```
-
-Or download the single file and serve it locally:
-
-```
-wget https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf
-vllm serve ./Qwen3-0.6B-Q4_K_M.gguf --tokenizer Qwen/Qwen3-0.6B
-```
-
-Add `--tensor-parallel-size 2` for multi-GPU, or `--hf-config-path Qwen/Qwen3-0.6B` if the config can't be inferred. The Python entrypoint mirrors the CLI — `tokenizer=` is mandatory:
-
-```python
-from vllm import LLM, SamplingParams
-
-conversation = [
-   {"role": "system", "content": "You are a helpful assistant"},
-   {"role": "user", "content": "Write an essay about the importance of higher education."},
-]
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
-
-llm = LLM(
-   model="unsloth/Qwen3-0.6B-GGUF:Q4_K_M",
-   tokenizer="Qwen/Qwen3-0.6B",
-)
-outputs = llm.chat(conversation, sampling_params)
-for output in outputs:
-    print(f"Prompt: {output.prompt!r}, Generated text: {output.outputs[0].text!r}")
-```
-
-## Quantized KV cache (FP8)
-
-Shrinks the KV cache to FP8, independent of how the weights are quantized. Set `kv_cache_dtype="fp8"`. The two FP8 layouts: `fp8_e5m2` (CUDA 11.8+) and `fp8_e4m3` (CUDA 11.8+ and ROCm).
-
-Simplest form — fixed scales (`calculate_kv_scales=False`):
-
-```python
-from vllm import LLM, SamplingParams
-
-sampling_params = SamplingParams(temperature=0.7, top_p=0.8)
-llm = LLM(
-    model="meta-llama/Llama-2-7b-chat-hf",
-    kv_cache_dtype="fp8",
-    calculate_kv_scales=False,
-)
-prompt = "London is the capital of"
-out = llm.generate(prompt, sampling_params)[0].outputs[0].text
-print(out)
-```
-
-Set `calculate_kv_scales=True` to estimate scales from random tokens during warmup. For best accuracy, calibrate scales from real data with LLM Compressor and bake them into the checkpoint via `kv_cache_scheme`:
-
-```python
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from llmcompressor import oneshot
-from llmcompressor.modifiers.quantization import QuantizationModifier
-from compressed_tensors.quantization import QuantizationScheme, QuantizationArgs
-
-MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
-DATASET_ID = "HuggingFaceH4/ultrachat_200k"
-DATASET_SPLIT = "train_sft"
-STRATEGY = "tensor"
-NUM_CALIB_SAMPLES = 512
-MAX_SEQ_LEN = 2048
-
-def process_and_tokenize(example, tokenizer: AutoTokenizer):
-    text = tokenizer.apply_chat_template(example["messages"], tokenize=False)
-    return tokenizer(
-        text,
-        padding=False,
-        max_length=MAX_SEQ_LEN,
-        truncation=True,
-        add_special_tokens=False,
-    )
-
-def build_recipe(strategy: str) -> QuantizationModifier:
-    fp8_args = QuantizationArgs(num_bits=8, type="float", strategy=strategy)
-    return QuantizationModifier(
-        config_groups={
-            "attention": QuantizationScheme(
-                targets=["LlamaAttention"],
-                input_activations=fp8_args,
-            )
-        },
-        kv_cache_scheme=fp8_args,
-    )
-
-def main():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype="auto")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIB_SAMPLES}]")
-    ds = ds.shuffle(seed=42)
-    ds = ds.map(
-        lambda ex: process_and_tokenize(ex, tokenizer),
-        remove_columns=ds.column_names,
-    )
-
-    recipe = build_recipe(STRATEGY)
-    oneshot(
-        model=model,
-        dataset=ds,
-        recipe=recipe,
-        max_seq_length=MAX_SEQ_LEN,
-        num_calibration_samples=NUM_CALIB_SAMPLES,
-    )
-
-    save_dir = f"{MODEL_ID.rstrip('/').split('/')[-1]}-kvattn-fp8-{STRATEGY}"
-    model.save_pretrained(save_dir, save_compressed=True)
-    tokenizer.save_pretrained(save_dir)
-
-if __name__ == "__main__":
-    main()
-```
-
-The resulting checkpoint carries its calibrated KV scales, so loading it in vLLM needs no extra `calculate_kv_scales` flag.
-
-## Gotchas
-
-- **`quantization=` is only needed for AWQ (`"auto_awq"`) and in-flight BitsAndBytes (`"bitsandbytes"`).** GPTQ and all LLM Compressor outputs (FP8/INT8/INT4) are auto-detected from the checkpoint config — passing the wrong value can cause a load failure.
-- **`save_compressed=True` matters for INT8/INT4.** The W8A8/W4A16 recipes save compressed; the FP8 dynamic example saves uncompressed — match the documented call for each scheme.
-- **`ignore=["lm_head"]`** is in every LLM Compressor recipe; quantizing the LM head degrades quality.
-- **GGUF requires `--tokenizer` / `tokenizer=`** pointing at the base model, and is experimental — prefer AWQ/GPTQ/LLM-Compressor for production.
-- **FP8 KV cache layout depends on hardware**: `fp8_e4m3` is the one available on ROCm; `fp8_e5m2` is CUDA-only-style. Pick based on your GPU.
+Verify the actual method and kernel selected by reading vLLM's startup log rather than assuming — auto-detection and Marlin upgrades can override what you passed.

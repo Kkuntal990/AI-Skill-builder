@@ -62,7 +62,10 @@ capture(){ # $1=pod  $2=job  $3=context
   note "─────────────────────────────────────────────────────"
 }
 
-job_terminal(){ # echoes "done" if job reached Complete or Failed
+job_terminal(){ # echoes "done" if job reached Complete/Failed — or is ABSENT
+  # An absent job (e.g. single-cell run where without-skill was never launched)
+  # is treated as non-blocking so "all jobs terminal" can still fire.
+  kubectl -n "$NS" get job "$1" >/dev/null 2>&1 || { echo done; return; }
   local s; s=$(kubectl -n "$NS" get job "$1" -o jsonpath='{.status.succeeded}-{.status.failed}-{range .status.conditions[*]}{.type}={.status};{end}' 2>/dev/null)
   case "$s" in *"Complete=True"*|*"Failed=True"*) echo done;; *) echo "";; esac
 }

@@ -1,246 +1,235 @@
-# Online Serving with vLLM
+# vLLM Online Serving
 
-How to launch vLLM's OpenAI-compatible HTTP server with `vllm serve`, the endpoints it exposes, the server/engine flags that shape it, and how to run it under Docker and Kubernetes.
+How to launch vLLM's OpenAI-compatible HTTP server with `vllm serve`, call its completions/chat/embeddings endpoints, configure engine and server arguments, and control request logging.
 
 ## Contents
 
-- Starting the server
-- OpenAI-compatible endpoints
-- Querying the server
-- Core server & engine arguments
-- Distributed serving flags
-- Serving LoRA adapters
-- Structured outputs and tool calling
-- Docker deployment
-- Kubernetes deployment
-- Health, metrics, and observability
+- Starting the server with `vllm serve`
+- Engine arguments vs. server arguments
+- Common server flags
+- Chat Completions endpoint
+- Completions endpoint
+- Embeddings endpoint
+- Calling the server with the OpenAI Python client
+- vLLM-specific sampling parameters
+- Utility endpoints: models, health, metrics
+- Request and stats logging
+- API-key authentication
 
-## Starting the server
+## Starting the server with `vllm serve`
 
-`vllm serve` boots an async engine behind a FastAPI app that mimics the OpenAI REST API. The only required argument is the model (a Hugging Face repo id or a local path):
+The server is launched from the CLI by passing a Hugging Face model id (or local path):
 
 ```bash
 vllm serve Qwen/Qwen2.5-1.5B-Instruct
 ```
 
-This downloads the model (if not cached), loads it onto the GPU, and listens on `http://0.0.0.0:8000`. Typical next step: hit `GET /v1/models` to confirm the served model name, then send a chat request.
+This loads the model, starts an OpenAI-compatible HTTP server on `http://0.0.0.0:8000`, and exposes `/v1/completions`, `/v1/chat/completions`, and (for pooling models) `/v1/embeddings`. The process stays in the foreground until killed.
 
-Common launch shape with the flags you will almost always set:
+Typical next step: in another shell, hit `/v1/models` to confirm the server is up and learn the model id clients should send (see below).
+
+To shard a large model across GPUs, add tensor parallelism:
 
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --served-model-name llama3-8b \
+    --tensor-parallel-size 2 \
     --max-model-len 8192 \
-    --gpu-memory-utilization 0.90 \
-    --api-key token-abc123
+    --gpu-memory-utilization 0.90
 ```
 
-`--served-model-name` decouples the public name clients pass in `"model": ...` from the checkpoint path. `--api-key` makes the server require `Authorization: Bearer token-abc123`.
+`--tensor-parallel-size` splits the model over N GPUs; `--max-model-len` caps the context window (lower it if KV-cache allocation OOMs); `--gpu-memory-utilization` is the fraction of VRAM vLLM may claim for weights + KV cache.
 
-## OpenAI-compatible endpoints
+## Engine arguments vs. server arguments
 
-Once running, the server exposes (subset, all under the configured host:port):
+`vllm serve --help` lists two groups of flags:
 
-| Method & path | Purpose |
-|---|---|
-| `GET /v1/models` | List served model name(s) and any LoRA modules |
-| `POST /v1/completions` | Legacy text completion |
-| `POST /v1/chat/completions` | Chat completion (applies the model's chat template) |
-| `POST /v1/embeddings` | Embeddings (embedding/pooling models only) |
-| `POST /score` | Cross-encoder / reranker scoring |
-| `POST /pooling` | Raw pooled hidden states |
-| `POST /tokenize`, `POST /detokenize` | Tokenizer round-trips |
-| `POST /v1/audio/transcriptions` | Speech-to-text (transcription models) |
-| `GET /health` | Liveness/readiness probe |
-| `GET /metrics` | Prometheus metrics |
+- **Engine arguments** configure the inference engine itself — which model to load, parallelism, dtype, quantization, KV-cache and scheduling limits. Examples: `--tensor-parallel-size`, `--max-model-len`, `--dtype`, `--quantization`, `--max-num-seqs`, `--enforce-eager`, `--trust-remote-code`, `--seed`. These are the same arguments the offline `LLM(...)` constructor accepts.
+- **Server (frontend) arguments** configure the HTTP layer — host/port, auth, chat template, tool-calling parsers, logging. Examples: `--host`, `--port`, `--api-key`, `--served-model-name`, `--chat-template`, `--response-role`, `--enable-auto-tool-choice`, `--disable-log-requests`.
 
-The server also supports streaming for completions and chat completions via `"stream": true`, returning server-sent events.
-
-## Querying the server
-
-The server is drop-in compatible with the official `openai` Python client — point `base_url` at the vLLM host:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="token-abc123",   # use "EMPTY" if --api-key was not set
-)
-
-completion = client.chat.completions.create(
-    model="llama3-8b",
-    messages=[{"role": "user", "content": "Summarize PagedAttention in one line."}],
-)
-print(completion.choices[0].message.content)
-```
-
-Same call over `curl`, useful for smoke-testing a fresh pod:
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer token-abc123" \
-    -d '{
-        "model": "llama3-8b",
-        "messages": [{"role": "user", "content": "Hello!"}],
-        "max_tokens": 64
-    }'
-```
-
-Typical next step: wrap this in a readiness loop that polls `GET /health` until 200 before sending real traffic.
-
-## Core server & engine arguments
-
-`vllm serve` accepts both server arguments (HTTP/serving layer) and engine arguments (the same knobs as the offline `LLM(...)` constructor). The ones that matter most for fitting a model on a GPU and shaping throughput:
-
-| Flag | Effect |
-|---|---|
-| `--max-model-len <int>` | Cap context length; lower it to shrink KV-cache memory and avoid OOM at load |
-| `--gpu-memory-utilization <0–1>` | Fraction of GPU memory vLLM may claim for weights + KV cache (default `0.9`) |
-| `--dtype {auto,half,bfloat16,float16,float32}` | Weight/compute dtype; `auto` follows the checkpoint |
-| `--quantization <method>` | e.g. `awq`, `gptq`, `fp8`, `bitsandbytes`, `compressed-tensors` |
-| `--max-num-seqs <int>` | Max concurrent sequences in a batch (continuous batching width) |
-| `--max-num-batched-tokens <int>` | Token budget per scheduler step; raise for throughput, lower for latency |
-| `--enable-prefix-caching` | Reuse KV cache across requests sharing a prompt prefix |
-| `--trust-remote-code` | Allow custom modeling code from the HF repo |
-| `--download-dir <path>` | Where to cache weights (point at a shared volume to download once) |
-| `--chat-template <file>` | Override the Jinja chat template (needed when a model ships none) |
-| `--seed <int>` | Seed engine RNG for reproducibility |
-
-Inspect the full, version-accurate list on a given build with:
+Inspect the full set for your build with:
 
 ```bash
 vllm serve --help
 ```
 
-Typical next step: when you hit a load-time OOM, lower `--max-model-len` first, then `--gpu-memory-utilization`, before reaching for quantization.
-
-## Distributed serving flags
-
-For models too large for one GPU, or to raise throughput across GPUs:
+## Common server flags
 
 ```bash
-vllm serve meta-llama/Llama-3.1-70B-Instruct \
-    --tensor-parallel-size 4 \
-    --pipeline-parallel-size 2
+vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --served-model-name qwen-small \
+    --max-num-seqs 256 \
+    --dtype bfloat16
 ```
 
-- `--tensor-parallel-size <N>` shards each layer across N GPUs on one node (the primary scaling knob).
-- `--pipeline-parallel-size <N>` splits layers into N stages, can span nodes.
-- `--data-parallel-size <N>` replicates the model for more aggregate throughput.
+- `--host` / `--port` — bind address and port (default `0.0.0.0:8000`).
+- `--served-model-name` — the name clients put in the request `model` field; defaults to the model path. Set it to a short alias so requests don't have to repeat the full HF id.
+- `--max-num-seqs` — max concurrent sequences in a batch (throughput vs. per-request latency lever).
+- `--dtype` — one of `auto`, `half`, `float16`, `bfloat16`, `float`, `float32`.
+- `--quantization` / `-q` — e.g. `awq`, `gptq`, `fp8` when serving a quantized checkpoint.
+- `--trust-remote-code` — required for models that ship custom modeling code.
+- `--chat-template` — path to (or inline) a Jinja chat template, needed when a model's tokenizer has none.
 
-The product of these must match the GPUs you intend to use. Multi-GPU on a single node generally needs `--ipc=host` (Docker) or sufficient shared memory (Kubernetes) so NCCL can communicate.
+## Chat Completions endpoint
 
-## Serving LoRA adapters
-
-Serve a base model with one or more LoRA adapters selectable per request by name:
+`POST /v1/chat/completions` takes a `messages` list and applies the model's chat template:
 
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
-    --enable-lora \
-    --lora-modules sql-adapter=/adapters/sql alpaca=/adapters/alpaca
+curl http://localhost:8000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Who won the world series in 2020?"}
+        ]
+    }'
 ```
 
-Each adapter then appears as its own entry in `GET /v1/models`; a request selects one by passing its name in the `"model"` field. Typical next step: confirm an adapter loaded by listing models before routing traffic to it.
+The response is OpenAI-shaped: the reply text is at `choices[0].message.content`. Typical next step: set `"stream": true` to receive incremental `data:` SSE chunks instead of one blob.
 
-## Structured outputs and tool calling
+## Completions endpoint
 
-Constrain generation to a schema or grammar via the structured-outputs path, and enable function/tool calling with a model-specific parser:
+`POST /v1/completions` is the legacy text-completion API — a raw `prompt` string, no chat template:
 
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
-    --enable-auto-tool-choice \
-    --tool-call-parser llama3_json
+curl http://localhost:8000/v1/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "prompt": "San Francisco is a",
+        "max_tokens": 7,
+        "temperature": 0
+    }'
 ```
 
-Structured outputs are requested per call (JSON schema / regex / grammar in the request body); `--enable-auto-tool-choice` plus the matching `--tool-call-parser` lets the server emit OpenAI-style `tool_calls`. Reasoning models use `--reasoning-parser` to split chain-of-thought from the final answer.
+The generated text is at `choices[0].text`. Use this endpoint for base (non-chat) models or when you want to control the exact prompt string yourself.
 
-## Docker deployment
+## Embeddings endpoint
 
-vLLM ships the `vllm/vllm-openai` image, whose entrypoint is `vllm serve` — arguments after the image name are passed straight through:
+`/v1/embeddings` is only served when the loaded model is run as a pooling/embedding model. Start the server in embed mode:
 
 ```bash
-docker run --runtime nvidia --gpus all \
-    -v ~/.cache/huggingface:/root/.cache/huggingface \
-    --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
-    -p 8000:8000 \
-    --ipc=host \
-    vllm/vllm-openai:latest \
-    --model mistralai/Mistral-7B-v0.1
+vllm serve intfloat/e5-mistral-7b-instruct --task embed
 ```
 
-Notes that bite people:
+Then request vectors:
 
-- `--ipc=host` (or a large `--shm-size`) is required; otherwise tensor-parallel NCCL hangs on too-small `/dev/shm`.
-- Mounting `~/.cache/huggingface` persists downloaded weights across container restarts.
-- Pin a release tag (e.g. `vllm/vllm-openai:v0.9.2`) rather than `latest` for reproducible deployments.
-
-## Kubernetes deployment
-
-The minimal pattern is a `Deployment` running the image plus a `Service` to expose it. Request GPUs via the `nvidia.com/gpu` resource and back the HF cache with a volume so weights download once per node:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: vllm-server
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: vllm-server }
-  template:
-    metadata:
-      labels: { app: vllm-server }
-    spec:
-      containers:
-        - name: vllm
-          image: vllm/vllm-openai:latest
-          args: ["--model", "mistralai/Mistral-7B-v0.1"]
-          ports:
-            - containerPort: 8000
-          resources:
-            limits:
-              nvidia.com/gpu: 1
-          env:
-            - name: HUGGING_FACE_HUB_TOKEN
-              valueFrom:
-                secretKeyRef: { name: hf-token, key: token }
-          volumeMounts:
-            - name: cache
-              mountPath: /root/.cache/huggingface
-            - name: shm
-              mountPath: /dev/shm
-          readinessProbe:
-            httpGet: { path: /health, port: 8000 }
-            initialDelaySeconds: 60
-            periodSeconds: 10
-      volumes:
-        - name: cache
-          persistentVolumeClaim: { claimName: hf-cache }
-        - name: shm
-          emptyDir: { medium: Memory, sizeLimit: "2Gi" }
+```bash
+curl http://localhost:8000/v1/embeddings \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "intfloat/e5-mistral-7b-instruct",
+        "input": "Hello world"
+    }'
 ```
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllm-server
-spec:
-  selector: { app: vllm-server }
-  ports:
-    - port: 80
-      targetPort: 8000
+Each input string returns a vector at `data[i].embedding`. `input` may be a single string or a list of strings for batched embedding.
+
+## Calling the server with the OpenAI Python client
+
+Because the API is OpenAI-compatible, point the official `openai` client at the local base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+)
+
+completion = client.completions.create(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    prompt="San Francisco is a",
+)
+print(completion.choices[0].text)
 ```
 
-Key points: the `/dev/shm` `emptyDir` is the Kubernetes analogue of Docker's `--ipc=host` (needed for multi-GPU NCCL); the `readinessProbe` on `/health` keeps the Service from routing before the model finishes loading (cold loads of large checkpoints can take minutes). For production fleets, vLLM also documents Helm charts and integrations such as the vLLM production stack, KServe, and KubeRay.
+Chat works the same way:
 
-## Health, metrics, and observability
+```python
+chat_response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Tell me a joke."},
+    ],
+)
+print(chat_response.choices[0].message.content)
+```
 
-- `GET /health` returns 200 once the engine is ready — wire it to liveness and readiness probes.
-- `GET /metrics` exposes Prometheus metrics (request counts, latencies, KV-cache usage, running/waiting queue depth) for scraping by Prometheus + Grafana dashboards.
+When no `--api-key` is set, pass any placeholder (e.g. `"EMPTY"`) for `api_key` — it is ignored.
 
-Typical next step: scrape `/metrics` to watch `num_requests_running` and KV-cache utilization under load, and tune `--max-num-seqs` / `--max-num-batched-tokens` from what you observe.
+## vLLM-specific sampling parameters
+
+Parameters that exist in vLLM but not in the OpenAI schema are passed through `extra_body`:
+
+```python
+completion = client.chat.completions.create(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    messages=[{"role": "user", "content": "Classify the sentiment."}],
+    extra_body={
+        "top_k": 50,
+        "min_p": 0.05,
+        "repetition_penalty": 1.1,
+        "guided_choice": ["positive", "negative"],
+    },
+)
+```
+
+`top_k`, `min_p`, `repetition_penalty`, `length_penalty`, `use_beam_search`, `stop_token_ids`, and the structured-output controls (`guided_json`, `guided_regex`, `guided_choice`, `guided_grammar`) all travel in `extra_body`. Standard fields (`temperature`, `top_p`, `max_tokens`, `stop`, `n`, `stream`) go at the top level as usual.
+
+## Utility endpoints: models, health, metrics
+
+```bash
+curl http://localhost:8000/v1/models      # list served model ids
+curl http://localhost:8000/health         # 200 OK when ready to serve
+curl http://localhost:8000/metrics        # Prometheus-format engine metrics
+```
+
+`/v1/models` returns the id(s) clients must use in the `model` field (i.e. the `--served-model-name` or model path). `/health` is the readiness probe — poll it after launch before sending real traffic. `/metrics` exposes counters and gauges (running/waiting requests, token throughput, KV-cache usage) for scraping.
+
+## Request and stats logging
+
+By default vLLM logs each incoming request (its prompt and sampling parameters) and periodic throughput statistics. Two flags turn these off:
+
+```bash
+vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --disable-log-requests \
+    --disable-log-stats
+```
+
+- `--disable-log-requests` — stop logging per-request lines (prompt text + `SamplingParams`). Use this in production to avoid writing prompt content to logs.
+- `--disable-log-stats` — stop the periodic `Avg prompt throughput / Avg generation throughput / Running / Pending / GPU KV cache usage` summary lines.
+
+Control overall verbosity with the uvicorn HTTP log level and the vLLM logger:
+
+```bash
+vllm serve Qwen/Qwen2.5-1.5B-Instruct --uvicorn-log-level warning
+```
+
+```bash
+VLLM_LOGGING_LEVEL=DEBUG vllm serve Qwen/Qwen2.5-1.5B-Instruct
+```
+
+`--uvicorn-log-level` sets the HTTP access-log level; the `VLLM_LOGGING_LEVEL` environment variable sets the engine's logger level for deeper troubleshooting.
+
+## API-key authentication
+
+Require a bearer token on every request by passing `--api-key`:
+
+```bash
+vllm serve Qwen/Qwen2.5-1.5B-Instruct --api-key token-abc123
+```
+
+Clients must then send `Authorization: Bearer token-abc123`. With the OpenAI client this is just the `api_key` argument:
+
+```python
+client = OpenAI(
+    api_key="token-abc123",
+    base_url="http://localhost:8000/v1",
+)
+```
+
+Requests without the matching key are rejected with `401 Unauthorized`. This is the minimum control for exposing the server beyond localhost; for anything more, front it with a reverse proxy.

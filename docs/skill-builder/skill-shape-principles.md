@@ -23,7 +23,7 @@ The builder emits these in this order. Each is optional based on whether the sou
 2. **`## Installation`** — canonical install command from the README.
 3. **`## Quick Start`** — fastest zero-to-working example from the docs.
 4. **`## Decision Tree`** — routing table for choices between modes/strategies. Only emitted when the library has 2-6 meaningful choices to make (e.g. online vs offline serving, FP8 vs AWQ vs GPTQ, tensor vs pipeline parallelism). Single-option scenarios don't belong here.
-5. **`## Common Workflows`** — 2-4 multi-step procedures as copy-paste checklists. **Each checklist ends with a per-workflow MCP-fallback step** (see "inline MCP triggers" below).
+5. **`## Common Workflows`** — 2-4 procedures. A genuinely multi-step or fragile-invariant procedure becomes a copy-paste checklist; a single conditional choice stays prose carrying its condition (a `- [ ]` checklist reads as "run every step" and strips the gate). A workflow that applies only under a precondition — the branch of a Decision Tree row, or a resource-heavy/optional technique (quantization, 4-bit/QLoRA, distributed) — **must restate that gate in its intro and first step** ("Use this only when &lt;condition&gt;"), so the precondition travels with the action. **Each checklist ends with a per-workflow MCP-fallback step** (see "inline MCP triggers" below).
 6. **`## When to Use`** — concrete positive triggers + method-level escape-hatches ("for &lt;a capability this skill lacks&gt;, use &lt;tool&gt; instead"). Scope exclusions to capabilities the skill does not implement, **never** to adjacent task genres the skill could be a sub-step of (a genre-exclusion makes the agent scope the skill out of whole tasks — see Anti-patterns).
 7. **`## Hardware Requirements`** — concrete VRAM/GPU numbers from docs, only when surfaced.
 8. **`## Templates`** — runnable Python scripts in `templates/` (read-as-reference).
@@ -50,6 +50,17 @@ Copy this checklist:
 ```
 
 The MCP step explicitly says *when* to fall through (refs don't cover it) and *what to call* (specific tools with parameters). The agent treats it as the natural next step in the workflow, not an optional appendix.
+
+## Pattern: a precondition travels with its action
+
+The most damaging skill failure we've measured was not a wrong fact — it was a *conditional* action presented as unconditional. `peft-tuning` put the gate in one section (Decision Tree: *"memory-constrained &lt;24GB GPU → QLoRA"*) and the action in another (a *"Memory-efficient QLoRA"* workflow whose checklist said *"Copy this checklist: [ ] Load base model in 4-bit"* with no restated condition). On a 48GB GPU the agent copied the checklist verbatim and trained in 4-bit it never needed — slower, and on a fragile k-bit grad path — which, under the per-node time cap, cost it every valid result (mvp-029 RCA).
+
+Anthropic's spec calls the cure the **conditional workflow pattern**: a decision point routes *into* the workflow. Two rules follow.
+
+1. **A resource-heavy or optional technique is an escape-hatch, never the headline default.** Default to the cheapest path that works (full-precision LoRA, batched HF `generate`); gate the heavy path (4-bit/QLoRA, 8-bit, DeepSpeed/FSDP, a separate inference engine) behind its precondition. Anthropic: *"Don't present multiple approaches unless necessary"* → *"provide a default (with escape hatch)."*
+2. **The gate must be restated where the action is.** If a workflow is the conditional branch of a Decision Tree row, its intro restates the condition (*"Use this only when …"*) and its first step is the precondition check. A `- [ ]` checklist is a *don't-skip-a-step* device for a procedure already chosen — it is not a *whether-to-apply* device. Don't let an action live three sections away from its gate.
+
+This is also a **degrees-of-freedom** match (Anthropic: *"Set appropriate degrees of freedom — match the level of specificity to the task's fragility"*): which-technique-fits-my-hardware is a high-freedom, context-dependent decision, so it belongs in prose with a default + escape-hatch, not a low-freedom "copy this checklist" mandate. Reserve firm `- [ ]` checklists and hard directives for genuinely brittle steps — and, per skill-creator, *"explain the why behind everything … ALWAYS or NEVER in all caps … is a yellow flag."*
 
 ## Pattern: MCP tool naming is runtime-specific
 
@@ -108,6 +119,9 @@ The `<details>` keeps the deprecated info out of the agent's primary attention b
 - **Don't hardcode MCP libraryIds.** They change. Always teach `resolve-library-id` first.
 - **Don't write workflow checklists without per-step MCP routing.** The bottom-of-page MCP section gets ignored.
 - **Don't list every option.** Anthropic's spec: *"Don't present multiple approaches unless necessary."* Pick a default, then escape-hatch.
+- **Don't present a resource-heavy technique as a default.** 4-bit/QLoRA, 8-bit, distributed training, or a separate inference engine must be gated on a precondition ("only if the full-precision model doesn't fit") — presenting it as the headline path makes the agent pay its cost when memory/scale isn't the constraint (mvp-029 QLoRA RCA: it cost the with-skill arm every valid result).
+- **Don't split a precondition from its action.** A gate in the Decision Tree ("&lt;24GB → QLoRA") with an ungated "Copy this checklist" workflow elsewhere reads as "always do this." Restate the condition in the workflow's intro + first step.
+- **Don't make every workflow a `- [ ]` checklist.** Checklists are for genuinely multi-step or fragile-invariant procedures; a single conditional choice is prose that carries its condition. A checklist is a don't-skip-a-step device, not a whether-to-apply device.
 - **Don't exclude task genres in "When to Use".** A negative "NOT for: &lt;task genre&gt;" wall makes the agent scope the skill out of any task that *contains* that genre as a step — e.g. an inference skill that says "NOT for: fine-tuning" gets dropped from a fine-tune-then-evaluate task where it was the right tool for the eval step (observed on `vllm-inference`, 2026-06). Frame limits as positive, capability-scoped escape-hatches ("for &lt;a method this skill lacks&gt;, use Y instead") instead. No Anthropic source endorses "NOT for X" exclusion blocks, and they collide with Claude's documented tendency to under-trigger.
 - **Don't use time-sensitive language** ("after July 2026 use X"). Use the `## Old Patterns` collapsed section for legacy info instead.
 - **Don't include API key references with literal values** (e.g. `OPENAI_API_KEY=sk-abc123`) — the security scanner correctly blocks these. Env var name references (`os.environ["OPENAI_API_KEY"]`) are fine and recognized as benign.

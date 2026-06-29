@@ -94,7 +94,7 @@ OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6"
 HTTP_TIMEOUT = 30
 LLM_TIMEOUT = 120
 USER_AGENT = "ai-skill-builder/1.0 (+https://github.com/Kkuntal990/AI-Skill-builder)"
-BUILDER_VERSION = "2.0.0"
+BUILDER_VERSION = "2.1.0"
 
 # Runtime MCP declarations. Skills *declare* expected MCPs in frontmatter; they
 # don't auto-install. The agent runtime decides whether to invoke them.
@@ -1426,6 +1426,12 @@ def critique_skill(
             if match is None:
                 raise ValueError("critic returned no JSON array")
             llm_findings = json.loads(match.group(0))
+            # Map each LLM critic dimension to its reliability-checklist priority.
+            _dim_to_p = {
+                "scope-honesty": "P4",
+                "conditional-gating": "P3",
+                "description": "P1",
+            }
             for f in llm_findings:
                 sev = "block" if f.get("severity") == "block" else "warn"
                 dim = f.get("dimension", "scope-honesty")
@@ -1436,7 +1442,7 @@ def critique_skill(
                     msg = f"{reason} (offending text: {span[:160]!r})"
                 findings.append({
                     "severity": sev,
-                    "where": f"P{'4' if dim == 'scope-honesty' else '1'}-{dim}",
+                    "where": f"{_dim_to_p.get(dim, 'P1')}-{dim}",
                     "message": msg or f"{dim} violation",
                 })
         except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
