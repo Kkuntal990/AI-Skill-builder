@@ -22,8 +22,94 @@ task's ``instruction.md`` → ``description.md`` only.
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+from collections import Counter
 
 logger = logging.getLogger(__name__)
+
+# Hardware string shown to the agent, mirroring MLE-bench's additional_notes
+# `Compute` line (openai/mle-bench: agents/aide/start.sh derives ${HARDWARE} from
+# `nvidia-smi --query-gpu=name` and additional_notes.txt injects
+# "You have access to ${HARDWARE} ..."). We extend MLE-bench by also reporting
+# VRAM (its query omits it) because that is the fact a memory-gated decision
+# (e.g. "quantize only if the model doesn't fit") actually needs. Cell-agnostic
+# (both A/B arms get the identical line) and purely factual — it states the
+# environment, never which method to use.
+_HARDWARE_CACHE: str | None = None
+
+
+def _detect_hardware() -> str:
+    """Return e.g. '1 NVIDIA RTX A6000 GPU (48 GB VRAM)' or 'a CPU'.
+
+    Prefers MLEVAL_HARDWARE (set once by entrypoint.sh, the faithful MLE-bench
+    start.sh mirror); falls back to querying nvidia-smi directly so the line is
+    still correct if the env var is unset. Queried once and cached.
+    """
+    global _HARDWARE_CACHE
+    if _HARDWARE_CACHE is not None:
+        return _HARDWARE_CACHE
+    env = os.environ.get("MLEVAL_HARDWARE", "").strip()
+    if env:
+        _HARDWARE_CACHE = env
+        return env
+    gpu_part = ""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
+        if lines:  # group identical GPUs into a count prefix, like MLE-bench's uniq -c
+            parts = []
+            for spec, n in Counter(lines).items():
+                name, _, mem = spec.partition(",")
+                name = name.strip()
+                try:
+                    gb = int(round(int(mem.strip()) / 1024))
+                    parts.append(f"{n} {name} GPU ({gb} GB VRAM)")
+                except ValueError:
+                    parts.append(f"{n} {name} GPU")
+            gpu_part = ", ".join(parts)
+    except Exception as e:  # noqa: BLE001 — never break codegen
+        logger.warning("[eval_harness] GPU detection failed: %s", e)
+    # CPU/RAM from the cgroup (pod's allotted limits), not os.cpu_count()/MemTotal
+    # which report the NODE's totals on k8s.
+    cpus = _cgroup_cpus()
+    ram_gb = _cgroup_ram_gb()
+    rest = f"{cpus} CPUs, {ram_gb} GB RAM"
+    hw = f"{gpu_part}, {rest}" if gpu_part else f"{rest} (no GPU)"
+    _HARDWARE_CACHE = hw
+    return hw
+
+
+def _cgroup_cpus() -> str:
+    """CPU cores from cgroup v2 cpu.max ('quota period'); 'max' → os.cpu_count()."""
+    try:
+        quota, _, period = open("/sys/fs/cgroup/cpu.max").read().strip().partition(" ")
+        if quota != "max" and period and int(period) > 0:
+            return str(max(1, round(int(quota) / int(period))))
+    except Exception:  # noqa: BLE001
+        pass
+    return str(os.cpu_count() or "?")
+
+
+def _cgroup_ram_gb() -> str:
+    """RAM (GB) from cgroup v2 memory.max (bytes); 'max'/unreadable → MemTotal."""
+    try:
+        raw = open("/sys/fs/cgroup/memory.max").read().strip()
+        if raw != "max":
+            return str(round(int(raw) / (1024 ** 3)))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemTotal"):
+                return str(round(int(line.split()[1]) / (1024 ** 2)))
+    except Exception:  # noqa: BLE001
+        pass
+    return "?"
 
 # Sentinel in infra/tasks/_harness_rules.md — skill_injector strips through this
 # when routing (legacy C1 prepend; harmless no-op when task text has no marker).
@@ -78,6 +164,19 @@ def apply_impl_guideline_harness(result) -> None:
         for i, line in enumerate(gl):
             if isinstance(line, str) and _NUM_WORKERS_BAD in line:
                 gl[i] = _NUM_WORKERS_FIX
+        # Compute/hardware line — mirror MLE-bench, co-located with the upstream
+        # "Resource Budget" (time/steps/exec) line; append if that line is absent.
+        if not any(isinstance(l, str) and "**Compute**" in l for l in gl):
+            compute_line = (
+                f"**Compute**: You have access to {_detect_hardware()} with the "
+                "appropriate drivers installed."
+            )
+            idx = next((i for i, l in enumerate(gl)
+                        if isinstance(l, str) and "Resource Budget" in l), None)
+            if idx is not None:
+                gl.insert(idx + 1, compute_line)
+            else:
+                gl.append(compute_line)
         if not any(isinstance(l, str) and "Held-out evaluation rules" in l for l in gl):
             gl.extend(EVAL_HARNESS_RULES)
     except Exception as e:  # noqa: BLE001 — never break codegen

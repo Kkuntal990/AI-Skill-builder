@@ -65,6 +65,14 @@ they ever conflict**.
    submission it had already written. Budget your schedule accordingly, and for
    generation-heavy evaluation, batch your decoding.
 
+7. **Compute.** A `Compute: You have access to <hardware> with the appropriate
+   drivers installed.` line is injected into the per-run guideline (mirrors
+   MLE-bench's `additional_notes.txt`), naming the GPU model + VRAM, CPU count,
+   and RAM (RE-Bench-style full envelope). It is detected at startup
+   (`entrypoint.sh` → `MLEVAL_HARDWARE`, else `nvidia-smi` + cgroup) — CPU/RAM
+   from the cgroup limits (the pod's allotment, not the node totals) — and shown
+   identically to both A/B cells: purely the environment, not a method choice.
+
 <!--
 The skill-router (mlevolve_sidecar/skill_injector.py) strips everything up to
 and including the END_HARNESS_RULES marker below before deciding which skills

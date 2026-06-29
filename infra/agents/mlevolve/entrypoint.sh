@@ -178,6 +178,50 @@ cp -f "$RUN_CFG" /workspace/mlevolve/config/config.yaml
 SAMPLER_LOG="$OUT_DIR/mem_sample.csv"
 echo "ts_unix,pgrp_rss_kb,pod_mem_used_kb,gpu_util_pct,gpu_mem_used_mib" > "$SAMPLER_LOG"
 
+# -------- Hardware string for the agent (mirrors MLE-bench additional_notes) --
+# MLE-bench's agents/aide/start.sh derives ${HARDWARE} from
+# `nvidia-smi --query-gpu=name` and injects a "Compute: You have access to
+# ${HARDWARE} ..." note into the task the agent reads. We mirror that here
+# (same command -v check + uniq -c count prefix) and additionally report VRAM
+# + CPU + RAM (MLE-bench reports only the GPU name; RE-Bench reports the full
+# GPU/CPU/RAM envelope, which is what a resource-gated decision needs). The
+# value is read by mlevolve_sidecar/eval_harness.py and shown to BOTH A/B cells
+# identically — purely factual environment info, never which method to use.
+#
+# CPU/RAM come from the cgroup (the pod's ALLOTTED limits), NOT nproc/MemTotal
+# (which report the NODE's totals on k8s and would massively overstate it).
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits >/dev/null 2>&1; then
+  GPU_PART=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits \
+    | awk -F',' '{n=$1; gsub(/^ +| +$/,"",n); gb=int(($2/1024)+0.5); print n" GPU ("gb" GB VRAM)"}' \
+    | sort | uniq -c \
+    | sed 's/^ *\([0-9]*\) *\(.*\)$/\1 \2/' \
+    | paste -sd ', ' -)
+else
+  GPU_PART=""
+fi
+# CPU cores: cgroup v2 cpu.max ("quota period"); quota=="max" → no cgroup cap → nproc.
+CPU_MAX=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null)
+CPU_QUOTA=${CPU_MAX%% *}; CPU_PERIOD=${CPU_MAX##* }
+if [ -n "$CPU_QUOTA" ] && [ "$CPU_QUOTA" != "max" ] && [ "${CPU_PERIOD:-0}" -gt 0 ] 2>/dev/null; then
+  CPUS=$(awk "BEGIN{c=int(($CPU_QUOTA/$CPU_PERIOD)+0.5); print (c<1?1:c)}")
+else
+  CPUS=$(nproc 2>/dev/null || echo "?")
+fi
+# RAM: cgroup v2 memory.max (bytes; "max" → unlimited → fall back to node MemTotal).
+MEM_MAX=$(cat /sys/fs/cgroup/memory.max 2>/dev/null)
+if [ -n "$MEM_MAX" ] && [ "$MEM_MAX" != "max" ]; then
+  RAM_GB=$(awk "BEGIN{printf \"%d\", ($MEM_MAX/1073741824)+0.5}")
+else
+  RAM_GB=$(awk '/MemTotal/{printf "%d",($2/1048576)+0.5}' /proc/meminfo 2>/dev/null || echo "?")
+fi
+if [ -n "$GPU_PART" ]; then
+  MLEVAL_HARDWARE="${GPU_PART}, ${CPUS} CPUs, ${RAM_GB} GB RAM"
+else
+  MLEVAL_HARDWARE="${CPUS} CPUs, ${RAM_GB} GB RAM (no GPU)"
+fi
+export MLEVAL_HARDWARE
+echo "[entrypoint] MLEVAL_HARDWARE=$MLEVAL_HARDWARE"
+
 # -------- Launch MLEvolve ----------------------------------------------
 INNER_LOG="$OUT_DIR/agent_logs/mlevolve_stdout.log"
 cd /workspace/mlevolve
