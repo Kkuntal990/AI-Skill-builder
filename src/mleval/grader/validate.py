@@ -47,6 +47,7 @@ from .grade import _read_csv_column_pair
 _TASK_COLUMNS: dict[str, dict[str, str]] = {
     "samsum": {"id_col": "id", "pred_col": "generated_summary", "ref_col": "reference_summary"},
     "gsm8k": {"id_col": "id", "pred_col": "prediction", "ref_col": "reference_answer"},
+    "boolq": {"id_col": "id", "pred_col": "prediction", "ref_col": "reference_answer"},
 }
 
 

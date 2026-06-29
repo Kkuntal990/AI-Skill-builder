@@ -62,8 +62,7 @@ Load with, e.g.:
   free-form chain-of-thought *generation*, so do NOT substitute a smaller model,
   a base/non-instruct variant, or an encoder (BERT/DistilBERT cannot generate).
   The grader does not check the model; a wrong backbone surfaces only as a
-  bad/invalid submission. Use a parameter-efficient method (e.g. LoRA) to keep
-  training within the time budget.
+  bad/invalid submission.
 - The HF cache is at `/results/.hf-cache/hf` on the mounted PVC, so the weights
   persist across runs (only the first run pays the download).
 

@@ -23,6 +23,7 @@ import json
 import sys
 from pathlib import Path
 
+from .accuracy import accuracy
 from .exact_match import exact_match
 from .grade import GradeResult, grade_predictions
 from .rouge import rouge_l_f
@@ -32,6 +33,7 @@ from .rouge import rouge_l_f
 _SCORERS = {
     "rougeL_f": rouge_l_f,
     "exact_match": exact_match,
+    "accuracy": accuracy,
 }
 
 # Per-task grading config. Each task names its prediction/reference columns
@@ -51,6 +53,15 @@ _TASKS: dict[str, dict[str, str]] = {
         "pred_col": "prediction",
         "ref_col": "reference_answer",
         "metric": "exact_match",
+    },
+    # BoolQ has NO native id either — id is the 0-based row index of the
+    # `validation` split (used as the withheld test). reference_answer is the
+    # canonical "true"/"false"; the accuracy scorer normalises yes/no/true/false.
+    "boolq": {
+        "id_col": "id",
+        "pred_col": "prediction",
+        "ref_col": "reference_answer",
+        "metric": "accuracy",
     },
 }
 
