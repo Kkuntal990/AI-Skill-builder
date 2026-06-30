@@ -80,6 +80,7 @@ cd "$(dirname "$0")/.." 2>/dev/null || true
 RUN_ID="${1:-${MLEVAL_RUN_ID:-mvp-001}}"
 TASK="${2:-gsm8k}"
 EXPECT_DIGEST="${3:-}"
+SEEDS="${4:-0 1}"          # space-separated seed list (was hardcoded to s0)
 NS="${K8S_NAMESPACE:-ecepxie}"
 
 echo "================================================================"
@@ -88,8 +89,9 @@ echo "================================================================"
 
 # ---- TIER 0: deployment (host-side kubectl) --------------------------------
 RUNNING_POD=""
+for s in $SEEDS; do
 for cell in with-skill without-skill; do
-  traj="${RUN_ID}-${TASK}-${cell}-s0"
+  traj="${RUN_ID}-${TASK}-${cell}-s${s}"
   pod=$(kubectl -n "$NS" get pods --no-headers 2>/dev/null | awk -v j="$traj" '$1 ~ j {print $1; exit}')
   echo
   echo "### CELL: $cell   ($traj)"
@@ -116,6 +118,7 @@ for cell in with-skill without-skill; do
     echo "  [WARN] 0.4 no entrypoint banner yet (too early, or entrypoint died)"
   fi
 done
+done
 
 # ---- TIER 1-4: PVC-side (exec into a running pod; shared PVC sees both cells)
 if [ -z "$RUNNING_POD" ]; then
@@ -130,11 +133,13 @@ PROBE="$(mktemp -t runhealth.XXXX.py)"
 cat > "$PROBE" <<'PY'
 import sys, os, glob, json, re, collections
 RUN, TASK = sys.argv[1], sys.argv[2]
+SEEDS = sys.argv[3].split() if len(sys.argv) > 3 else ["0"]
 def log(v, c, m): print(f"  [{v}] {c} {m}")
-for cell in ("with-skill","without-skill"):
-    traj=f"{RUN}-{TASK}-{cell}-s0"
+for s in SEEDS:
+ for cell in ("with-skill","without-skill"):
+    traj=f"{RUN}-{TASK}-{cell}-s{s}"
     base=f"/results/{RUN}/{traj}"
-    print(f"\n### CELL: {cell}")
+    print(f"\n### CELL: {cell}-s{s}")
     if not os.path.isdir(base): print("  (no PVC dir yet)"); continue
     mlog = (glob.glob(f"{base}/mlevolve_runs/*/logs/MLEvolve.log") or [None])[0]
     jpath = (glob.glob(f"{base}/mlevolve_runs/*/logs/journal.json") or [None])[0]
@@ -199,6 +204,11 @@ for cell in ("with-skill","without-skill"):
             log("OK","2.1","first draft uses causal LM + LoRA/generate (correct framing)")
         else:
             log("WARN","2.1","first draft framing unclear (no causal LM and no tabular signature)")
+        # 2.2 PEFT discovery (informational; matters since the LoRA nudge was
+        # removed from instruction.md — the agent should reach for it itself).
+        lora = bool(re.search(r"LoraConfig|get_peft_model|prepare_model_for_kbit",c))
+        quant = "4bit" if re.search(r"load_in_4bit\s*=\s*True",c) else ("8bit" if re.search(r"load_in_8bit\s*=\s*True",c) else "fp16/bf16")
+        log("OK","2.2",f"PEFT choice (de-nudged, informational): lora={lora} quant={quant}")
 
     # 3.1-3.4 node health
     alltext="\n".join(term(n) for n in nodes)
@@ -225,6 +235,6 @@ for cell in ("with-skill","without-skill"):
     miss=set(re.findall(r"No module named '([^']+)'",alltext))
     if miss: log("WARN","4.2",f"agent requested absent deps: {sorted(miss)}")
 PY
-kubectl -n "$NS" exec -i "$RUNNING_POD" -- python3 - "$RUN_ID" "$TASK" < "$PROBE"
+kubectl -n "$NS" exec -i "$RUNNING_POD" -- python3 - "$RUN_ID" "$TASK" "$SEEDS" < "$PROBE"
 rm -f "$PROBE"
 echo; echo "done."
