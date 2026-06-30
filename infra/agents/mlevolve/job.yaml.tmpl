@@ -96,11 +96,11 @@ spec:
             requests:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "32Gi"
+              memory: "16Gi"
             limits:
               ${GPU_TYPE}: "1"
               cpu: "2"
-              memory: "32Gi"
+              memory: "20Gi"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
