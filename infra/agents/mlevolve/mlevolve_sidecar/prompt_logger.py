@@ -6,8 +6,7 @@ time, which captures a frozen reference to the dispatcher. The dispatcher
 (``llm/__init__.py::query``) calls ``llm.openai.query`` or
 ``llm.gemini.query`` per call. We patch the provider-level functions
 in-place so the dispatcher's lookup picks up the wrapped versions on
-every call — same pattern that worked for AIDE's ``provider_to_query_func``
-dict.
+every call — the same wrap-at-import pattern.
 
 We only patch the OpenAI provider since our spike routes through it
 (OpenRouter is OpenAI-compatible). If we later test Gemini we'd add the
@@ -17,7 +16,7 @@ Schema written per line of ``prompts.jsonl``:
     ts, provider, model, system_message, user_message, output,
     in_tokens, out_tokens, req_time_sec, func_spec_name
 
-Compatible with the AIDE adapter's reader so ``adapter_mlevolve`` can
+Compatible with adapter_mlevolve's reader so ``adapter_mlevolve`` can
 reuse the same parsing helpers.
 """
 from __future__ import annotations

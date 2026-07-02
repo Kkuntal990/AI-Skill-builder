@@ -54,15 +54,15 @@ MLE-Bench runs the most agent-evaluations of any public project. Their environme
 
 Their philosophy distilled: *prebuilt wheels only, curated minimal, no compile-time CUDA*. They cite the same problems we ran into when we tried the opposite.
 
-### From our prior [AIDE Dockerfile](https://github.com/Kkuntal990/AI-Skill-builder/blob/main/infra/agents/aide/Dockerfile) (commit `b5c7120`)
+### From our prior agent's Dockerfile (commit `b5c7120`)
 
-Same philosophy, different base. AIDE Dockerfile comment says verbatim:
+Same philosophy, different base. The prior agent's Dockerfile comment captured the lesson verbatim:
 
-> Prior: pytorch/pytorch:2.7.1-cu126 + aideml git pin (with old datasets==2.1.0 / rich==13.7.0 pins) + per-task `pip install -r requirements.txt` at trajectory startup → vllm 0.6.6 in per-task reqs forced torch 2.7.1 → 2.5.1 downgrade, broke torchaudio, broke transformers ABI, AIDE judge crashed.
+> Prior: pytorch/pytorch:2.7.1-cu126 + an upstream agent git pin (with old datasets==2.1.0 / rich==13.7.0 pins) + per-task `pip install -r requirements.txt` at trajectory startup → vllm 0.6.6 in per-task reqs forced torch 2.7.1 → 2.5.1 downgrade, broke torchaudio, broke transformers ABI, the agent's judge crashed.
 >
-> Now: vllm/vllm-openai:v0.9.2 (vllm owns torch ABI) + ONE atomic pip install -r requirements.lock (280 packages, resolved once in this same base image) + AIDE installed with --no-deps so its outdated pins do not re-pin packages the lockfile already owns.
+> Now: vllm/vllm-openai:v0.9.2 (vllm owns torch ABI) + ONE atomic pip install (resolved once in this same base image) + the agent source vendored (not pip-installed) so its outdated pins do not re-pin packages the base image already owns.
 
-The AIDE base used a generated 280-package lockfile. The MLEvolve base uses an 11-package `requirements.txt`. Same philosophy at different package-list sizes — the principle is *curate*, not *generate-from-upstream*.
+The prior base used a generated 280-package lockfile. The MLEvolve base uses an 11-package `requirements.txt`. Same philosophy at different package-list sizes — the principle is *curate*, not *generate-from-upstream*.
 
 ### Aira-dojo + MLAgentBench + RD-Agent confirm the pattern
 
@@ -90,7 +90,7 @@ MLEvolve ships a 665-line `requirements_{base,ml,domain}.txt` that pins every tr
 | `Cannot uninstall blinker 1.4 — distutils installed project` | Base image has python3-blinker apt package; pip can't safely uninstall |
 | `torchsort` CUDA 12.8 vs PyTorch's 13.0 mismatch | Compile-at-install package; our base lacks the matching nvcc toolkit |
 
-The pattern across all 5: **MLEvolve's lockfile was frozen in their CI env and assumes that env**. Reproducing it elsewhere requires either matching their env exactly (impractical, undocumented) or stripping incompatible packages one-by-one (whack-a-mole; we'd lose the "we ship a reproducible env" benefit). Per the upstream behavior, even MLE-Bench's own AIDE adapter doesn't try to consume MLEvolve-style lockfiles — they keep their own curated env and add agents via thin pip installs.
+The pattern across all 5: **MLEvolve's lockfile was frozen in their CI env and assumes that env**. Reproducing it elsewhere requires either matching their env exactly (impractical, undocumented) or stripping incompatible packages one-by-one (whack-a-mole; we'd lose the "we ship a reproducible env" benefit). Per the upstream behavior, even MLE-Bench's own agent adapters don't try to consume MLEvolve-style lockfiles — they keep their own curated env and add agents via thin pip installs.
 
 ### Rejected: `FROM mlebench-env`
 

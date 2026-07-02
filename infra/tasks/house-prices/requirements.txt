@@ -2,5 +2,5 @@
 #
 # Intentionally empty as of 2026-05-25 — lightgbm/xgboost/catboost are
 # now pre-installed in the base image via the committed lockfile at
-# infra/agents/aide/requirements.lock. See
+# infra/agents/mlevolve/requirements.txt. See
 # infra/tasks/llama-inference/requirements.txt for the rationale.

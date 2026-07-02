@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MLEvolve trajectory entrypoint.
 #
-# Contract (mirrors AIDE's so the orchestrator stays agent-agnostic):
+# Contract (the universal agent contract, so the orchestrator stays agent-agnostic):
 #
 #   In env:
 #     MLEVAL_RUN_ID, MLEVAL_TRAJECTORY_ID, TASK, CELL, SEED
@@ -179,7 +179,7 @@ SAMPLER_LOG="$OUT_DIR/mem_sample.csv"
 echo "ts_unix,pgrp_rss_kb,pod_mem_used_kb,gpu_util_pct,gpu_mem_used_mib" > "$SAMPLER_LOG"
 
 # -------- Hardware string for the agent (mirrors MLE-bench additional_notes) --
-# MLE-bench's agents/aide/start.sh derives ${HARDWARE} from
+# MLE-bench's agent start script derives ${HARDWARE} from
 # `nvidia-smi --query-gpu=name` and injects a "Compute: You have access to
 # ${HARDWARE} ..." note into the task the agent reads. We mirror that here
 # (same command -v check + uniq -c count prefix) and additionally report VRAM

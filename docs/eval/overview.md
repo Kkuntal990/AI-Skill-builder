@@ -13,7 +13,7 @@ How we evaluate skills produced by `ai-skill-builder` and whether they make an M
 
 ## Stage 2 quick reference
 
-**MLE agent**: [MLEvolve-generic](https://github.com/e-strauss/MLEvolve-generic) (fork of AutoMLGen's MCGS search, pinned `@26bde89`), LLM `deepseek/deepseek-v4-pro` via OpenRouter. The earlier AIDE track (v0.3) is parked on `main`; MLEvolve is the current agent (subprocess-per-node avoids AIDE's fork-after-CUDA OOM).
+**MLE agent**: [MLEvolve-generic](https://github.com/e-strauss/MLEvolve-generic) (fork of AutoMLGen's MCGS search, pinned `@26bde89`), LLM `deepseek/deepseek-v4-pro` via OpenRouter. MLEvolve is the current agent; its subprocess-per-node execution avoids the fork-after-CUDA OOM that plagued the prior agent.
 
 **Task pool** (contract-only PEFT fine-tuning tasks; same backbone `Qwen/Qwen2.5-3B-Instruct`, same unmodified `peft-tuning` skill as the treatment):
 
@@ -44,7 +44,7 @@ How we evaluate skills produced by `ai-skill-builder` and whether they make an M
 
 ## Token budget
 
-**Honest range, not point estimate.** No published MLEvolve token-cost data exists. Anchored to literature peers (AIDE / AIRA-dojo / AutoMLGen) and scaled to each task's per-benchmark time budget.
+**Honest range, not point estimate.** No published MLEvolve token-cost data exists. Anchored to literature peers (AIRA-dojo / AutoMLGen) and scaled to each task's per-benchmark time budget.
 
 **Per-task per-trajectory range**:
 

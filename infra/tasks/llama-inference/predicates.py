@@ -40,9 +40,9 @@ def inference_script_present(output_dir: Path) -> bool:
 
 
 def _run_log_paths(output_dir: Path) -> list[Path]:
-    """Where AIDE writes captured stdout — try a few likely locations."""
-    candidates = list(output_dir.glob("aide_logs/**/*.log"))
-    candidates += list(output_dir.glob("agent_logs/*.log"))
+    """Where the agent's captured stdout lands — try a few likely locations."""
+    candidates = list(output_dir.glob("agent_logs/*.log"))
+    candidates += list(output_dir.glob("mlevolve_runs/**/*.log"))
     candidates += list(output_dir.glob("working_dirs/op_*/run.log"))
     return [p for p in candidates if p.is_file()]
 

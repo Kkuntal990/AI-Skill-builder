@@ -1,7 +1,7 @@
 # MLEvolve agent runtime (spike)
 
-Scaffolding for the **MLEvolve smoke spike** that replaced AIDE on the
-`mlevolve-smoke` branch. Goal: validate the four spike claims documented
+Scaffolding for the **MLEvolve smoke spike** that replaced the prior agent
+on the `mlevolve-smoke` branch. Goal: validate the four spike claims documented
 in `docs/eval/stage2.md` (subprocess isolation, OpenAI-compat wrapper,
 `use_grading_server: false` escape hatch, small adapter).
 
@@ -36,8 +36,8 @@ before any `from llm import query` in the agent modules — that's why
 - Also: we want to be able to patch MLEvolve source files if a critical bug emerges, without forking the repo. (We don't do this in the spike.)
 
 **Why a separate image (`mleval-agent-mlevolve:dev`)**:
-- AIDE image had monkey-patches for `aide.backend`, `aide.interpreter`, `aide.utils.config` — all dead code on the MLEvolve path.
-- Keeping them in one image bloats the layer graph and risks accidental coupling. Clean separation lets us delete AIDE entirely if the spike succeeds.
+- The prior agent's image had monkey-patches for its own modules — all dead code on the MLEvolve path.
+- Keeping them in one image bloats the layer graph and risks accidental coupling. Clean separation lets us retire the prior agent entirely if the spike succeeds.
 
 **Why the grading server is never launched**:
 - The mle-bench coupling lives entirely in `engine/validation/format_server.py`. As long as we never `bash launch_server.sh` (we don't), the import never fires.

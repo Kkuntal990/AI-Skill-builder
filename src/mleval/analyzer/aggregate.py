@@ -2,7 +2,7 @@
 
 Walks ``/results/<run_id>/<trajectory_id>/`` for each (task × cell × seed)
 combination, reads each ``manifest.json`` + ``trajectory.jsonl`` + best
-metric from AIDE's journal, then computes:
+metric from the journal, then computes:
 
     L1 outcome     — mean metric per cell, paired Lift (with - without) per
                      (task, seed), with-vs-without delta + 95% CI.

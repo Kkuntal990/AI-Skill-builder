@@ -324,7 +324,7 @@ The peft-tuning saturation result is informative: on canonical PEFT questions So
 ### Stage 2 — MLE-skill-bench (specified, not implemented)
 
 A containerised, runnable benchmark for ML-engineering skills. Combines:
-- MLAlgo-Bench's **EScore = ∆Score × pass-rate** (its eq. 4) — rewards a skill only when it *both* lifts pass-rate *and* keeps recipe fidelity high. Detects MLAlgo-Bench's "AIDE shortcut" failure mode (Table 6 — agent ignores prescribed recipe to game pass-rate).
+- MLAlgo-Bench's **EScore = ∆Score × pass-rate** (its eq. 4) — rewards a skill only when it *both* lifts pass-rate *and* keeps recipe fidelity high. Detects the recipe-ignoring / pass-rate-gaming shortcut (MLAlgo-Bench Table 6 — agent ignores prescribed recipe to game pass-rate).
 - MLE-Bench / RE-Bench's **container isolation + held-out test data + fixed compute budget** so OOM and wall-clock failures count as evaluation failures.
 - Anthropic skill-creator's **same-turn paired runs** for variance control + `text/passed/evidence` schema.
 - Eugene Yan's **two-judge averaging** (one Claude + one non-Claude) to neutralise the +25pp self-preference bias measured for Claude-v1.
@@ -374,7 +374,7 @@ SkillScore     = ∆Score(with_skill) − ∆Score(without_skill)
 EffectiveLift  = SkillScore × pass_rate(with_skill)
 ```
 
-A skill that lifts pass-rate but lowers fidelity (the AIDE-shortcut failure) gets penalised; only skills that lift *both* pass and recipe fidelity score well.
+A skill that lifts pass-rate but lowers fidelity (the recipe-ignoring / pass-rate-gaming shortcut, MLAlgo-Bench Table 6) gets penalised; only skills that lift *both* pass and recipe fidelity score well.
 
 #### Acceptance thresholds
 
@@ -394,7 +394,7 @@ When any skill clears 95% on the capability set, expand the eval set with harder
 ### Sources cited (curated)
 
 **Seed paper**
-- [MLAlgo-Bench (Wang et al., EMNLP Findings 2025) — *Can Machines Implement Machine Learning Algorithms?*](https://aclanthology.org/2025.findings-emnlp.772/) — instruction-fidelity benchmark, EScore metric, AIDE-shortcut warning.
+- [MLAlgo-Bench (Wang et al., EMNLP Findings 2025) — *Can Machines Implement Machine Learning Algorithms?*](https://aclanthology.org/2025.findings-emnlp.772/) — instruction-fidelity benchmark, EScore metric, recipe-ignoring / pass-rate-gaming shortcut warning (Table 6).
 
 **MLE benchmarks (Dimensions 4, 5, 7)**
 - [MLE-Bench (Chan et al., OpenAI 2024)](https://arxiv.org/abs/2410.07095)

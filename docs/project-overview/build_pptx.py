@@ -273,7 +273,7 @@ eyebrow(s, "Part II · Stage 2 · MLEvolve")
 heading(s, "A paired with / without-skill A/B")
 bullets(s, [
     "**Agent:** MLEvolve-generic — a Monte-Carlo graph search over candidate code nodes, driven by deepseek-v4-pro.",
-    (1, "Subprocess-per-node design avoids the fork-after-CUDA crash that retired the earlier AIDE agent."),
+    (1, "Subprocess-per-node design avoids the fork-after-CUDA crash that retired an earlier agent."),
     "**Held fixed across cells:** same backbone (Qwen2.5-3B-Instruct), same task, same seed, same skill library.",
     (1, "The *only* difference is whether the library is available; the agent selects from it (empty library = baseline)."),
     (1, "Today's spike held one skill (peft-tuning) fixed; the goal is the full library the agent chooses from."),

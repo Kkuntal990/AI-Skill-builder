@@ -95,7 +95,7 @@ check: lint typecheck test
 
 # ---- containers ----------------------------------------------------------
 
-# Single-agent on this branch: MLEvolve. AIDE removed during the
+# Single-agent on this branch: MLEvolve. The prior agent was removed during the
 # mlevolve-smoke spike (see docs/eval/stage2.md).
 
 mlevolve-submodule-init:

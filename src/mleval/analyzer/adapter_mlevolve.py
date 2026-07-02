@@ -18,15 +18,15 @@ Schema per line (universal):
     schema_version, step, node_id, parent_id, code, stage, is_buggy,
     metric, exc_type, exec_time_sec, ctime, llm_calls
 
-Key mapping decisions vs AIDE's adapter:
+Key mapping decisions:
     - MLEvolve uses 7 stages (root, draft, improve, debug, fusion_draft,
       evolution, fusion) — we pass them through as-is. The stage_classifier
       (AST-based) is the authoritative agent-agnostic classifier; this
       adapter just preserves what MLEvolve emitted.
     - llm_calls per node: MLEvolve doesn't tag prompts with node_id, so we
       bucket by time window between the parent node's finish_time and this
-      node's finish_time. Best-effort heuristic; not as tight as AIDE's
-      submit_review boundary marker.
+      node's finish_time. Best-effort heuristic keyed on the node ctime
+      boundaries.
 """
 from __future__ import annotations
 

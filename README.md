@@ -2,7 +2,7 @@
 
 Research toolkit for **building, discovering, and evaluating OpenClaw skills** that make ML-engineering agents measurably better.
 
-Three OpenClaw agents plus a two-stage evaluation framework that A/B-tests skills against a pluggable MLE agent (primary: [AIDE](https://github.com/WecoAI/aideml)).
+Three OpenClaw agents plus a two-stage evaluation framework that A/B-tests skills against a pluggable MLE agent (primary: [MLEvolve](https://github.com/InternScience/MLEvolve)).
 
 ## What's here
 
@@ -23,7 +23,7 @@ docs/
 ├── eval/
 │   ├── overview.md          two-stage pipeline summary
 │   ├── stage1.md            local CI-style skill eval (in production)
-│   └── stage2.md            MLE-agent A/B framework (v0.3 AIDE pivot in progress)
+│   └── stage2.md            MLE-agent A/B framework (MLEvolve — current agent)
 ├── skill-scout/             hld.md / plan.md (+ pdfs)
 └── skill-builder/           hld.md / plan.md
 ```
@@ -33,7 +33,7 @@ docs/
 - **Skill builder**: Phase 1.4 — builds and validates skills, runtime MCP fallback wired
 - **Skill scout**: Phase 1 — searches GitHub, scores, installs with security scan
 - **Evaluation Stage 1**: locked, runs on every skill build (~5 min, ~$1)
-- **Evaluation Stage 2 (MLE-agent A/B)**: v0.3 AIDE pivot in progress; pre-pilot. Infra runs on UCSD's Nautilus NRP k8s cluster
+- **Evaluation Stage 2 (MLE-agent A/B)**: MLEvolve is the current agent; pre-pilot. Infra runs on UCSD's Nautilus NRP k8s cluster
 
 ## License
 

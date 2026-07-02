@@ -101,7 +101,7 @@ def predictions_not_constant(output_dir: Path) -> bool:
     """Predictions vary across rows (catches sample-submission stubs of all 0.5).
 
     Computed on the LAST submission only — earlier ones may legitimately be
-    placeholder writes during AIDE's iteration."""
+    placeholder writes during the agent's iteration."""
     subs = _find_submissions(output_dir)
     if not subs:
         return False

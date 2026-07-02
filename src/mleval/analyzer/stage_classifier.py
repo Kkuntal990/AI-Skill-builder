@@ -242,7 +242,7 @@ def classify_trajectory(output_dir: Path) -> Path:
     records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     for rec in records:
         # Schema evolution: adapter_mlevolve writes ``code`` as the raw source
-        # string (inline). Earlier AIDE adapter wrote a dict ``{"emitted_path":
+        # string (inline). An earlier adapter wrote a dict ``{"emitted_path":
         # ...}``. Handle both so the classifier survives reruns on archived data.
         code_field = rec.get("code")
         if isinstance(code_field, dict):
@@ -257,7 +257,7 @@ def classify_trajectory(output_dir: Path) -> Path:
         cls = classify(code)
         # Preserve top-level node fields and add a "stage_classifier" sub-dict
         # alongside the upstream ``stage`` label (a string from adapter_mlevolve).
-        # This avoids the AIDE-era convention of overwriting ``stage`` with a
+        # This avoids the earlier convention of overwriting ``stage`` with a
         # dict, which broke aggregate.py's str-comparison on the upstream label.
         rec["stage_classifier"] = {
             "top_level": cls["top_level"],

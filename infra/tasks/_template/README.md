@@ -4,7 +4,7 @@ Copy this directory to `infra/tasks/<your-task>/` and customize.
 
 ## What lives here
 
-- `instruction.md` — the AIDE `desc_file`. Plain markdown read verbatim into AIDE's task description.
+- `instruction.md` — the task description file, read verbatim by the agent as its task description.
 - `predicates.py` — per-task state predicates. Functions take `$MLEVAL_OUTPUT_DIR`, return bool.
 - `data/` — *not in git*. Stage data onto the PVC separately (see `infra/tasks/README.md` for `kubectl cp` instructions).
 

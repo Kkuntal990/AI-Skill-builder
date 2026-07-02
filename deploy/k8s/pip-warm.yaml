@@ -6,7 +6,7 @@
 # exempt tier (1 CPU / 2 GiB).
 #
 # Uses the same image as trajectory pods so wheels are compatible with the
-# Python version AIDE will run.
+# Python version the agent will run.
 
 apiVersion: v1
 kind: Pod

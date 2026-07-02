@@ -13,7 +13,7 @@ Source: <https://nrp.ai/documentation/userdocs/start/policies/>. Violating these
 | **GPU utilization must exceed 40%, ideally near 100%** | CPU-only tasks (tabular pilots) use `--profile cpu` → no GPU requested. GPU is only allocated for tasks that actually use CUDA. |
 | **CPU-only pods should add `priorityClassName: opportunistic` + node anti-affinity to GPU nodes** | `job_cpu.yaml.tmpl` has both. |
 | **Interactive pods destroyed after 6h** | `mleval-jupyter-1gpu` is short-lived; redeploy via `make k8s-apply-helper` and tear down between sweeps. |
-| **`sleep infinity` / non-terminating commands = ban** | Entrypoint runs AIDE then exits; no sleeps. |
+| **`sleep infinity` / non-terminating commands = ban** | Entrypoint runs MLEvolve then exits; no sleeps. |
 | **A100 default quota = 0** | We target `rtxa6000` only (set via `GPU_TYPE` in `.env`). A100 needs a separate request. |
 
 When in doubt: shrink CPU/RAM to the exempt tier (1 CPU / 2 GiB) and drop the GPU. That's always safe.
@@ -74,8 +74,8 @@ $EDITOR .env
 
 # Warm the pip cache (saves ~30-60s on every trajectory's first launch).
 # As of 2026-05-25 this is a near-no-op because per-task requirements.txt
-# files are now empty (all ML deps live in the base image lockfile at
-# infra/agents/aide/requirements.lock — see commit 72cb6bd). Still safe
+# files are now empty (all ML deps live in the base image's curated
+# infra/agents/mlevolve/requirements.txt). Still safe
 # to run; only meaningful if you add a niche package to a task's reqs.
 make pip-warm TASK=llama-inference SKILL=vllm-inference
 
@@ -118,7 +118,7 @@ make ab-apply TASK=mytask SEEDS="0 1" \
 ```
 
 Orchestrator:
-- Renders `infra/agents/aide/job.yaml.tmpl` per (task × cell × seed)
+- Renders `infra/agents/mlevolve/job.yaml.tmpl` per (task × cell × seed)
 - Skips trajectories whose Job already exists (idempotent)
 - Applies via `kubectl apply -f -`
 
@@ -175,11 +175,11 @@ Re-writes `trajectory.jsonl` and `state.json` in place. Safe to run repeatedly.
 |---|---|---|
 | `ErrImagePull` immediately after apply | ghcr.io image is private + pull secret missing | `kubectl -n "$K8S_NAMESPACE" get secret ghcr-pull`; rerun `make k8s-ghcr-pull-secret` |
 | Pod `Pending` >2 min | GPU quota exhausted or taint mismatch | `kubectl describe pod <name>` events; `kubectl describe quota` |
-| Job runs forever, no LLM activity | AIDE hung in `rich.Status(...)` when stdout isn't a TTY | Our entrypoint already passes `TERM=dumb`; if it recurs, check `kubectl logs` for the last printed line |
+| Job runs forever, no LLM activity | Agent hung in `rich.Status(...)` when stdout isn't a TTY | Our entrypoint already passes `TERM=dumb`; if it recurs, check `kubectl logs` for the last printed line |
 | `429` from OpenRouter | Free-tier model rate-limited | Switch `MLEVAL_LLM_MODEL` to a paid slug; smoke-test from helper pod first |
 | `401` from OpenAI responses API | `report.model=gpt-4.1` default routes to OpenAI's `responses.create` (not OpenRouter) | We default `generate_report=false`; ensure entrypoint passes it |
-| `trajectory.jsonl` missing after pod completes | Analyzer chain crashed silently | Inspect `agent_logs/run.log` for `[entrypoint] adapter_aide FAILED` |
-| PVC fills up | Working-dir snapshots include large model checkpoints | Tune `SKIP_GLOBS` in `aide_sidecar/interpreter_patch.py` |
+| `trajectory.jsonl` missing after pod completes | Analyzer chain crashed silently | Inspect `agent_logs/run.log` for `[entrypoint] adapter_mlevolve FAILED` |
+| PVC fills up | Working-dir snapshots include large model checkpoints | MLEvolve executes each node in its own subprocess; prune old `runfile_*` outputs on the PVC |
 
 ## Cleanup between sweeps
 

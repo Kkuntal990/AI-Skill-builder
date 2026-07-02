@@ -5,10 +5,9 @@ disk. Nothing here runs during the agent — pure post-hoc derivations
 called from ``aggregate.py`` (locally, on Mac) after ``kubectl cp``
 pulls a sweep.
 
-Status on mlevolve-smoke branch: this module was originally written
-against AIDE's journal.json shape (per-node ``parent``/``is_buggy``/
-``metric.value``/``exec_time``). Most of those fields still exist in
-MLEvolve's schema (mapped through ``adapter_mlevolve``), but a few
+Status on mlevolve-smoke branch: this module reads MLEvolve's
+journal.json shape (per-node ``parent``/``is_buggy``/``metric.value``/
+``exec_time``, mapped through ``adapter_mlevolve``), but a few
 metrics (``redundant_loops``, ``self_correction_rate``,
 ``time_to_first_valid_submission``) need re-derivation for MLEvolve's
 MCGS topology before they're trustworthy. They will be revisited after
@@ -22,7 +21,6 @@ Inputs available per trajectory dir:
     prompts.jsonl            – raw per-LLM-call records (req_time, tokens)
     mlevolve_runs/<ts>/      – MLEvolve's native runs root (journal.json,
                                workspaces with submission.csv etc.)
-    aide_logs/**/journal.json – AIDE's native journal (per-node metric, parent edges)
 
 Each function returns ``None`` rather than raising when its input is absent —
 sweeps with partial trajectories must still aggregate.
@@ -143,7 +141,7 @@ def llm_latency(traj_dir: Path) -> dict[str, float | None]:
 
 
 def step_exec_time(traj_dir: Path) -> dict[str, float | None]:
-    """AIDE's interpreter exec_time per node (excludes LLM time)."""
+    """Interpreter exec_time per node (excludes LLM time)."""
     journal = _find_journal(traj_dir) or {}
     times = [float(n["exec_time"]) for n in journal.get("nodes", []) if isinstance(n.get("exec_time"), (int, float))]
     return {
@@ -157,7 +155,7 @@ def step_exec_time(traj_dir: Path) -> dict[str, float | None]:
 
 
 def step_count(traj_dir: Path) -> int:
-    """Count AIDE journal nodes (one per code-gen/exec step)."""
+    """Count journal nodes (one per code-gen/exec step)."""
     journal = _find_journal(traj_dir) or {}
     return len(journal.get("nodes", []))
 
@@ -298,7 +296,7 @@ def time_to_first_valid_submission(
     valid only once it produced a parseable submission + metric, so this is
     the "first valid submission" step without needing working-dir snapshots.
 
-    Fallback (AIDE-era): scan ``working_dirs/op_*/**/submission.csv`` for the
+    Fallback: scan ``working_dirs/op_*/**/submission.csv`` for the
     first CSV whose header contains every column in ``required_columns``.
     """
     for rec in _read_jsonl(traj_dir / "trajectory.jsonl"):

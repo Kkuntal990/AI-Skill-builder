@@ -5,8 +5,8 @@ CLI args for the sweep design, renders `infra/agents/mlevolve/job.yaml.tmpl`
 per trajectory via envsubst-style substitution, kubectl-applies each Job,
 waits for completion, and optionally pulls results off the PVC.
 
-Single-agent on this branch: MLEvolve. AIDE was removed during the
-mlevolve-smoke spike (see docs/eval/stage2.md for the pivot rationale).
+Single-agent on this branch: MLEvolve. The prior agent was removed during
+the mlevolve-smoke spike (see docs/eval/stage2.md for the pivot rationale).
 
 Two-phase use:
 

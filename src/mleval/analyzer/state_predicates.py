@@ -1,9 +1,10 @@
 """Run agent-agnostic + per-task state predicates over a trajectory's outputs.
 
-Predicates are deterministic boolean functions over the artifacts AIDE
-produces (workspace dir, best_solution.py, journal metrics). Two sources:
+Predicates are deterministic boolean functions over the artifacts the
+agent produces (workspace dir, journal metrics, preserved predictions).
+Two sources:
 
-    Generic predicates (this file): apply to any AIDE run. Cheap checks like
+    Generic predicates (this file): apply to any run. Cheap checks like
     "did the agent ever produce a non-buggy node" or "is the best metric
     finite".
 
@@ -40,8 +41,9 @@ def _load_journal(output_dir: Path) -> dict | None:
 
 
 def has_best_solution(output_dir: Path) -> bool:
-    # AIDE preserves the best node as best_solution.py; MLEvolve preserves it as
-    # best_submission/submission.csv (no_submission_mode:False). Accept either.
+    # MLEvolve preserves the best node's predictions at
+    # best_submission/submission.csv (no_submission_mode:False). Accept the
+    # legacy best_solution.py name too so archived trajectories still pass.
     return any(output_dir.rglob("best_solution.py")) or any(
         output_dir.rglob("best_submission/submission.csv")
     )

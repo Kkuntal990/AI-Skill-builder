@@ -9,11 +9,11 @@
 #   ACTIVE_DEADLINE_SECONDS                 (== TIME_LIMIT_SECONDS + slack)
 #   MLEVAL_SKILL_PATH                       (empty for without_skill cell)
 #
-# Differences vs the deleted AIDE template:
+# Differences vs the prior agent's template:
 #   - image: ghcr.io/.../mleval-agent-mlevolve:dev (separate image)
 #   - memory: 64Gi (MLEvolve's subprocess model should hold here; if not,
 #     spike C1 fails and we know within one trajectory)
-#   - no AIDE-specific env (OPENAI_BASE_URL is still set — same OpenRouter
+#   - no prior-agent-specific env (OPENAI_BASE_URL is still set — same OpenRouter
 #     wrapper as before — but no GENERATE_REPORT, no MLEVAL_*_REQS_PATH)
 
 apiVersion: batch/v1

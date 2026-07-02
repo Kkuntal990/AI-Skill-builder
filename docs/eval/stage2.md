@@ -4,19 +4,19 @@ Pre-ship gate. Does `MLE-Agent + skill` build measurably better pipelines than `
 
 > **History.**
 > - **v0.2 (Apr 2026)** targeted MLEvolve. Original ditch: its grading-server sidecar imported `mlebench.registry` + `validate_submission`, blocking custom-skill A/B without registering each task as an MLE-Bench competition.
-> - **v0.3 (May 2026)** pivoted to AIDE (WecoAI). Worked end-to-end on tabular tasks; broke repeatedly on GPU tasks (`llama-inference`): 5 OOMs in a row (mvp-014→mvp-018) traced to fork-after-CUDA in LLM-generated `DataLoader(num_workers>0)` / `dataset.map(num_proc>0)` after `model.to('cuda')`. AIDE's `multiprocessing.Process(fork)` model leaks unkillable CUDA-pinned workers; cleanup_session patches survive but +7.4 to +22.5 GiB/min memory creep OOMs the pod within minutes. AIDE was [designed and validated on Kaggle tabular](https://arxiv.org/abs/2502.13138); GPU users (MLE-Bench, AIRA-dojo) wrap it in nested isolation. Our setup didn't and can't (no DinD/Apptainer on Nautilus).
+> - **v0.3 (May 2026)** pivoted to a single-file, LLM-judge MLE-agent. Worked end-to-end on tabular tasks; broke repeatedly on GPU tasks (`llama-inference`): 5 OOMs in a row (mvp-014→mvp-018) traced to fork-after-CUDA in LLM-generated `DataLoader(num_workers>0)` / `dataset.map(num_proc>0)` after `model.to('cuda')`. That agent's `multiprocessing.Process(fork)` model leaks unkillable CUDA-pinned workers; cleanup_session patches survive but +7.4 to +22.5 GiB/min memory creep OOMs the pod within minutes. It was designed and validated on Kaggle tabular; GPU users (MLE-Bench, AIRA-dojo) wrap it in nested isolation. Our setup didn't and can't (no DinD/Apptainer on Nautilus).
 > - **v0.4 (May 2026)** re-evaluates MLEvolve. Re-check found the original blocker is bypassable: [`use_grading_server: false`](https://github.com/InternScience/MLEvolve/blob/26bde89/engine/validation/quality_check.py#L219) short-circuits the entire mlebench import path. Architecturally relevant: MLEvolve's `engine/executor.py` uses `subprocess.Popen` per node, with the explicit docstring [*"avoids CUDA/fork issues"*](https://github.com/InternScience/MLEvolve/blob/26bde89/engine/executor.py). The `mlevolve-smoke` branch runs the spike (this document's last section).
 > - **v0.5 (Jun 2026)** fixed the outcome contract. The spike-012 control drifted off-task (solved IMDB sentiment classification) yet printed a valid-looking `Final Validation Score` the harness believed — because the metric was a self-reported stdout scalar, the one thing no credible agent benchmark uses. Fix: flip `no_submission_mode: True → False` so MLEvolve natively preserves the best node's per-example predictions (`best_submission/submission.csv`), and add an independent held-out grader (`mleval.grader`) that recomputes the metric against held-out references post-run. Drift now scores `valid:false`/~0 and drops out of the lift. Kaggle persona + `./input` framing (a drift driver) neutralized at build time by `patches/de_kaggle.py`. See **Layer 1** below.
 
 ## MLEvolve spike — current track
 
-**Branch**: `mlevolve-smoke` (forked from `b5c7120`, AIDE work intact on `main` until spike verdict).
+**Branch**: `mlevolve-smoke` (forked from `b5c7120`).
 
 **Goal**: validate four binary claims to decide whether to port v0.4 to MLEvolve permanently.
 
 | # | Claim | Pass criterion |
 |---|---|---|
-| C1 | MLEvolve's subprocess-per-step model avoids the AIDE OOM | One full trajectory (5+ nodes) on llama-inference at 64 GiB without OOMKill |
+| C1 | MLEvolve's subprocess-per-step model avoids the fork-after-CUDA OOM | One full trajectory (5+ nodes) on llama-inference at 64 GiB without OOMKill |
 | C2 | DeepSeek-via-OpenRouter wrapper plugs into MLEvolve's `llm.code`/`llm.feedback` | At least one successful LLM round-trip per stage, captured in `prompts.jsonl` |
 | C3 | `use_grading_server: false` actually short-circuits the mle-bench coupling | `pip freeze \| grep mlebench` empty; `format_server.py` never imports |
 | C4 | `journal.json` → `trajectory.jsonl` adapter stays small | ≤ 200 LoC; produces a record compatible with existing `state_predicates.py` |
@@ -55,16 +55,12 @@ Why these three and not per-stage time/tokens: a node's script spans many sub-st
 
 ---
 
-> **Note on the rest of this document.** Sections below this banner describe
-> the v0.3 (AIDE-era) framework. They remain accurate for the universal
-> pieces (experimental design, taxonomy, three-layer metric stack,
-> reproducibility framework, infrastructure) — those are agent-agnostic
-> by design and apply to the MLEvolve track too. The AIDE-specific
-> mechanics (gaps + bridges table, `aide_sidecar/*` references, `journal.json`
-> field semantics, RNG seed sources) are retained as historical context;
-> the analogous MLEvolve mechanics live in `infra/agents/mlevolve/README.md`.
->
-> A full rewrite happens after the spike verdict — premature now.
+> **Note on the rest of this document.** The sections below cover the universal
+> pieces (experimental design, taxonomy, three-layer metric stack, reproducibility
+> framework, infrastructure) — agent-agnostic by design — alongside the
+> MLEvolve-specific mechanics (sidecar patches, `journal.json` field semantics,
+> RNG seed sources). The plugin-level details live in
+> `infra/agents/mlevolve/README.md` and the `CLAUDE.md` "Sidecar architecture" section.
 
 ## Experimental design
 
@@ -72,25 +68,25 @@ Paired with-skill / without-skill, n=3 seeds, k=2 tasks (pilot starts with k=1, 
 
 Anchored to [ScienceAgentBench](https://arxiv.org/abs/2410.05080) (32.4→34.3 with-knowledge), [ML-Master](https://arxiv.org/abs/2506.16499) (with/without memory), [MLE-STAR](https://arxiv.org/abs/2506.15692) (per-block ablation). Academic precedent: [Du et al. 2026](https://arxiv.org/abs/2602.22442) — paper-only, no code.
 
-## Agent: AIDE (primary)
+## Agent: MLEvolve
 
-[github.com/WecoAI/aideml](https://github.com/WecoAI/aideml) — predecessor of MLEvolve's MCTS design, single-file monolithic code per node (easier AST target than MLEvolve's multi-file workspaces), LLM-judge self-scoring (no external grader, no benchmark coupling).
+[github.com/InternScience/MLEvolve](https://github.com/InternScience/MLEvolve) — an MCGS-search MLE-agent (vendored @`26bde89`). Multi-file workspace per node, `subprocess.Popen` per-node execution (the property that avoids the fork-after-CUDA OOM), and a self-reported `Final Validation Score` search signal that we override with an external held-out grader.
 
-Per-step structure: 2 LLM calls (code generation + judge). Up to `agent.steps` per trajectory; 20 default for pilot, 50 for full sweep.
+Per-node structure: draft / improve / debug / evolution code-gen agents, each a code-gen LLM call, executed in a fresh subprocess. Up to `STEP_LIMIT` nodes per trajectory (5 for smoke, higher for sweeps), soft-capped by a wall-clock watchdog in `entrypoint.sh`.
 
-**Gaps AIDE has and how we bridge them** (all four are runtime monkey-patches in `infra/agents/aide/aide_sidecar/`):
+**Gaps MLEvolve has and how we bridge them** (import-time monkey-patches in `infra/agents/mlevolve/mlevolve_sidecar/`, applied by `run_mlevolve.py`):
 
 | Gap | Bridge |
 |---|---|
-| Discards token counts (`backend/__init__.py:67`) | `backend_wrapper` re-implements provider dispatch and captures the full 5-tuple to `prompts.jsonl` |
-| Never persists prompts (logger.info only, no FileHandler) | Same wrapper writes `system_message` + `user_message` per call |
-| Never calls `random.seed()`; default temp=0.5 | `seed.py` pins `random`/`numpy`/`torch`; entrypoint passes `agent.code.temp=0` + `agent.feedback.temp=0` |
-| Interpreter deletes `working_dir` after each step | `interpreter_patch` snapshots `working_dir` to `$MLEVAL_OUTPUT_DIR/working_dirs/op_<step>/` before deletion |
-| No native skill-injection hook | `skill_inject` monkey-patches `aide.utils.config.load_task_desc` to splice `$MLEVAL_SKILL_PATH` content into task_desc |
-| Openrouter backend hardcodes `provider.order=[Fireworks]` and rejects function-calling | Image sets `OPENAI_BASE_URL=https://openrouter.ai/api/v1` so the openai backend (chat.completions path) is used |
-| `report.model=gpt-4.1` default routes to OpenAI's responses.create API | Entrypoint passes `generate_report=false`; we keep `journal.json` + `tree_plot.html` which are richer anyway |
+| Never persists prompts; discards token counts | `prompt_logger` wraps `llm.openai.{query,generate}` and writes `(system, user, output, tokens, req_time)` to `prompts.jsonl` |
+| Never seeds RNGs | `seed` pins `random`/`numpy`/`torch` + `PYTHONHASHSEED` from `$SEED`; LLM temperature pinned to 0 in `config.yaml` |
+| LLM `determine_metric_direction` flips maximize/minimize nondeterministically | `metric_direction` pins the direction from `$MLEVAL_METRIC_MAXIMIZE` |
+| Default `max_tokens` truncates long completions → corrupted SEARCH/REPLACE diffs | `token_budget` raises the cap; `diff_guard` AST-guards + normalizes the patcher |
+| No native skill-injection hook | `skill_retriever` loads the skill library; `skill_injector` patches the 4 codegen agents (Tier-0 catalog + per-node temp-0 selector) |
+| Kaggle persona + `./input` framing + an LLM `clean_task_desc` rewrite drift non-Kaggle tasks | `patches/de_kaggle.py` neutralizes both at build time so `description.md` reaches the agent verbatim |
+| Self-reported stdout score is gameable | `eval_harness` rules + the post-run held-out grader (`mleval.grader`) recompute the metric from the preserved `submission.csv` |
 
-These bridges live alongside AIDE rather than forking it, so an `AIDE_REF` bump just needs a re-test of the patch surface.
+These bridges patch MLEvolve at import time rather than forking it, so a submodule bump just needs a re-test of the patch surface.
 
 ## Task pool (v0.3)
 
@@ -98,7 +94,7 @@ Locked for the current pilot sequence. The harness-validation pilot (mvp-003, CP
 
 | Source | Task | Profile | Time budget | Skill paired with | Status |
 |---|---|---|---|---|---|
-| AIDE bundled example | `house-prices` (tabular Kaggle) | CPU | 30 min | `tabular-baseline` | mvp-003 dry-run complete (harness validation only — not PEFT) |
+| Public Kaggle example | `house-prices` (tabular Kaggle) | CPU | 30 min | `tabular-baseline` | mvp-003 dry-run complete (harness validation only — not PEFT) |
 | [MLAgentBench](https://github.com/snap-stanford/MLAgentBench) | `llama-inference` (huggyllama mirror) | GPU 1×rtxa6000 | 30-60 min | `vllm-inference` | **next pilot** — primary skill-eval target |
 | [MLE-Bench low split](https://github.com/openai/mle-bench) | TBD freeform PEFT task | GPU | 1-5 h | `peft-tuning` | follow-up after llama-inference proves the harness on GPU |
 
@@ -110,7 +106,7 @@ Locked for the current pilot sequence. The harness-validation pilot (mvp-003, CP
 
 | Layer | Question | Tokens per A/B |
 |---|---|---|
-| **L1 outcome** | Did the skill solve the task better? | 0 (AIDE LLM-judge already part of agent budget) |
+| **L1 outcome** | Did the skill solve the task better? | 0 (MLEvolve's self-scoring already part of agent budget) |
 | **L2 per-stage attribution** | *Where* did the skill help? | 0 (L2a/L2b static) — **L2c judge default OFF**, +~3M if enabled |
 | **L3 trajectory cost/effort** | Slower or more expensive? | 0 (parsed from `prompts.jsonl` + manifest) |
 
@@ -131,9 +127,9 @@ Locked for the current pilot sequence. The harness-validation pilot (mvp-003, CP
 
 Per-task metric + paired Lift, computed by an **independent held-out grader** — not the agent's self-report.
 
-**Two-level design** (faithful to mle-bench / AIDE):
+**Two-level design** (faithful to mle-bench):
 
-- *Search signal (gameable, internal):* MLEvolve ranks nodes by the agent's self-reported `Final Validation Score` (LLM-parsed from stdout into `metric.value`) and picks its best node — exactly as AIDE's `journal.get_best_node()` does. This drives the search but is **not** the reported outcome.
+- *Search signal (gameable, internal):* MLEvolve ranks nodes by the agent's self-reported `Final Validation Score` (LLM-parsed from stdout into `metric.value`) and picks its best node — exactly as MLEvolve's own best-node selection does. This drives the search but is **not** the reported outcome.
 - *Headline (trustworthy, external):* with `no_submission_mode: False`, MLEvolve preserves the best node's per-example predictions at `best_submission/submission.csv`. After the run, `entrypoint.sh` invokes `mleval.grader`, which recomputes the metric from that file against held-out references and writes `held_out_score.json`. `mleval.analyzer.aggregate` uses that as the trajectory's `best_metric` (self-reported value kept only as a drift diagnostic).
 
 | Metric | Source |
@@ -157,7 +153,7 @@ Pilot uses this MVP classifier. The full PyCG-Extended path (task #62) integrate
 
 **Choice extraction** is part of the MVP stage_classifier: it surfaces import names and call names per record. For pilot, "agent used LoraConfig" is captured but the *value* of `lora_rank` is not — that needs ~150 LOC of AST visitors (deferred to v0.4).
 
-**State predicates** are deterministic Python over `working_dirs/op_<step>/` (snapshotted by `aide_sidecar.interpreter_patch`). Generic predicates in `src/mleval/analyzer/state_predicates.py`:
+**State predicates** are deterministic Python over the trajectory's preserved artifacts (`mlevolve_runs/<ts>/` workspaces + the best node's `submission.csv`). Generic predicates in `src/mleval/analyzer/state_predicates.py`:
 - `has_best_solution`, `at_least_one_non_buggy_node`, `best_metric_finite`, `prompts_log_present`.
 
 Per-task predicates in `infra/tasks/<task>/predicates.py`:
@@ -187,7 +183,7 @@ Wall-clock (from manifest), total in/out tokens (sum of `prompts.jsonl`), error 
 | `llm_call_count` | total LLM calls (code + judge) |
 | `llm_latency` | percentile breakdown of `req_time_sec` (p50/p90/max) |
 | `step_exec_time` | wall time spent in `Interpreter.run` per step (snapshot ts deltas) |
-| `step_count` | total AIDE steps |
+| `step_count` | total search steps (nodes) |
 | `redundant_loops` | heuristic count of code re-attempts at the same sub-stage |
 | `self_correction_rate` | fraction of error-step → next-step-improves transitions |
 | `hallucination` | imports/calls that fail to resolve (rough proxy via tracebacks) |
@@ -213,19 +209,19 @@ Output of `mleval.analyzer.aggregate` is `report.{json,md}` with:
 ## Reproducibility — what we control and what we don't
 
 Controlled:
-- `random` / `numpy.random` (legacy + `default_rng`) / `torch` seeds from `$SEED` (`aide_sidecar.seed`)
+- `random` / `numpy.random` (legacy + `default_rng`) / `torch` seeds from `$SEED` (`mlevolve_sidecar.seed`)
 - `PYTHONHASHSEED`
 - LLM temperature pinned to 0
-- AIDE git SHA captured in manifest (`/opt/aide/.aide_sha`)
+- MLEvolve submodule SHA captured in manifest (`agent.version = vendored-26bde89`)
 - Image digest captured at apply time (manifest fills via pod-side env)
-- **Frozen package versions**: 278-package lockfile at `infra/agents/aide/requirements.lock` resolved once at image build inside `vllm/vllm-openai:v0.9.2`. No runtime pip install at trajectory startup (the prior per-task pip install architecture was abandoned 2026-05-25 after vllm 0.6.6 in task reqs forced torch 2.7→2.5 downgrade — see commit 72cb6bd). Pip freeze of the running container is also snapshotted to `/opt/requirements.freeze` for audit.
+- **Frozen package versions**: the curated `infra/agents/mlevolve/requirements.txt` resolved once at image build inside `vllm/vllm-openai:v0.9.2`. No runtime pip install at trajectory startup (the prior per-task pip install architecture was abandoned 2026-05-25 after vllm 0.6.6 in task reqs forced torch 2.7→2.5 downgrade — see commit 72cb6bd). A `pip freeze` of the running container is snapshotted to `pip_freeze.txt` in the output dir for audit.
 
 NOT controlled (documented limitations):
-- Network-latency-driven retry counts inside AIDE's `backoff_create` change the number of `random.*` calls between steps, which then shifts what `random.shuffle(pkgs)` returns inside AIDE's `_prompt_environment`. Bounded *within* a trajectory; can diverge *across* paired runs. Worst case: temperature-0 LLM responses still differ between cells.
-- AIDE's interpreter spawns a subprocess; its own RNG state is not seeded by our patches.
+- LLM sampling + network-latency-driven retry counts vary the RNG-call sequence between steps. Bounded *within* a trajectory; can diverge *across* paired runs. Worst case: temperature-0 LLM responses still differ between cells.
+- MLEvolve executes each node in a subprocess; the subprocess inherits `PYTHONHASHSEED`, but any RNG re-seeding inside the generated code is not controlled by our patches.
 - Token undercount: backoff retries inside a backend's `query` are merged into a single sidecar record. L3 token totals systematically undercount actual spend by O(few %).
 
-**Tool surface — AIDE has no MCP client; benchmark policies vary.** Our harness inherits AIDE's tool surface: LLM emits Python, `Interpreter` executes it, captured stdout/stderr feeds the next call. AIDE's only function-calling use is structured-output extraction of its `submit_review` schema — no general tool dispatch, no MCP client, no `web_search`. We previously claimed MLE-Bench bans MCP/web access; on careful re-read, this overstates the source:
+**Tool surface — MLEvolve has no MCP client; benchmark policies vary.** Our harness inherits MLEvolve's tool surface: the LLM emits Python, the executor runs it in a subprocess, captured stdout/stderr feeds the next call. MLEvolve's function-calling use is limited to structured-output extraction (code review, result parsing, leakage checks) — no general tool dispatch, no MCP client, no `web_search`. We previously claimed MLE-Bench bans MCP/web access; on careful re-read, this overstates the source:
 
 - **MLE-Bench paper** (arxiv 2410.07095 §2.3.1) enumerates exactly three bans: hand-labeling the submission, viewing other people's Kaggle solutions (plagiarism), and calling another external LLM API. Internet access is a *reportable variable*, not a banned one (§2.3). MCP, web browsing, and doc-lookup are not named.
 - **MLE-Bench agent-facing instructions** ([`environment/instructions.txt`](https://github.com/openai/mle-bench/blob/main/environment/instructions.txt)) restate only two of those three rules (no hand-labeling, no plagiarism). The LLM-API ban is *not* shown to the agent.
@@ -234,15 +230,15 @@ NOT controlled (documented limitations):
 - **MLAgentBench** ResearchAgent has a closed hand-coded action set (List/Read/Write/Edit/Execute/Reflect) with no web/MCP primitive — restriction by design rather than rule.
 - **DSBench** ships offline bundles with code execution only.
 
-So the "no MCP" reality is AIDE-specific (and broadly true of MLAgentBench and DSBench) rather than universally rule-enforced. The MLE-Bench-only fact is the LLM-API ban; everything else (web, MCP, doc-lookup) is permitted by container policy. For this harness specifically, `vllm-inference`'s `context7__*` MCP fallback hooks are unreachable because AIDE has no MCP client, not because MLE-Bench forbids them. The bundled `references/*.md` content carries the load the MCP fallbacks would otherwise fetch — which is why progressive-disclosure skills front-load deep material into references rather than relying solely on runtime lookup. *Future v0.4*: enabling MCP for AIDE via an HTTP-shim sidecar around `mcp.context7.com` is tracked separately and would let the skill's MCP fallback path actually fire.
+So the "no MCP" reality is MLEvolve-specific (and broadly true of MLAgentBench and DSBench) rather than universally rule-enforced. The MLE-Bench-only fact is the LLM-API ban; everything else (web, MCP, doc-lookup) is permitted by container policy. For this harness specifically, `vllm-inference`'s `context7__*` MCP fallback hooks are unreachable because MLEvolve has no MCP client, not because MLE-Bench forbids them. The bundled `references/*.md` content carries the load the MCP fallbacks would otherwise fetch — which is why progressive-disclosure skills front-load deep material into references rather than relying solely on runtime lookup. *Future work*: enabling MCP for MLEvolve via an HTTP-shim sidecar around `mcp.context7.com` is tracked separately and would let the skill's MCP fallback path actually fire.
 
 ## Infrastructure
 
 | Concern | Tool |
 |---|---|
 | Orchestration | `infra/orchestrator/run_ab.py` (pure stdlib, ~250 LOC) |
-| k8s Job lifecycle | envsubst-rendered `infra/agents/aide/job.yaml.tmpl` per trajectory |
-| Image | `ghcr.io/kkuntal990/mleval-agent:dev` (single-image, MLE-Bench-style; base `vllm/vllm-openai:v0.9.2`; deps from `requirements.lock`; built on amusing) |
+| k8s Job lifecycle | envsubst-rendered `infra/agents/mlevolve/job.yaml.tmpl` per trajectory |
+| Image | `ghcr.io/kkuntal990/mleval-agent:dev` (single-image, MLE-Bench-style; base `vllm/vllm-openai:v0.9.2`; deps from `requirements.txt`; built on amusing) |
 | Storage | `mleval-results` PVC, 1Ti CephFS RWX, `rook-cephfs` storage class |
 | Cluster | UCSD Nautilus NRP, namespace `ecepxie`, 1× RTX A6000 per trajectory |
 | Local analyzer | `src/mleval/analyzer/` (pip-installable as part of `mleval` package) |
@@ -254,8 +250,8 @@ So the "no MCP" reality is AIDE-specific (and broadly true of MLAgentBench and D
 See `CLAUDE.md` "Repo layout" section for the full tree. Stage-2-specific:
 
 ```
-src/mleval/analyzer/        adapter_aide, stage_classifier, state_predicates, metrics, pricing, aggregate
-infra/agents/aide/          Dockerfile, entrypoint.sh, run_aide.py, {job,job_cpu}.yaml.tmpl, aide_sidecar/
+src/mleval/analyzer/        adapter_mlevolve, stage_classifier, state_predicates, metrics, pricing, aggregate
+infra/agents/mlevolve/      Dockerfile, entrypoint.sh, run_mlevolve.py, job.yaml.tmpl, config.yaml, mlevolve_sidecar/, patches/, upstream/
 infra/tasks/<task>/         instruction.md, predicates.py, requirements.txt, optional data/
 infra/skills/<skill>/       SKILL.md, optional references/*.md, optional scripts/*, requirements.txt
 infra/orchestrator/         run_ab.py
@@ -282,7 +278,7 @@ Plugin-shaped by design. Per-skill / per-task / per-agent bits live in composabl
 
 | Extension axis | Cost per addition |
 |---|---|
-| New skill | `infra/skills/<name>/SKILL.md` (~50-150 lines) + optional `references/*.md` (auto-concatenated into the prompt by `skill_inject`) + optional `scripts/*` (auto-copied into AIDE's working_dir by `interpreter_patch`) |
+| New skill | `infra/skills/<name>/SKILL.md` (~50-150 lines) + optional `references/*.md` (surfaced into the prompt by `skill_injector`) + optional `scripts/*` |
 | New task | `infra/tasks/<name>/{instruction.md, predicates.py, data/}` (~100 LOC + data staging) |
 | New agent | `infra/agents/<name>/{Dockerfile, entrypoint.sh, ...}` + `src/mleval/analyzer/adapter_<name>.py` (~300 LOC) |
 | New benchmark adapter | thin wrapper around the agent's native metric (~40 LOC) |
@@ -293,7 +289,7 @@ Filesystem contracts (`trajectory.jsonl`, `prompts.jsonl`, `manifest.json`, `sta
 
 1. **Pilot task** (#88) — `llama-inference` (MLAgentBench port). `house-prices` was used for harness validation only (mvp-003).
 2. **Pilot skill** — `vllm-inference` for `llama-inference`; `tabular-baseline` was used in the mvp-003 harness validation. `peft-tuning` + `jigsaw-toxic` are staged for the follow-up.
-3. **AIDE pin** — pinned at `AIDE_REF=40dcf28fc3a39e93c7192acec0c9e2e9bffa973d`. Dockerfile uses `git init + git fetch + git checkout FETCH_HEAD` so SHAs work (branches assumed by `git clone --branch` would fail on SHAs — fix in commit 41807da).
+3. **MLEvolve pin** — vendored as a git submodule at `infra/agents/mlevolve/upstream/` pinned to SHA `26bde89`; `make docker-mlevolve` runs `git submodule update --init` then COPYs the tree into the image. Bump the submodule to upgrade.
 
 ## Open decisions remaining
 
@@ -318,7 +314,7 @@ Filesystem contracts (`trajectory.jsonl`, `prompts.jsonl`, `manifest.json`, `sta
 
 **Pipeline-stage taxonomy & ML-code analysis**: [ScienceAgentBench](https://arxiv.org/abs/2410.05080), [HeaderGen](https://arxiv.org/abs/2301.04419) ([repo](https://github.com/secure-software-engineering/HeaderGen), [EMSE 2024](https://link.springer.com/article/10.1007/s10664-024-10525-w)), [PyCG](https://arxiv.org/abs/2103.00587) ([repo](https://github.com/vitsalis/PyCG), Apache-2.0), [DataSciBench](https://arxiv.org/abs/2502.13897), [Ramasamy EMSE 2023](https://link.springer.com/article/10.1007/s10664-022-10229-z).
 
-**MLE-agent scaffolds**: [AIDE](https://github.com/WecoAI/aideml), [AIDE paper](https://arxiv.org/abs/2502.13138), [MLEvolve](https://github.com/InternScience/MLEvolve) (archived), [AutoMLGen](https://arxiv.org/abs/2510.08511), [AIRA-dojo](https://arxiv.org/abs/2507.02554), [ML-Master](https://arxiv.org/abs/2506.16499), [MLE-STAR](https://arxiv.org/abs/2506.15692), [RD-Agent](https://github.com/microsoft/RD-Agent).
+**MLE-agent scaffolds**: [MLEvolve](https://github.com/InternScience/MLEvolve), [AutoMLGen](https://arxiv.org/abs/2510.08511), [AIRA-dojo](https://arxiv.org/abs/2507.02554), [ML-Master](https://arxiv.org/abs/2506.16499), [MLE-STAR](https://arxiv.org/abs/2506.15692), [RD-Agent](https://github.com/microsoft/RD-Agent).
 
 **Eval methodology**: [Anthropic Demystifying Evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), [AppWorld](https://arxiv.org/abs/2407.18901), [TheAgentCompany](https://arxiv.org/abs/2412.14161), [Agent-as-a-Judge](https://arxiv.org/abs/2410.10934) ([repo](https://github.com/metauto-ai/agent-as-a-judge)), [Du et al. 2026](https://arxiv.org/abs/2602.22442), [RE-Bench](https://arxiv.org/abs/2411.15114), [AblationBench](https://arxiv.org/abs/2507.08038).
 

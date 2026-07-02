@@ -187,7 +187,7 @@ difference.
 \paragraph{Agent.} The agent is \textbf{MLEvolve-generic}, a Monte-Carlo graph search
 that generates, executes, and evolves candidate code nodes (a fork of AutoMLGen's search,
 pinned to a fixed commit), driven by \texttt{deepseek/deepseek-v4-pro} via OpenRouter. It
-replaced an earlier AIDE-based agent because its \emph{subprocess-per-node} execution
+replaced an earlier agent because its \emph{subprocess-per-node} execution
 avoids a fork-after-CUDA failure mode that crashed the GPU pod.
 
 \paragraph{Experimental design.} Every controllable variable is held constant across the

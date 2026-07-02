@@ -150,7 +150,7 @@ RULES = [
     # ("Max execution time per run = {naturaldelta(exec_timeout)}"). The agent
     # believes it has 9h and plans a full-epoch run, then gets SIGKILLed at the
     # real cap (spike-014: every node TimedOut). MLE-bench's own scaffold
-    # (agents/aide/additional_notes.txt) parameterizes this as ${TIME_LIMIT} and
+    # (its agent additional-notes file) parameterizes this as ${TIME_LIMIT} and
     # frames it as "program runtime counts toward this limit" — never a hardcoded
     # number. Rewrite both to reference the real per-run limit instead of "9h".
     ("agents/prompts/impl_guideline.py", "9 hours (hard limit)",
@@ -160,7 +160,7 @@ RULES = [
      "bounded by the per-run execution time limit (training + evaluation must finish within it)", True, 1),
     # --- fork-after-CUDA segfault, prompt side ---
     # Upstream impl_guideline tells the agent "Use DataLoader with num_workers>=2
-    # for speed" — inherited from AIDE's CPU-tabular origin. On our single-GPU
+    # for speed" — inherited from the prior agent's CPU-tabular origin. On our single-GPU
     # task that induces the fork-after-CUDA SIGSEGV (exit 139) that killed
     # spike-018's reruns. Steer to the safe pattern (the harness also enforces
     # num_workers=0 via _GPU_SAFETY below, but don't actively recommend the crash).

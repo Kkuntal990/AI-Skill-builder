@@ -2,7 +2,7 @@
 #
 # Build philosophy: copied from MLE-Bench's environment/Dockerfile
 # (https://github.com/openai/mle-bench/blob/main/environment/Dockerfile) +
-# our prior AIDE Dockerfile. Both converged on the same answer:
+# our prior agent's Dockerfile. Both converged on the same answer:
 #
 #   1. One base image with prebuilt wheels (CUDA runtime inside torch's
 #      own wheel — no nvcc, no cuda-toolkit apt package).

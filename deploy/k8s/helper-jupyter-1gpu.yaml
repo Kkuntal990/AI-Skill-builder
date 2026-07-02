@@ -55,7 +55,7 @@ spec:
         # /dev/shm below is medium=Memory and counts against this limit, so
         # 32Gi total = 4Gi shm + 28Gi for Python heap + HF/torch buffers.
         # mvp-010 OOMKilled at 8Gi shm + 24Gi heap; tightening shm to 4Gi
-        # buys 4 GiB more heap for Llama-7B fp16 (~13 GB) + AIDE overhead.
+        # buys 4 GiB more heap for Llama-7B fp16 (~13 GB) + agent overhead.
         # If still tight, move to a Deployment to lift the 32 GiB cap.
         limits:
           ${GPU_TYPE}: "1"
@@ -70,8 +70,8 @@ spec:
         - name: cache-volume
           mountPath: /cache
         # Notebook scratch. NOT mounted at /workspace because the image's
-        # /workspace contains the AIDE sidecar + run_aide.py shim + the editable
-        # mleval install — mounting an emptyDir there would mask all of it.
+        # /workspace contains the MLEvolve sidecar + run_mlevolve.py shim + the
+        # editable mleval install — mounting an emptyDir there would mask all of it.
         - name: workspace
           mountPath: /scratch
         - name: dev-shm
@@ -100,7 +100,7 @@ spec:
         - name: PYTORCH_CUDA_ALLOC_CONF
           value: "expandable_segments:True"
 
-        # Route AIDE's openai backend at OpenRouter (see entrypoint.sh comment).
+        # Route the agent's openai backend at OpenRouter (see entrypoint.sh comment).
         # The openai backend uses chat.completions.create when OPENAI_BASE_URL
         # is set AND the model name isn't gpt-*/o*/codex — exactly our case.
         - name: OPENAI_BASE_URL

@@ -78,7 +78,7 @@ to download anything.
 ## Hardware / runtime notes
 
 - One NVIDIA A6000 (48 GB) is available; no multi-GPU.
-- Wall-clock budget is ~60 minutes per trajectory (AIDE outer cap is shorter).
+- Wall-clock budget is ~60 minutes per trajectory (the harness outer cap is shorter).
 - The published BERT-base full-fine-tune approach takes ~20–30 min for one
   epoch on this hardware. Sub-1B encoder + PEFT (LoRA on q/v) fits in
   <8 GB and runs comparably quickly. Plan for at least a baseline + one

@@ -14,10 +14,10 @@ Designed to run *inside the container* after the agent finishes (the
 entrypoint invokes them), so the trajectory output is fully
 self-describing on the PVC. Local aggregation reads those outputs.
 
-History: an earlier ``adapter_aide`` lived here when the harness was
-AIDE-shaped. Removed when we pivoted to MLEvolve on the mlevolve-smoke
-branch. ``state_predicates`` and ``metrics`` still reference AIDE-shaped
-artifacts (journal.json fields like ``parent``/``is_buggy``/``metric.value``);
+History: this package previously shipped a second adapter for a different
+agent; it was removed when the harness standardized on MLEvolve.
+``state_predicates`` and ``metrics`` still assume the shared journal shape
+(journal.json fields like ``parent``/``is_buggy``/``metric.value``);
 those will be updated once the MLEvolve spike validates the architecture
 (see ``docs/eval/stage2.md`` MLEvolve-spike section for status).
 """

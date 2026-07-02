@@ -29,8 +29,8 @@ from collections import Counter
 logger = logging.getLogger(__name__)
 
 # Hardware string shown to the agent, mirroring MLE-bench's additional_notes
-# `Compute` line (openai/mle-bench: agents/aide/start.sh derives ${HARDWARE} from
-# `nvidia-smi --query-gpu=name` and additional_notes.txt injects
+# `Compute` line (openai/mle-bench: its agent start script derives ${HARDWARE} from
+# `nvidia-smi --query-gpu=name` and the additional-notes file injects
 # "You have access to ${HARDWARE} ..."). We extend MLE-bench by also reporting
 # VRAM (its query omits it) because that is the fact a memory-gated decision
 # (e.g. "quantize only if the model doesn't fit") actually needs. Cell-agnostic

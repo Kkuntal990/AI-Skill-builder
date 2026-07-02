@@ -35,7 +35,7 @@ Do **NOT** rebuild for changes to: `infra/tasks/*` data, `infra/skills/*` markdo
 
 - The change must be **committed and pushed** to its branch first. amusing builds from the remote, not your working tree.
 - SSH: host `amusing.ucsd.edu`, user `ad-kkokate` (NOT `kuntalkokate`). Key passphrase is the literal string `amusing`.
-- `.env` exists on amusing under `~/AI-Skill-builder/.env` (provides `IMAGE`, registry, AIDE/MLEvolve pins). Never echo its values.
+- `.env` exists on amusing under `~/AI-Skill-builder/.env` (provides `IMAGE`, registry, and other build config). Never echo its values.
 
 ## Workflow
 

@@ -76,7 +76,7 @@ def _make_traj(root: Path, cell: str, seed: int, held_score, held_valid: bool):
                 ["1a", "4b"], "x = undefined_name", 130, 9),
     ]
     _write_jsonl(d / "trajectory.jsonl", recs)
-    # AIDE-style journal the journal-direct metrics read.
+    # the journal the journal-direct metrics read.
     _write(d / "mlevolve_runs/20260101_000000_x/logs/journal.json", {
         "nodes": [
             {"id": "n0", "step": 0, "is_buggy": False, "metric": None, "exec_time": 1.0},

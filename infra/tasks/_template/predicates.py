@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 def submission_csv_present(output_dir: Path) -> bool:
-    """AIDE writes submission to working_dir; we snapshot per-step into working_dirs/."""
+    """The agent writes submission to its working dir; we snapshot per-step into working_dirs/."""
     return any(output_dir.glob("working_dirs/*/submission.csv"))
 
 
