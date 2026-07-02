@@ -61,3 +61,13 @@ pulled-results/
 # don't bloat the staging rsync to the PVC.
 infra/skills/*/evals/
 
+# LaTeX build byproducts (docs/project-overview/ compiles project-report.tex).
+# The .tex source and the rendered .pdf are tracked; these intermediates are not.
+docs/project-overview/*.aux
+docs/project-overview/*.fls
+docs/project-overview/*.fdb_latexmk
+docs/project-overview/*.out
+docs/project-overview/*.synctex.gz
+docs/project-overview/*.log
+docs/project-overview/*.toc
+
