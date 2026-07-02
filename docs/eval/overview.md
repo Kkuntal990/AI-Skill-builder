@@ -20,7 +20,7 @@ How we evaluate skills produced by `ai-skill-builder` and whether they make an M
 | Task | Domain | Metric | Status |
 |---|---|---|---|
 | `samsum` | dialogue summarization (SFT) | ROUGE-L F1 | ✅ seed 0 paired (spike-012); seed 1 running |
-| `gsm8k` | math reasoning (SFT) | exact-match accuracy | planned (instruction.md drafted; held-out grader entry + refs pending) |
+| `gsm8k` | math reasoning (SFT) | exact-match accuracy | instruction + held-out grader ready; see `infra/tasks/gsm8k/README.md` |
 | `boolq` | yes/no QA (SFT) | accuracy (on `validation` — test labels hidden) | planned (instruction.md drafted; held-out grader entry + refs pending) |
 
 **Metrics**:

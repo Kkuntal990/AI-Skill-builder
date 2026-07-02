@@ -4,7 +4,7 @@
 # macOS bash 3.2 safe: no associative arrays.
 set -u
 NS=ecepxie
-JOBS="spike-018-samsum-with-skill-s0 spike-018-samsum-without-skill-s1"
+JOBS="spike-018-samsum-with-skill-s0 spike-018-samsum-without-skill-s1 spike-018-gsm8k-with-skill-s0 spike-018-gsm8k-without-skill-s0"
 INTERVAL=300   # 5 min between polls
 TICK=0
 

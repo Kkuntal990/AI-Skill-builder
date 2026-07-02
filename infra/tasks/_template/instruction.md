@@ -4,10 +4,11 @@
 Copy this dir to infra/tasks/<task>/, fill the <...> placeholders, delete this
 banner. Schema + rationale: docs/eval/task-authoring.md.
 
-This file is the TASK-SPECIFIC contract only. The shared, task-agnostic rules
-(provided-data-only, no fabricated answers, fixed submission path, validate
-tool, submission-is-the-score, resource budget) are prepended automatically at
-run time from infra/tasks/_harness_rules.md — do NOT restate them here.
+This file is the TASK-SPECIFIC contract only. Shared harness rules (provided-data-only,
+submission path, validate tool, held-out grading) are injected via MLEvolve
+implementation guidelines on every node (both A/B cells) — see
+infra/tasks/_harness_rules.md (mirror of mlevolve_sidecar/eval_harness.py).
+Do NOT restate them here.
 
 Held-out design (C3): the agent gets train (with labels) + test INPUTS ONLY
 (targets stripped) + sample_submission.csv; the test targets live privately in

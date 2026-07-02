@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<title>Stage-2 A/B — Full 3-Layer Metric Report</title>
+<style>
+  :root{
+    --ink:#14181d; --paper:#f4f6f8; --panel:#ffffff;
+    --muted:#616b76; --faint:#8b95a0;
+    --line:#e3e7ec; --line-strong:#ccd3da;
+    --accent:#1f6f78; --accent-soft:#e5f0f0; --accent-ink:#134a51;
+    --with:#1f6f78; --with-soft:#e5f0f0;
+    --without:#4a5b74; --without-soft:#e9edf3;
+    --good:#2e7d5b; --good-soft:#e5f2ea;
+    --bad:#b1432c; --bad-soft:#f6e6e1;
+    --warn:#9a6b12; --warn-soft:#f5ecd9;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype","Palatino",Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;
+    -webkit-font-smoothing:antialiased;margin:0}
+  .wrap{max-width:1180px;margin:0 auto;padding:clamp(20px,4vw,56px) clamp(16px,3vw,32px) 96px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);font-weight:600}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(28px,4.4vw,44px);line-height:1.08;
+    letter-spacing:-.01em;text-wrap:balance;margin:.35em 0 .2em}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(21px,2.6vw,27px);letter-spacing:-.01em;
+    text-wrap:balance;margin:0}
+  h3{font-family:var(--sans);font-weight:650;font-size:15px;letter-spacing:.01em;margin:0 0 2px}
+  p{margin:.5em 0}
+  .lede{font-size:17px;color:#39424c;max-width:70ch}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  section{margin-top:52px;scroll-margin-top:16px}
+  .sec-head{display:flex;align-items:baseline;gap:14px;border-top:2px solid var(--ink);
+    padding-top:12px;margin-bottom:18px}
+  .sec-head .n{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--accent)}
+  .sec-head .sub{margin-left:auto;font-size:13px;color:var(--muted);font-family:var(--mono)}
+  .note{color:var(--muted);font-size:13.5px;max-width:78ch}
+
+  /* summary cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 17px;
+    display:flex;flex-direction:column;gap:8px}
+  .card .task{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .card .metricname{font-size:12px;color:var(--faint)}
+  .card .lift{font-family:var(--serif);font-size:34px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
+  .card .lift.pos{color:var(--good)} .card .lift.neg{color:var(--bad)} .card .lift.na{color:var(--faint)}
+  .card .pairline{font-size:12.5px;color:var(--muted)}
+  .card .valids{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+
+  /* chips */
+  .chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;
+    padding:2px 7px;border-radius:999px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+  .chip.with{background:var(--with-soft);color:var(--accent-ink);border-color:#cfe4e4}
+  .chip.without{background:var(--without-soft);color:#33415a;border-color:#d5dce6}
+  .chip.valid{background:var(--good-soft);color:#1f5a41;border-color:#c7e2d3}
+  .chip.invalid{background:var(--bad-soft);color:#8a3320;border-color:#eccabd}
+  .chip.crash{background:var(--warn-soft);color:#75510d;border-color:#e7d6ab}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+
+  /* tables */
+  .twrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  caption{caption-side:top;text-align:left;font-family:var(--sans);font-weight:650;font-size:14px;
+    padding:12px 14px 4px;color:var(--ink)}
+  thead th{position:sticky;top:0;background:#eef1f4;text-align:right;font-family:var(--mono);
+    font-weight:600;font-size:11px;letter-spacing:.02em;color:#3c454f;padding:9px 11px;
+    border-bottom:1px solid var(--line-strong);white-space:nowrap}
+  thead th:first-child,tbody th{text-align:left}
+  tbody th{font-weight:600;font-family:var(--sans);font-size:12.5px;padding:8px 11px;white-space:nowrap;
+    position:sticky;left:0;background:var(--panel)}
+  td{padding:8px 11px;text-align:right;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  tbody tr:hover td,tbody tr:hover th{background:#f7f9fb}
+  tbody tr:last-child td{border-bottom:none}
+  .grp td{background:#f0f3f6;font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);text-align:left;font-weight:600}
+  .num-bad{color:var(--bad)} .num-good{color:var(--good)} .num-muted{color:var(--faint)}
+  .lead{font-weight:700}
+  .u{color:var(--faint)} /* unavailable */
+
+  /* definition list for catalog */
+  .cat{display:grid;gap:10px}
+  .cat .row{display:grid;grid-template-columns:170px 1fr;gap:14px;padding:10px 12px;background:var(--panel);
+    border:1px solid var(--line);border-radius:9px}
+  .cat .key{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--accent-ink)}
+  .cat .def{font-size:13.5px;color:#39424c}
+  .cat .def .src{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .layerband{display:flex;align-items:baseline;gap:12px;margin:22px 0 10px}
+  .layerband .lz{font-family:var(--mono);font-weight:700;color:var(--accent);font-size:13px}
+  .layerband .lt{font-family:var(--serif);font-size:19px;font-weight:600}
+  .layerband .lq{margin-left:auto;font-size:12.5px;color:var(--muted);font-style:italic}
+
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:10px 2px 0}
+  .legend .sw{width:22px;height:12px;border-radius:3px;display:inline-block;vertical-align:middle;margin-right:5px}
+  .reachcell{font-size:12px}
+  .reachcell .ct{color:inherit;opacity:.72;font-size:10.5px}
+  footer{margin-top:64px;border-top:1px solid var(--line);padding-top:16px;color:var(--faint);
+    font-family:var(--mono);font-size:11.5px;line-height:1.7}
+  a.jump{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid #bcd6d6}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+  .toc a{font-family:var(--mono);font-size:12px;text-decoration:none;color:var(--accent-ink);
+    background:var(--accent-soft);border:1px solid #cfe4e4;border-radius:999px;padding:4px 11px}
+  @media (max-width:640px){.cat .row{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Skill-Evaluation Framework · Stage 2 · Paired A/B</div>
+    <h1>Does the skill make the agent better — and where?</h1>
+    <p class="lede">Complete three-layer metric report across every trajectory of the latest run for each
+      task, valid or invalid. L1 asks <em>did it win</em>, L2 asks <em>where in the pipeline</em>, L3 asks
+      <em>at what cost</em>.</p>
+    <div class="meta">
+      <span>gsm8k · boolq&nbsp;<b>mvp-032</b></span>
+      <span>samsum&nbsp;<b>spike-018</b></span>
+      <span>agent&nbsp;<b>MLEvolve</b></span>
+      <span>model&nbsp;<b>deepseek-v4-pro</b></span>
+      <span>source&nbsp;<b>held_out_score.json + report.json (PVC)</b></span>
+      <span>generated&nbsp;<b>2026-07-01</b></span>
+    </div>
+    <div class="toc">
+      <a class="jump" href="#summary">Verdict</a>
+      <a class="jump" href="#catalog">Metric catalog</a>
+      <a class="jump" href="#l1">L1 · Outcome</a>
+      <a class="jump" href="#l2">L2 · Stage attribution</a>
+      <a class="jump" href="#l3">L3 · Cost / effort</a>
+      <a class="jump" href="#caveats">Caveats</a>
+    </div>
+  </header>
+
+  <section id="summary">
+    <div class="sec-head"><span class="n">◆</span><h2>Verdict</h2>
+      <span class="sub">paired same-seed Lift = with − without</span></div>
+    <div class="cards" id="cards"></div>
+    <p class="note" style="margin-top:14px">Only same-seed pairs where <em>both</em> cells produced a valid held-out
+      score count toward Lift. <span class="chip valid" style="font-size:10px">valid</span> = held-out grader scored a
+      real submission; <span class="chip invalid" style="font-size:10px">invalid</span> = no gradeable artifact.
+      The last job to finish, <span style="font-family:var(--mono)">gsm8k-with-skill-s0</span>, came back invalid and is included below.</p>
+  </section>
+
+  <section id="catalog">
+    <div class="sec-head"><span class="n">▤</span><h2>What each layer measures</h2>
+      <span class="sub">every metric the analyzer computes</span></div>
+    <p class="note">Taxonomy per <span style="font-family:var(--mono)">docs/eval/stage2.md</span>. Boundary: L2 is
+      per-stage attribution, L3 is trajectory aggregates. Derivations live in
+      <span style="font-family:var(--mono)">src/mleval/analyzer/</span>.</p>
+    <div id="catalog-body"></div>
+  </section>
+
+  <section id="l1">
+    <div class="sec-head"><span class="n">L1</span><h2>Outcome</h2><span class="sub">did the skill solve it better?</span></div>
+    <div class="twrap" style="margin-bottom:16px"><table id="sweep"></table></div>
+    <div class="twrap"><table id="l1t"></table></div>
+    <p class="note" style="margin-top:12px"><b>best_metric</b> is the trustworthy held-out grader score.
+      <b>self-reported</b> is MLEvolve's internal stdout scalar (drives its search, gameable) — a wide gap flags
+      off-task drift (e.g. gsm8k-without-s0: self 0.784 vs held 0.662).</p>
+  </section>
+
+  <section id="l2">
+    <div class="sec-head"><span class="n">L2</span><h2>Stage attribution</h2><span class="sub">where in the 6×16 pipeline?</span></div>
+
+    <div class="layerband"><span class="lz">L2a</span><span class="lt">Stage-distribution shift (χ²)</span>
+      <span class="lq">over the 16 sub-stage activity counts</span></div>
+    <div class="twrap"><table id="chi"></table></div>
+
+    <div class="layerband"><span class="lz">L2a</span><span class="lt">Sub-stage activity — node touches</span>
+      <span class="lq">sub_stage_counts · how many nodes touched each stage</span></div>
+    <div class="twrap"><table id="activity"></table></div>
+
+    <div class="layerband"><span class="lz">L2a</span><span class="lt">Clean-reach — clean nodes / nodes touching stage</span>
+      <span class="lq">where the agent gets each stage right</span></div>
+    <div class="twrap"><table id="reach"></table></div>
+    <div class="legend" id="reachlegend"></div>
+
+    <div class="layerband"><span class="lz">L2b</span><span class="lt">State predicates &amp; process quality</span>
+      <span class="lq">4 generic predicates + trajectory-level process derivations</span></div>
+    <div class="twrap"><table id="l2b"></table></div>
+    <p class="note" style="margin-top:12px"><b>failure-modes</b> = exc_type over buggy nodes.
+      <b>rework</b> per sub-stage = touches − 1 (read off the activity table).
+      <b>skill_api_adoption</b> is null everywhere: these runs' manifests predate <span style="font-family:var(--mono)">cell.skill_path</span>,
+      so the extractor can't resolve the skill dir (fixable by re-running with <span style="font-family:var(--mono)">MLEVAL_SKILL_DIR_NAME</span>).
+      <b>L2c</b> (evidence-grounded LLM judge) is default-OFF and was not run.</p>
+  </section>
+
+  <section id="l3">
+    <div class="sec-head"><span class="n">L3</span><h2>Cost &amp; effort</h2><span class="sub">slower or more expensive?</span></div>
+    <div class="twrap"><table id="l3t"></table></div>
+    <p class="note" style="margin-top:12px">Tokens/cost from <span style="font-family:var(--mono)">prompts.jsonl</span> ×
+      <span style="font-family:var(--mono)">pricing.py</span> (undercounts backoff retries by O(few %)).
+      LLM-latency = per-call wall time; step-exec = interpreter node exec time (excludes LLM).
+      samsum wall-clock is null (backfilled manifests carry no timestamps).</p>
+  </section>
+
+  <section id="caveats">
+    <div class="sec-head"><span class="n">⚑</span><h2>Reading notes &amp; caveats</h2></div>
+    <ul class="note" style="line-height:1.7">
+      <li><b>Pooled mvp-032 Lift mixes metrics.</b> The tool averages boolq (accuracy) and gsm8k (exact_match)
+        pairs into one number (−0.069). Read per-task: boolq +0.064 mean, gsm8k −0.334 (n=1). The cards above are per-task.</li>
+      <li><b>Unbalanced valid seeds.</b> gsm8k with-skill valid on {s1,s2}, without-skill valid on {s0,s2} — only s2 pairs.
+        boolq is the only fully-paired task (both seeds, both cells).</li>
+      <li><b>Two samsum trajectories were backfilled post-hoc</b> (with-s0, without-s1) — they never ran finalize, so
+        their analyzer artifacts were regenerated from the surviving journal; status shows <span class="chip crash" style="font-size:10px">crashed</span>.</li>
+      <li><b>gsm8k-with-skill-s1</b> is the 17h run recovered after an OOM+restart (status crashed, wall 2874s reflects the truncated restart, not the graded 17h work).</li>
+    </ul>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+"use strict";
+// ---------- data ----------
+// cell: 'with'|'without'; v: validity 'valid'|'invalid'; st: status
+const TRAJ = [
+ {code:"bq-w0",task:"boolq",cell:"with",seed:0,st:"completed",v:"valid",best:0.8679,self:0.871,tin:80240,tout:3824,cost:0.03507,calls:39,lp50:19.6,lp95:122.5,lmax:197.9,ep50:5686,ep95:21604,etot:54702,steps:7,err:4,red:2,fix:0.333,hn:1,he:4,fsub:4,preds:"4/4",wall:64801,modes:"Name×1, Timeout×2, Value×1",unc:0},
+ {code:"bq-w1",task:"boolq",cell:"with",seed:1,st:"completed",v:"valid",best:0.8798,self:0.897,tin:34564,tout:1224,cost:0.01817,calls:23,lp50:15.0,lp95:135.1,lmax:260.8,ep50:17171,ep95:17437,etot:48599,steps:4,err:1,red:0,fix:1.0,hn:0,he:1,fsub:2,preds:"4/4",wall:64801,modes:"Unknown×1",unc:0},
+ {code:"bq-o0",task:"boolq",cell:"without",seed:0,st:"completed",v:"valid",best:0.7364,self:0.746,tin:124333,tout:43193,cost:0.08705,calls:53,lp50:37.7,lp95:206.9,lmax:912.0,ep50:3974,ep95:8943,etot:41916,steps:11,err:3,red:0,fix:1.0,hn:0,he:3,fsub:2,preds:"4/4",wall:64802,modes:"Runtime×1, Unknown×2",unc:0},
+ {code:"bq-o1",task:"boolq",cell:"without",seed:1,st:"completed",v:"valid",best:0.8835,self:0.901,tin:149612,tout:9752,cost:0.05838,calls:64,lp50:28.0,lp95:196.1,lmax:465.6,ep50:5446,ep95:7065,etot:57424,steps:13,err:3,red:1,fix:0.667,hn:0,he:3,fsub:1,preds:"4/4",wall:64801,modes:"Unknown×1, Value×2",unc:0},
+ {code:"gs-w0",task:"gsm8k",cell:"with",seed:0,st:"completed",v:"invalid",best:null,self:null,tin:66295,tout:35920,cost:0.06606,calls:34,lp50:31.5,lp95:576.6,lmax:922.9,ep50:1742,ep95:21604,etot:45106,steps:6,err:5,red:3,fix:0.0,hn:0,he:5,fsub:null,preds:"3/4",wall:64801,modes:"Runtime×3, Timeout×2",unc:0,last:true},
+ {code:"gs-w1",task:"gsm8k",cell:"with",seed:1,st:"crashed",v:"valid",best:0.6634,self:0.736,tin:33138,tout:2444,cost:0.02101,calls:32,lp50:29.1,lp95:132.3,lmax:226.3,ep50:15379,ep95:20981,etot:46665,steps:4,err:1,red:0,fix:1.0,hn:0,he:1,fsub:1,preds:"4/4",wall:2874,modes:"Timeout×1",unc:0,recovered:true},
+ {code:"gs-w2",task:"gsm8k",cell:"with",seed:2,st:"completed",v:"valid",best:0.1698,self:0.196,tin:17561,tout:1265,cost:0.01394,calls:17,lp50:39.7,lp95:122.8,lmax:123.7,ep50:19973,ep95:21440,etot:39946,steps:3,err:1,red:0,fix:null,hn:0,he:1,fsub:1,preds:"4/4",wall:64805,modes:"Timeout×1",unc:0},
+ {code:"gs-o0",task:"gsm8k",cell:"without",seed:0,st:"completed",v:"valid",best:0.6619,self:0.784,tin:53391,tout:1870,cost:0.05789,calls:30,lp50:30.8,lp95:377.1,lmax:499.7,ep50:7305,ep95:20893,etot:47035,steps:6,err:4,red:2,fix:0.0,hn:0,he:4,fsub:4,preds:"4/4",wall:64801,modes:"Timeout×1, Unknown×1, Value×2",unc:0},
+ {code:"gs-o1",task:"gsm8k",cell:"without",seed:1,st:"completed",v:"invalid",best:null,self:null,tin:37397,tout:1293,cost:0.01798,calls:25,lp50:48.0,lp95:153.9,lmax:303.0,ep50:15210,ep95:21604,etot:53929,steps:5,err:4,red:2,fix:0.0,hn:0,he:4,fsub:null,preds:"3/4",wall:64801,modes:"Timeout×2, Unknown×1, Value×1",unc:0},
+ {code:"gs-o2",task:"gsm8k",cell:"without",seed:2,st:"completed",v:"valid",best:0.5034,self:0.56,tin:74505,tout:3307,cost:0.07491,calls:32,lp50:40.3,lp95:273.4,lmax:494.5,ep50:10140,ep95:19785,etot:56247,steps:7,err:3,red:0,fix:1.0,hn:1,he:3,fsub:2,preds:"4/4",wall:64802,modes:"Name×1, Timeout×1, Value×1",unc:0},
+ {code:"sm-w0",task:"samsum",cell:"with",seed:0,st:"crashed",v:"valid",best:0.4075,self:0.4174,tin:279884,tout:26573,cost:0.11052,calls:123,lp50:19.9,lp95:112.3,lmax:186.5,ep50:1709,ep95:1814,etot:17949,steps:13,err:3,red:2,fix:0.5,hn:0,he:3,fsub:null,preds:"3/4",wall:null,modes:"Runtime×1, Timeout×1, Type×1",unc:0,backfill:true},
+ {code:"sm-w1",task:"samsum",cell:"with",seed:1,st:"completed",v:"valid",best:0.2877,self:0.3015,tin:286044,tout:28484,cost:0.11234,calls:109,lp50:15.6,lp95:141.9,lmax:326.7,ep50:994,ep95:1812,etot:17280,steps:21,err:13,red:4,fix:0.6,hn:1,he:13,fsub:4,preds:"4/4",wall:null,modes:"Runtime×4, Timeout×4, Name×1, Value×1",unc:3},
+ {code:"sm-o0",task:"samsum",cell:"without",seed:0,st:"completed",v:"valid",best:0.2271,self:0.2331,tin:329338,tout:37513,cost:0.13364,calls:115,lp50:22.4,lp95:155.0,lmax:433.3,ep50:32.5,ep95:1807,etot:9246,steps:21,err:18,red:12,fix:0.143,hn:0,he:18,fsub:5,preds:"2/4",wall:null,modes:"Runtime×7, Timeout×4, Value×2",unc:5},
+ {code:"sm-o1",task:"samsum",cell:"without",seed:1,st:"crashed",v:"invalid",best:null,self:null,tin:146491,tout:17999,cost:0.06466,calls:59,lp50:19.8,lp95:149.1,lmax:234.7,ep50:24.4,ep95:1805,etot:3657,steps:7,err:1,red:5,fix:0.0,hn:0,he:1,fsub:null,preds:"3/4",wall:null,modes:"Timeout×1",unc:0,backfill:true},
+];
+// sub-stage clean/touches per trajectory: [clean, touches]
+const SUB = {
+ "bq-w0":{"3b":[0,3],"3c":[2,6],"4a":[0,3],"4b":[2,6],"6b":[2,6],"6c":[2,6]},
+ "bq-w1":{"3c":[2,3],"4a":[2,3],"4b":[2,3],"6a":[2,3],"6b":[2,3],"6c":[2,3]},
+ "bq-o0":{"2b":[0,1],"3c":[7,10],"4a":[7,10],"4b":[7,10],"6b":[3,5],"6c":[7,10]},
+ "bq-o1":{"2b":[9,12],"3c":[8,11],"4a":[9,12],"4b":[9,12],"6b":[9,12],"6c":[9,12]},
+ "gs-w0":{"3c":[0,5],"4a":[0,3],"4b":[0,5],"6b":[0,5],"6c":[0,5]},
+ "gs-w1":{"3c":[2,3],"4a":[2,3],"4b":[2,3],"6b":[2,3],"6c":[2,3]},
+ "gs-w2":{"3c":[1,2],"4a":[1,2],"4b":[1,2],"6b":[1,2],"6c":[1,2]},
+ "gs-o0":{"3c":[1,5],"4a":[0,3],"4b":[1,5],"6b":[1,5],"6c":[1,5]},
+ "gs-o1":{"3c":[0,3],"4a":[0,4],"4b":[0,4],"6b":[0,4],"6c":[0,4]},
+ "gs-o2":{"3c":[3,6],"4b":[3,6],"6b":[3,6],"6c":[3,6]},
+ "sm-w0":{"1a":[0,3],"3c":[0,3],"4a":[0,3],"4b":[0,3],"6a":[0,3],"6b":[0,3],"6c":[0,3]},
+ "sm-w1":{"1a":[7,17],"3b":[1,3],"3c":[7,17],"4a":[7,17],"4b":[7,17],"6a":[7,17],"6b":[7,17],"6c":[7,17]},
+ "sm-o0":{"1a":[2,15],"3c":[2,15],"4a":[2,15],"4b":[2,15],"6a":[2,15],"6b":[2,15],"6c":[2,15]},
+ "sm-o1":{"1a":[0,1],"3c":[0,1],"4a":[0,1],"4b":[0,1],"6b":[0,1],"6c":[0,1]},
+};
+const SUBLABEL = {"1a":"data-loading","1b":"EDA","2a":"cleaning","2b":"split/valid","2c":"feature-eng",
+ "3a":"architecture","3b":"loss","3c":"adapter-cfg","4a":"optimizer","4b":"training-loop","4c":"pref-opt",
+ "5a":"HPO","6a":"held-out-eval","6b":"inference/merge","6c":"submission"};
+const SUBORDER = ["1a","2b","3b","3c","4a","4b","6a","6b","6c"];
+// sweep-level per task
+const SWEEP = {
+ boolq:{metric:"accuracy",pairs:[{seed:0,w:0.8679,o:0.7364},{seed:1,w:0.8798,o:0.8835}],
+   liftmean:0.06391,wmean:0.8739,omean:0.8100,chi:null},
+ gsm8k:{metric:"exact_match",pairs:[{seed:2,w:0.1698,o:0.5034}],
+   liftmean:-0.33359,wmean:null,omean:null,chi:null,note:"only s2 pairs (s0 with-invalid, s1 without-invalid)"},
+ samsum:{metric:"rougeL_f",pairs:[{seed:0,w:0.4075,o:0.2271}],
+   liftmean:0.18035,wmean:0.3476,omean:0.2271,chi:null},
+};
+// per-run χ² (from stage_chi_square, over sub_stage_counts)
+const CHI = [
+ {run:"mvp-032",scope:"boolq + gsm8k",chi2:18.531,dof:7,p:0.00979,nst:8,cpl:{k:-0.000248,usd:-0.4447}},
+ {run:"spike-018",scope:"samsum",chi2:2.387,dof:7,p:0.93534,nst:8,cpl:{k:0.000290,usd:0.8092}},
+];
+const CATALOG = [
+ {layer:"L1", title:"Outcome — did the skill solve the task better?", q:"paired with − without, mean + 95% CI", items:[
+   ["best_metric","Held-out grader score on withheld references — the trustworthy A/B outcome. <span class='src'>grader/*, aggregate</span>"],
+   ["self_reported_metric","MLEvolve's internal stdout scalar that drives its tree search. Gameable; kept only for drift diagnostics. <span class='src'>journal metric.value</span>"],
+   ["held_out_valid","Whether the grader scored a real submission (else the outcome is None). <span class='src'>held_out_score.json</span>"],
+   ["cell mean","Mean best_metric per cell (with_skill / without_skill), per task."],
+   ["paired Lift","(with − without) per (task, seed) where both are valid. <span class='src'>aggregate.paired_lifts</span>"],
+   ["lift_mean / stdev / CI95","Mean Lift across pairs, sample stdev, 1.96·σ/√n half-width. <span class='src'>aggregate</span>"],
+   ["cost_normalized_lift","Lift per 1k with-skill tokens and per with-skill $ — counters 'win by spending more'. <span class='src'>metrics.cost_normalized_lift</span>"],
+ ]},
+ {layer:"L2a", title:"Sub-stage activity — where in the pipeline", q:"6 top-level × 16 sub-stages, multi-label", items:[
+   ["stage_counts","Node count per MCGS search stage: root · draft · debug · improve · evolution. <span class='src'>trajectory.stage</span>"],
+   ["sub_stage_counts","Node touches per pipeline sub-stage (1a…6c) via AST imports/calls, multi-label. <span class='src'>stage_classifier.all_sub_stages</span>"],
+   ["stage_chi_square","χ² test of the sub-stage activity distribution, with_skill vs without_skill (χ², dof, p, n_stages). <span class='src'>metrics.stage_chi_square</span>"],
+   ["clean_reach","Of nodes touching stage s, fraction that ran clean: clean(s)/touches(s). 'Gets it right.' <span class='src'>stage_metrics</span>"],
+   ["rework / rework_edges","Re-attempts of stage s beyond the first: touches−1 (and the parent-edge self-loop form). 'Thrash.' <span class='src'>stage_metrics</span>"],
+   ["fail_modes","Distribution of exc_type over buggy nodes touching stage s. 'Which errors live here.' <span class='src'>stage_metrics</span>"],
+ ]},
+ {layer:"L2b", title:"State predicates & process quality", q:"free, no LLM", items:[
+   ["state predicates (4)","has_best_solution · at_least_one_non_buggy_node · best_metric_finite · prompts_log_present (+ per-task). <span class='src'>state_predicates</span>"],
+   ["redundant_loops","Debug edges where child AND parent are both buggy — patching broken code that stays broken. <span class='src'>metrics.redundant_loops</span>"],
+   ["self_correction_rate","Of debug attempts (parent buggy), fraction yielding a clean child. <span class='src'>metrics.self_correction_rate</span>"],
+   ["hallucination","Fraction of buggy nodes whose exc is Import/Module/Name/Attribute error — invented symbols. <span class='src'>metrics.hallucination_rate</span>"],
+   ["first_valid_submission","Earliest step with a valid submission (trajectory.is_valid). <span class='src'>metrics.time_to_first_valid_submission</span>"],
+   ["convergence","Per-step best-metric-so-far curve (+ maximize flag). <span class='src'>metrics.convergence_curve</span>"],
+   ["skill_api_adoption","Fraction of code-gen steps using ≥1 skill-recommended API (imports∪calls). with_skill only. <span class='src'>metrics.skill_api_adoption</span>"],
+ ]},
+ {layer:"L2c", title:"Evidence-grounded LLM judge", q:"DEFAULT OFF — not run", items:[
+   ["choice-quality judge","Agent-as-a-Judge over per-stage evidence. Enabled only if L2a+L2b fail to discriminate cells (~3M tokens). Not computed for these runs."],
+ ]},
+ {layer:"L3", title:"Trajectory cost & effort", q:"aggregates only", items:[
+   ["cost_usd","Σ tokens × per-model OpenRouter price. <span class='src'>metrics.cost_usd + pricing.py</span>"],
+   ["input_tokens / output_tokens","Summed prompt / completion tokens across all LLM calls. <span class='src'>trajectory llm_total_*_tokens</span>"],
+   ["llm_call_count","Number of LLM calls logged. <span class='src'>prompts.jsonl</span>"],
+   ["llm_latency","Per-call wall time p50 / p95 / max (seconds). <span class='src'>metrics.llm_latency</span>"],
+   ["step_exec_time","Interpreter node exec time p50 / p95 / total (seconds, excludes LLM). <span class='src'>metrics.step_exec_time</span>"],
+   ["step_count","Journal nodes = code-gen/exec steps (path length). <span class='src'>metrics.step_count</span>"],
+   ["wall_clock_sec","Pod wall clock from manifest timestamps. <span class='src'>manifest</span>"],
+   ["error_nodes","Count of buggy nodes in the trajectory."],
+ ]},
+];
+
+// ---------- helpers ----------
+const $=(s)=>document.querySelector(s);
+const el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+const f=(x,d=3)=>x==null?'<span class="u">—</span>':Number(x).toFixed(d);
+const f4=(x)=>x==null?'<span class="u">—</span>':Number(x).toFixed(4);
+const money=(x)=>x==null?'<span class="u">—</span>':'$'+Number(x).toFixed(4);
+const K=(x)=>x==null?'<span class="u">—</span>':Number(x).toLocaleString('en-US');
+const pct=(x,d=0)=>x==null?'<span class="u">—</span>':(Number(x)*100).toFixed(d)+'%';
+const cellChip=(c)=>`<span class="chip ${c}">${c==='with'?'with-skill':'without-skill'}</span>`;
+const vChip=(v)=>`<span class="chip ${v}">${v}</span>`;
+const sChip=(s)=>s==='crashed'?'<span class="chip crash">crashed</span>':`<span class="u">${s}</span>`;
+const seedTag=(s)=>`<span style="color:var(--faint)">s${s}</span>`;
+function reachStyle(r){ if(r==null) return {bg:'transparent',fg:'var(--faint)'}; const h=8+r*140; return {bg:`hsl(${h} 55% 93%)`,fg:`hsl(${h} 62% 27%)`}; }
+
+// ---------- verdict cards ----------
+(function(){
+ const wrap=$("#cards");
+ for(const t of ["boolq","gsm8k","samsum"]){
+   const s=SWEEP[t];
+   const lm=s.liftmean, sign=lm>0?'pos':(lm<0?'neg':'na');
+   const arr=lm>0?'▲':(lm<0?'▼':'·');
+   const trs=TRAJ.filter(x=>x.task===t);
+   const nWvalid=trs.filter(x=>x.cell==='with'&&x.v==='valid').length;
+   const nWall=trs.filter(x=>x.cell==='with').length;
+   const nOvalid=trs.filter(x=>x.cell==='without'&&x.v==='valid').length;
+   const nOall=trs.filter(x=>x.cell==='without').length;
+   const c=el("div","card");
+   c.innerHTML=`
+     <div class="task">${t}</div>
+     <div class="metricname">${s.metric} · ${s.pairs.length} valid pair${s.pairs.length>1?'s':''}</div>
+     <div class="lift ${sign}">${arr} ${lm>0?'+':''}${lm.toFixed(3)}</div>
+     <div class="pairline">${s.pairs.map(p=>`s${p.seed}: ${p.w.toFixed(3)} vs ${p.o.toFixed(3)}`).join(' · ')}</div>
+     <div class="valids">
+       <span class="chip with">with ${nWvalid}/${nWall} valid</span>
+       <span class="chip without">without ${nOvalid}/${nOall} valid</span>
+     </div>`;
+   wrap.appendChild(c);
+ }
+})();
+
+// ---------- catalog ----------
+(function(){
+ const b=$("#catalog-body");
+ for(const g of CATALOG){
+   const band=el("div","layerband");
+   band.innerHTML=`<span class="lz">${g.layer}</span><span class="lt">${g.title}</span><span class="lq">${g.q}</span>`;
+   b.appendChild(band);
+   const cat=el("div","cat");
+   for(const [k,d] of g.items){
+     const row=el("div","row");
+     row.innerHTML=`<div class="key">${k}</div><div class="def">${d}</div>`;
+     cat.appendChild(row);
+   }
+   b.appendChild(cat);
+ }
+})();
+
+// ---------- L1 sweep ----------
+(function(){
+ const t=$("#sweep");
+ t.innerHTML=`<caption>Sweep-level outcome — per task</caption>
+  <thead><tr><th>Task</th><th>metric</th><th>valid pairs</th><th>with mean</th><th>without mean</th>
+   <th>mean Lift</th><th>Lift / $ (with)</th><th>χ² p (L2a)</th></tr></thead><tbody></tbody>`;
+ const tb=t.querySelector("tbody");
+ const chiByTask={boolq:CHI[0],gsm8k:CHI[0],samsum:CHI[1]};
+ for(const task of ["boolq","gsm8k","samsum"]){
+   const s=SWEEP[task], ch=chiByTask[task];
+   const cpl = task==='samsum'?CHI[1].cpl.usd:CHI[0].cpl.usd;
+   const lm=s.liftmean, cls=lm>0?'num-good':'num-bad';
+   const tr=el("tr");
+   tr.innerHTML=`<th>${task}</th><td>${s.metric}</td><td>${s.pairs.length}</td>
+     <td>${f(s.wmean)}</td><td>${f(s.omean)}</td>
+     <td class="lead ${cls}">${lm>0?'+':''}${lm.toFixed(3)}</td>
+     <td class="${cpl>0?'num-good':'num-bad'}">${cpl>0?'+':''}${cpl.toFixed(3)}</td>
+     <td>${ch.p.toFixed(3)}</td>`;
+   tb.appendChild(tr);
+ }
+})();
+
+// ---------- generic per-trajectory table builder ----------
+function groupRows(tbody, cols, cellFn){
+ let lastTask=null;
+ for(const r of TRAJ){
+   if(r.task!==lastTask){
+     lastTask=r.task;
+     const g=el("tr","grp");
+     g.innerHTML=`<td colspan="${cols+1}">${r.task} — ${SWEEP[r.task].metric}</td>`;
+     tbody.appendChild(g);
+   }
+   const tr=el("tr");
+   tr.innerHTML=cellFn(r);
+   tbody.appendChild(tr);
+ }
+}
+
+// ---------- L1 per-trajectory ----------
+(function(){
+ const t=$("#l1t");
+ t.innerHTML=`<caption>Per-trajectory outcome (L1)</caption>
+  <thead><tr><th>Trajectory</th><th>cell</th><th>seed</th><th>status</th><th>held-out</th>
+   <th>self-rep</th><th>valid</th><th>Δ vs pair</th></tr></thead><tbody></tbody>`;
+ groupRows(t.querySelector("tbody"),7,(r)=>{
+   // find pair partner delta if this is a valid with cell
+   let delta='<span class="u">—</span>';
+   const s=SWEEP[r.task];
+   const p=s.pairs.find(p=>p.seed===r.seed);
+   if(p){ const d=(r.cell==='with')?(p.w-p.o):(p.o-p.w);
+     delta=`<span class="${d>0?'num-good':'num-bad'}">${d>0?'+':''}${d.toFixed(3)}</span>`; }
+   const flags=(r.last?' <span class="chip crash" title="last job to finish">last</span>':'')+
+               (r.recovered?' <span class="chip crash" title="recovered from OOM">recovered</span>':'')+
+               (r.backfill?' <span class="chip crash" title="analyzer backfilled">backfill</span>':'');
+   return `<th>${r.code}${flags}</th><td>${cellChip(r.cell)}</td><td>${seedTag(r.seed)}</td>
+     <td>${sChip(r.st)}</td><td class="lead">${f4(r.best)}</td><td>${f(r.self,3)}</td>
+     <td>${vChip(r.v)}</td><td>${delta}</td>`;
+ });
+})();
+
+// ---------- L2a χ² ----------
+(function(){
+ const t=$("#chi");
+ t.innerHTML=`<caption>Stage-distribution shift — χ² over 16 sub-stage counts (with vs without)</caption>
+  <thead><tr><th>Run</th><th>scope</th><th>χ²</th><th>dof</th><th>p (approx)</th><th>n stages</th>
+   <th>Lift / 1k tok</th><th>Lift / $</th></tr></thead><tbody></tbody>`;
+ const tb=t.querySelector("tbody");
+ for(const c of CHI){
+   const sig=c.p<0.05;
+   const tr=el("tr");
+   tr.innerHTML=`<th>${c.run}</th><td style="text-align:left">${c.scope}</td>
+     <td>${c.chi2.toFixed(3)}</td><td>${c.dof}</td>
+     <td class="${sig?'num-good lead':''}">${c.p.toFixed(5)}${sig?' ✓':''}</td>
+     <td>${c.nst}</td><td class="${c.cpl.k>0?'num-good':'num-bad'}">${c.cpl.k>0?'+':''}${c.cpl.k.toFixed(4)}</td>
+     <td class="${c.cpl.usd>0?'num-good':'num-bad'}">${c.cpl.usd>0?'+':''}${c.cpl.usd.toFixed(3)}</td>`;
+   tb.appendChild(tr);
+ }
+})();
+
+// ---------- L2a activity (touches) matrix ----------
+(function(){
+ const t=$("#activity");
+ let head=`<caption>Sub-stage activity — node touches per stage</caption><thead><tr><th>Trajectory</th>`;
+ for(const s of SUBORDER) head+=`<th title="${SUBLABEL[s]}">${s}</th>`;
+ head+=`<th>Σ</th></tr></thead><tbody>`;
+ t.innerHTML=head+`</tbody>`;
+ const tb=t.querySelector("tbody");
+ let lastTask=null;
+ for(const r of TRAJ){
+   if(r.task!==lastTask){lastTask=r.task;const g=el("tr","grp");g.innerHTML=`<td colspan="${SUBORDER.length+2}">${r.task}</td>`;tb.appendChild(g);}
+   const sub=SUB[r.code]||{}; let sum=0;
+   let row=`<th>${cellChip(r.cell)} ${seedTag(r.seed)}</th>`;
+   for(const s of SUBORDER){ const v=sub[s]?sub[s][1]:null; if(v)sum+=v;
+     row+=`<td>${v==null?'<span class="u">·</span>':v}</td>`; }
+   row+=`<td class="lead">${sum}</td>`;
+   const tr=el("tr");tr.innerHTML=row;tb.appendChild(tr);
+ }
+})();
+
+// ---------- L2a clean-reach matrix ----------
+(function(){
+ const t=$("#reach");
+ let head=`<caption>Clean-reach — clean nodes / nodes touching stage (colour = rate)</caption><thead><tr><th>Trajectory</th>`;
+ for(const s of SUBORDER) head+=`<th title="${SUBLABEL[s]}">${s}</th>`;
+ head+=`</tr></thead><tbody>`;
+ t.innerHTML=head+`</tbody>`;
+ const tb=t.querySelector("tbody");
+ let lastTask=null;
+ for(const r of TRAJ){
+   if(r.task!==lastTask){lastTask=r.task;const g=el("tr","grp");g.innerHTML=`<td colspan="${SUBORDER.length+1}">${r.task}</td>`;tb.appendChild(g);}
+   const sub=SUB[r.code]||{};
+   let row=`<th>${cellChip(r.cell)} ${seedTag(r.seed)}</th>`;
+   for(const s of SUBORDER){
+     const cell=sub[s];
+     if(!cell){ row+=`<td><span class="u">·</span></td>`; continue; }
+     const [cl,to]=cell, rate=to?cl/to:null, st=reachStyle(rate);
+     row+=`<td style="background:${st.bg};color:${st.fg}"><span class="reachcell">${rate==null?'—':rate.toFixed(2)}<br><span class="ct">${cl}/${to}</span></span></td>`;
+   }
+   const tr=el("tr");tr.innerHTML=row;tb.appendChild(tr);
+ }
+ // legend
+ const lg=$("#reachlegend"); lg.innerHTML='<span>clean-reach:</span>';
+ [[0,'0.0'],[0.25,'0.25'],[0.5,'0.5'],[0.75,'0.75'],[1,'1.0']].forEach(([v,lab])=>{
+   const st=reachStyle(v);
+   lg.innerHTML+=`<span><span class="sw" style="background:${st.bg};border:1px solid ${st.fg}"></span>${lab}</span>`;
+ });
+ lg.innerHTML+='<span><span class="sw" style="background:transparent;border:1px dashed var(--line-strong)"></span>· stage not touched</span>';
+})();
+
+// ---------- L2b predicates + process quality ----------
+(function(){
+ const t=$("#l2b");
+ t.innerHTML=`<caption>State predicates &amp; process quality (L2b)</caption>
+  <thead><tr><th>Trajectory</th><th>cell</th><th>seed</th><th>preds</th><th>steps</th><th>err</th>
+   <th>redund</th><th>self-fix</th><th>hallu</th><th>1st sub@</th><th>failure modes</th></tr></thead><tbody></tbody>`;
+ groupRows(t.querySelector("tbody"),10,(r)=>{
+   const hall = r.he? `${(r.hn/r.he).toFixed(2)} <span class="u">(${r.hn}/${r.he})</span>`:'<span class="u">0/0</span>';
+   const redCls=r.red>=3?'num-bad':''; const fixCls=r.fix==null?'u':(r.fix>=0.66?'num-good':(r.fix<=0.34?'num-bad':''));
+   const modes = r.modes + (r.unc? ` <span class="u">+${r.unc} unclassified</span>`:'');
+   return `<th>${r.code}</th><td>${cellChip(r.cell)}</td><td>${seedTag(r.seed)}</td>
+     <td>${r.preds}</td><td>${r.steps}</td><td class="${r.err>=5?'num-bad':''}">${r.err}</td>
+     <td class="${redCls}">${r.red}</td><td class="${fixCls}">${r.fix==null?'—':r.fix.toFixed(2)}</td>
+     <td>${hall}</td><td>${r.fsub==null?'<span class="u">—</span>':r.fsub}</td>
+     <td style="text-align:left;white-space:normal;font-family:var(--sans);font-size:12px">${modes}</td>`;
+ });
+})();
+
+// ---------- L3 ----------
+(function(){
+ const t=$("#l3t");
+ t.innerHTML=`<caption>Trajectory cost &amp; effort (L3)</caption>
+  <thead><tr><th>Trajectory</th><th>cell</th><th>seed</th><th>cost</th><th>tok in</th><th>tok out</th>
+   <th>calls</th><th>lat p50</th><th>lat p95</th><th>lat max</th><th>exec p50</th><th>exec total</th>
+   <th>steps</th><th>wall s</th></tr></thead><tbody></tbody>`;
+ groupRows(t.querySelector("tbody"),13,(r)=>{
+   return `<th>${r.code}</th><td>${cellChip(r.cell)}</td><td>${seedTag(r.seed)}</td>
+     <td class="lead">${money(r.cost)}</td><td>${K(r.tin)}</td><td>${K(r.tout)}</td><td>${r.calls}</td>
+     <td>${f(r.lp50,1)}</td><td>${f(r.lp95,1)}</td><td>${f(r.lmax,1)}</td>
+     <td>${K(Math.round(r.ep50))}</td><td>${K(Math.round(r.etot))}</td>
+     <td>${r.steps}</td><td>${r.wall==null?'<span class="u">—</span>':K(r.wall)}</td>`;
+ });
+})();
+
+// footer
+$("#foot").innerHTML=`14 trajectories · 3 tasks · MLEvolve @ deepseek-v4-pro · metrics: mleval.analyzer {metrics · stage_metrics · stage_classifier · state_predicates · aggregate} + mleval.grader<br>
+ Numbers read from persisted held_out_score.json + report.json on the mleval-results PVC (ecepxie). Two samsum trajectories backfilled from surviving journals. L2c judge default-OFF.`;
+</script>
+<style>
+@media print {
+  @page { size: 420mm 297mm; margin: 12mm; }
+  html, body { background:#ffffff !important; }
+  * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+  .wrap { max-width:none !important; padding:0 !important; }
+  .twrap { overflow:visible !important; }
+  thead th, tbody th { position:static !important; }
+  tr { break-inside:avoid; }
+  section { break-inside:auto; }
+  .toc { display:none !important; }
+  h1, h2 { break-after:avoid; }
+}
+</style>
+</body>
+</html>

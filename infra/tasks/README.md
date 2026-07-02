@@ -4,7 +4,7 @@ Each task lives in `infra/tasks/<task-name>/` and provides:
 
 | File | Required | Purpose |
 |---|---|---|
-| `instruction.md` | yes | Agent `desc_file` — natural-language goal + eval criterion + data description |
+| `instruction.md` | yes | Agent `desc_file` — task-specific contract (shared harness rules are injected via MLEvolve impl_guideline, not prepended here) |
 | `data/` | yes | Read-only mount inside the pod at `/results/data/<task>/data/` (staged separately) |
 | `predicates.py` | optional | `PREDICATES: dict[str, Callable[[Path], bool]]` — task-specific assertions |
 | `README.md` | optional | How to stage the data, where it came from, license notes |

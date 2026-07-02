@@ -78,23 +78,21 @@ are a cleanup. D4/D5 are already MLE-Bench-shaped.
 
 ### C1 — Split instructions into two layers (D1)
 
-- **`infra/tasks/_harness_rules.md`** (NEW, shared, prepended to every task):
-  the **task-agnostic** rules only — provided-data-only / no external download,
-  *build a model from the data, don't fabricate or copy answers*, *no
-  training/selecting on the held-out test*, fixed submission path + match
-  `sample_submission.csv`, the `validate` tool, *submission-is-the-score /
-  printed-number-is-only-the-search-signal*, the resource budget, and the
-  conflict-priority clause ("these rules override anything in the task below").
-  It must stay generic: the concrete **backbone**, dataset, metric, and exact
-  columns are per-task (a tabular task has no LLM backbone), so they live in the
-  task `instruction.md`, never here — exactly as MLE-Bench keeps model specifics
-  in `description.md`, not `instructions.txt`.
-- **`infra/tasks/<task>/instruction.md`**: only the task-specific contract,
-  in the C2 schema. The sidecar concatenates `_harness_rules.md` + the task file
-  (mirrors MLE-Bench's `instructions.txt` + `description.md` assembly).
+- **`infra/tasks/_harness_rules.md`** (shared, **documentation only** since 2026-06-16):
+  the task-agnostic rules — provided-data-only / no external download, build a
+  model from the data (no fabricated answers), no training/selecting on the
+  held-out test, fixed submission path + match `sample_submission.csv`, the
+  `validate` tool, submission-is-the-score / printed-number-is-only-the-search-signal,
+  resource budget. Keep in sync with the operative runtime constant
+  `_EVAL_HARNESS_RULES` in `mlevolve_sidecar/eval_harness.py`, injected into
+  MLEvolve **implementation guidelines** on every codegen node by
+  `skill_injector.py`'s wrapper (both cells). **Do not prepend** this file to
+  `description.md` — that broke de_kaggle task cleaning (spike-025).
+- **`infra/tasks/<task>/instruction.md`**: only the task-specific contract in
+  the C2 schema. `entrypoint.sh` copies this file alone to `description.md`.
 
-This stops the `⚠️` id/backbone warnings from being copy-pasted (and silently
-diverging) across tasks — they live once in the shared layer.
+Concrete backbone, dataset loader (local `./input/` files vs HuggingFace slug),
+metric, and exact columns live in the task file — never in `_harness_rules.md`.
 
 ### C2 — Canonical `description.md` schema (D2)
 
@@ -198,7 +196,7 @@ a human leaderboard — they need a *documented reference*.
 
 ```
 infra/tasks/
-├── _harness_rules.md          NEW — shared benchmark rules (C1, C5); prepended to every task
+├── _harness_rules.md          shared benchmark rules (C1, C5); doc mirror of eval_harness.py — NOT prepended at runtime
 ├── _template/
 │   ├── instruction.md         the C2 4-section schema with <placeholders>
 │   ├── predicates.py
@@ -221,9 +219,10 @@ infra/tasks/
 Supersedes the `project_task_instruction_authoring_checklist` memory. Tick all
 before staging a task to the PVC:
 
-- [ ] **Shared rules prepended** — `_harness_rules.md` carries submission path,
-      validate tool, backbone-must-match, no-hand-labels, no-train-on-test,
-      conflict-priority. Task file does **not** restate them.
+- [ ] **Harness rules in sync** — `_harness_rules.md` matches
+      `mlevolve_sidecar/eval_harness.py` `EVAL_HARNESS_RULES`; task file does
+      **not** restate them, prepend them, or duplicate resource-budget caps
+      (those come from impl_guideline + orchestrator `EXEC_TIMEOUT`).
 - [ ] **C2 schema** — Description · Dataset Description (+ full Fields list incl.
       id key) · Evaluation · Submission Format, in that order, terse.
 - [ ] **Backbone pinned** verbatim; note the grader doesn't check it.
@@ -235,39 +234,42 @@ before staging a task to the PVC:
       fixed `./submission/submission.csv` path, `validate` call shown.
 - [ ] **`sample_submission.csv`** generated with the exact id-set + empty preds.
 - [ ] **Rubric thresholds (C6)** — `refs/thresholds.json` from a reference sweep.
-- [ ] **Resource note** — per-exec wall cap stated; "submission is the score, the
-      printed number is only the search signal"; batch/decode hints if eval-heavy.
+- [ ] **Resource note** — per-exec wall cap **not** in instruction.md (impl_guideline
+      + `eval_harness.py` + orchestrator flags); task may note generation batching
+      if eval-heavy; "submission is the score, printed number is search signal".
 - [ ] **Synced to PVC** — `/results/data/<task>/{instruction.md,data/}` updated;
       private `refs/` synced to its grader-only mount. Pods read the PVC, not the
       repo/image.
+- [ ] **Post-change checklist** — for gsm8k, tick all items in
+      `infra/tasks/gsm8k/README.md` § Post-change verification checklist after
+      instruction, de_kaggle, or data changes.
 
 ---
 
-## 7. Worked example — gsm8k (the changes this prescribes)
+## 7. Worked example — gsm8k
 
-Current `infra/tasks/gsm8k/instruction.md` violates C1 (monolithic), C3 (ships
-`test` with `answer`), and C6 (no rubric). Concrete diffs:
+**Status (2026-06):** C3 held-out split, val-only search signal, resource-budget
+section, and de_kaggle input guidance aligned with local `./input/` jsonl are
+implemented in `infra/tasks/gsm8k/instruction.md` + `patches/de_kaggle.py`.
+See `infra/tasks/gsm8k/README.md` for staging, recommended sweep caps, and a
+post-change verification checklist.
 
-1. **Strip test labels (C3).** `make_grading_data.py` already writes the private
-   `refs/test_refs.csv`. Add a step that writes the **agent-facing** test as
-   *questions only* (drop `answer`), plus the existing `sample_submission.csv`
-   (ids `"0".."1318"`, empty `prediction`). The agent's `data/` no longer
-   contains gold answers.
-2. **Move the search signal off test (C3).** Dataset Description instructs: carve
-   a validation slice from `train` (e.g. last 500) for the self-reported
-   `Final Validation Score`; **do not** self-score on test. Full `submission.csv`
-   still covers all 1319; we grade it privately. → search nodes evaluate ~500
-   rows, not 1319 → **the 60-min timeout wall drops** (the spike-022 failure mode).
-3. **Two-layer split (C1).** Lift the backbone / id / no-substitution `⚠️` blocks
-   into `_harness_rules.md`; the gsm8k file keeps only the math-specific contract
-   (`#### <number>` extraction, index-as-id, `main` config).
-4. **Rubric (C6).** Run a no-skill reference sweep, write
-   `refs/thresholds.json` (e.g. bronze=0.20, silver=0.40, gold=0.55 exact-match,
-   `is_lower_better=false`); grader reports the tier.
+**Still open:**
 
-Combined with the exec-cap bump, this is what gives a gsm8k node a real chance to
-produce a *valid, cheaply-searched* result instead of timing out on a full-test
-self-eval.
+- **Rubric (C6):** run a no-skill reference sweep, write
+  `refs/thresholds.json` (e.g. bronze=0.20, silver=0.40, gold=0.55 exact-match,
+  `is_lower_better=false`); grader reports the tier.
+
+**Original gap analysis (for history):**
+
+1. **Strip test labels (C3).** ✓ `make_grading_data.py` writes agent-facing test
+   as id+question only; gold in private `refs/test_refs.csv`.
+2. **Move search signal off test (C3).** ✓ Evaluation section separates search
+   signal (val holdout) from submission artifact (full test once).
+3. **Two-layer split (C1).** ✓ Harness via impl_guideline inject; task file is
+   math-specific contract only (not prepended `_harness_rules.md`).
+4. **Exec-cap for QLoRA + batched decode.** ✓ Resource budget in `eval_harness.py`
+   (impl_guideline); caps via Makefile `EXEC_TIMEOUT` / orchestrator (not instruction.md).
 
 ---
 
