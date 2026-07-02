@@ -91,6 +91,9 @@ Example good output for TRL:
 }
 
 ---
+INTENT (what this skill is FOR + target environment + success criteria). Gate advanced features to THIS environment: if the intent names concrete hardware/scale, do NOT foreground memory-efficient / quantized / distributed paths the environment doesn't need — make them gated escape-hatches whose `decision_tree` trigger states the condition, and let the cheapest-that-works path be the default. (In the TRL example above, the "<24GB single GPU" and "multi-GPU" rows are gated exactly this way.)
+{{intent}}
+
 DOCUMENTATION:
 {{doc_text}}
 

@@ -732,6 +732,7 @@ def plan_structure(
     with_templates: bool = False,
     with_scripts: bool = False,
     with_version_notes: bool = False,
+    intent: str = "",
 ) -> dict:
     tpl = _read_prompt("plan_structure.txt")
     prompt = _fill_prompt(
@@ -742,6 +743,7 @@ def plan_structure(
         with_templates=str(with_templates).lower(),
         with_scripts=str(with_scripts).lower(),
         with_version_notes=str(with_version_notes).lower(),
+        intent=intent or "(none provided — infer sensible, cheapest-that-works defaults)",
     )
     raw = _strip_fences(_llm_call(prompt, max_tokens=3500, temperature=0.2))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -801,6 +803,58 @@ def plan_structure(
     return plan
 
 
+def build_contract(plan: dict, intent: str = "") -> str:
+    """Format the skill's gates into a compact "Skill Contract" that travels into
+    every reference/script/template so a precondition stays WITH its action.
+
+    Phase 3.0-1 (Skills 3.0). The gates already exist in ``plan["decision_tree"]``
+    (each row = {trigger, decide, refer_to}); the QLoRA gate-split happened because
+    they were never passed to ``write_reference`` — the reference author was blind to
+    the body's gates and reproduced the source docs' ungated framing. Threading this
+    Contract in mirrors Anthropic's ``pdf/forms.md`` discipline (a fallback path opens
+    with "Use this when …"). Returns "" when there are no gates/purpose to carry.
+    """
+    lines: list[str] = []
+    purpose = str(plan.get("one_line_purpose", "")).strip()
+    if purpose:
+        lines.append(f"PURPOSE: {purpose}")
+    if intent.strip():
+        lines.append(f"INTENT / TARGET ENVIRONMENT: {intent.strip()}")
+    dt = plan.get("decision_tree") or []
+    gate_rows = [r for r in dt if isinstance(r, dict) and r.get("trigger")]
+    if gate_rows:
+        lines.append(
+            "GATES (each row is a precondition that MUST travel with its action — "
+            "if THIS file documents the action, restate the 'when' at its point of use):"
+        )
+        for row in gate_rows:
+            lines.append(
+                f"  - WHEN {row.get('trigger','')} → {row.get('decide','')}"
+                f"  (see {row.get('refer_to','')})"
+            )
+    return "\n".join(lines)
+
+
+def infer_intent(doc_text: str) -> str:
+    """Infer a short intent brief {purpose · target environment · success criteria} from the
+    docs when the user didn't pass one (Phase 3.0-2 "infer-and-state-assumptions" mode).
+
+    Grounded in Anthropic skill-creator's 4 scoping questions. Best-effort: returns "" if the
+    prompt is missing or the LLM call fails — the pipeline then proceeds with no intent, so
+    inference never blocks a build. The result is recorded as an ASSUMPTION in provenance.
+    """
+    try:
+        tpl = _read_prompt("intent_capture.txt")
+    except FileNotFoundError:
+        return ""
+    try:
+        raw = _strip_fences(_llm_call(_fill_prompt(tpl, doc_text=doc_text[:12000]),
+                                      max_tokens=400, temperature=0.2)).strip()
+    except (RuntimeError, OSError):
+        return ""
+    return raw[:1200]
+
+
 # Hardware requirement extraction — regex side-channel for the body prompt.
 _HW_MARKERS = re.compile(
     r"\b(?:VRAM|GPU memory|GPU RAM|memory footprint|gradient checkpoint"
@@ -856,6 +910,7 @@ def write_body(
     decision_tree: list[dict] | None = None,
     scripts: list[dict] | None = None,
     old_patterns: list[dict] | None = None,
+    intent: str = "",
 ) -> str:
     tpl = _read_prompt("write_skill_body.txt")
     mcp_workflow_triggers = mcp_workflow_triggers or []
@@ -914,6 +969,7 @@ def write_body(
         include_hardware=str(include_hardware and bool(hardware_hints)).lower(),
         readme_install=readme_install[:3000] or "(README install section not found)",
         doc_text=doc_text[:15000],
+        intent=intent or "(none provided — default to the cheapest approach that works)",
     )
     raw = _strip_fences(_llm_call(prompt, max_tokens=5000, temperature=0.3))
     idx = raw.find("# ")
@@ -1081,6 +1137,7 @@ def write_reference(
     doc_text: str,
     readme_text: str,
     examples_text: str,
+    contract: str = "",
 ) -> str:
     tpl = _read_prompt("write_reference.txt")
     prompt = _fill_prompt(
@@ -1090,6 +1147,7 @@ def write_reference(
         doc_text=doc_text[:18000],
         readme_text=readme_text[:3000],
         examples_text=examples_text[:2000],
+        contract=contract or "(no gates declared)",
     )
     raw = _strip_fences(_llm_call(prompt, max_tokens=5000, temperature=0.3))
     idx = raw.find("# ")
@@ -1453,6 +1511,54 @@ def critique_skill(
                 "message": "scope-honesty critic returned unparseable output; deterministic checks applied only",
             })
     return findings
+
+
+# Reference-scan (Phase 3.0-1): a resource-heavy / conditional action documented in a
+# reference file must restate its precondition at the point of use (Anthropic pdf/forms.md
+# discipline). The body critic above only sees the body, so it cannot catch a gate that
+# lives in SKILL.md but is dropped from the reference — exactly the QLoRA gate-split.
+_REF_HEAVY_ACTION = re.compile(
+    r"\b(?:load_in_4bit|load_in_8bit|BitsAndBytesConfig|bnb_4bit|nf4"
+    r"|prepare_model_for_kbit_training|use_dora\s*=\s*True|DeepSpeed|ZeRO-?[0-3]"
+    r"|FSDP|GPTQConfig)\b",
+    re.IGNORECASE,
+)
+_REF_PRECONDITION = re.compile(
+    r"(?:use\s+this\s+only\s+(?:when|if)|only\s+when|only\s+if|use\s+only\s+(?:when|if)"
+    r"|does\s*n[o']?t\s+fit|doesn'?t\s+fit|won'?t\s+fit|too\s+large\s+(?:for|to)"
+    r"|with\s+memory\s+headroom|otherwise\s+use|prefer\b[^.\n]*\bunless"
+    r"|<\s*\d+\s*GB|memory[- ]constrained)",
+    re.IGNORECASE,
+)
+
+
+def critique_references(references: "dict[str, str] | None", contract: str = "") -> list[dict]:
+    """Scan reference files for a resource-heavy/conditional action documented WITHOUT
+    restating its precondition (Phase 3.0-1). Returns block findings keyed
+    ``P3-ungated-reference``. Deterministic, no LLM call.
+
+    Only fires when the skill actually declares gates (non-empty ``contract``) — with no
+    declared gate there is no precondition to demand. This is the detector that would have
+    caught ``peft-tuning/references/quantization.md`` (full QLoRA recipe, no "only when").
+    """
+    out: list[dict] = []
+    if not references or not (contract or "").strip():
+        return out
+    for name, content in references.items():
+        c = content or ""
+        heavy = sorted({m.group(0).lower() for m in _REF_HEAVY_ACTION.finditer(c)})
+        if heavy and not _REF_PRECONDITION.search(c):
+            out.append({
+                "severity": "block",
+                "where": "P3-ungated-reference",
+                "message": (
+                    f"references/{name} documents resource-heavy/conditional action(s) {heavy} "
+                    f"but restates no precondition (\"use this only when …\"); the gate lives only "
+                    f"in SKILL.md and won't travel with the action (the QLoRA gate-split). Add the "
+                    f"WHEN clause at the recipe's point of use."
+                ),
+            })
+    return out
 
 
 def repair_skill_body(body: str, findings: list[dict], skill_name: str) -> str:
@@ -2023,6 +2129,25 @@ def _pipeline(
     include_evals = not args.no_evals
     run_eval_loop = include_evals and not getattr(args, "no_eval_triggering", False)
 
+    # Intent brief (Phase 3.0-2): what the skill is FOR + target environment + success
+    # criteria. Explicit `--intent` (or `--intent @file`) wins; otherwise infer from the
+    # docs and record it as an assumption. Gates advanced features to the environment so
+    # the skill defaults lean (e.g. "48GB GPU" ⇒ plain fp16 LoRA, QLoRA gated).
+    raw_intent = (getattr(args, "intent", None) or "").strip()
+    intent_brief, intent_source = "", "none"
+    if raw_intent.startswith("@"):
+        try:
+            intent_brief = Path(raw_intent[1:]).read_text().strip()
+            intent_source = "file"
+        except OSError:
+            _die(f"--intent @file not readable: {raw_intent[1:]}")
+    elif raw_intent:
+        intent_brief, intent_source = raw_intent, "explicit"
+    elif not getattr(args, "no_intent_inference", False):
+        intent_brief = infer_intent(sources["doc"])
+        intent_source = "inferred" if intent_brief else "none"
+    args.intent_brief = intent_brief  # consumed by build_contract below
+
     plan = plan_structure(
         doc_text=sources["doc"],
         with_pitfalls=args.with_pitfalls,
@@ -2030,6 +2155,7 @@ def _pipeline(
         with_templates=with_templates,
         with_scripts=with_scripts,
         with_version_notes=with_version_notes,
+        intent=intent_brief,
     )
     skill_name = args.name or plan["skill_name"]
 
@@ -2053,6 +2179,7 @@ def _pipeline(
         decision_tree=plan.get("decision_tree", []),
         scripts=plan.get("scripts", []),
         old_patterns=plan.get("old_patterns", []),
+        intent=intent_brief,
     )
 
     # ── Quality critic + bounded repair loop (Phase C/D) ──
@@ -2085,6 +2212,10 @@ def _pipeline(
     templates_content: dict[str, str] = {}
     scripts_content: dict[str, str] = {}
 
+    # Skill Contract (Phase 3.0-1): the body's gates travel into every reference so a
+    # precondition stays with its action (fixes the QLoRA gate-split). Built once here.
+    contract = build_contract(plan, intent=getattr(args, "intent_brief", "") or "")
+
     # References + templates + scripts synthesized in parallel. All use the LLM; batch them together.
     with ThreadPoolExecutor(max_workers=6) as pool:
         ref_futures = {
@@ -2092,6 +2223,7 @@ def _pipeline(
                 write_reference,
                 r["filename"], r["covers"], sources["doc"],
                 sources["readme"], sources["examples"],
+                contract,
             ): r["filename"] for r in plan["references"]
         }
         tpl_futures = {}
@@ -2155,6 +2287,20 @@ def _pipeline(
         )
         if community_md:
             refs_content["community-gotchas.md"] = community_md
+
+    # Reference-scan critic (Phase 3.0-1): catch a gated action reproduced ungated in a
+    # reference — the body critic above only sees the body. Folded into the same critic
+    # report; it flips quality_gate to "failed" (the hard ship-gate is Phase 3.0-6).
+    if not getattr(args, "no_critic", False):
+        ref_findings = critique_references(refs_content, contract)
+        if ref_findings:
+            if critic_report is None:
+                critic_report = {"rounds": 0, "repaired": False,
+                                 "initial_findings": [], "final_findings": [],
+                                 "quality_gate": "passed"}
+            critic_report["final_findings"] = list(critic_report.get("final_findings") or []) + ref_findings
+            if any(f["severity"] == "block" for f in ref_findings):
+                critic_report["quality_gate"] = "failed"
 
     evals_doc = write_evals(skill_name, body) if include_evals else None
 
@@ -2573,6 +2719,13 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--siblings", default=None,
                         help="Directory of co-resident skills (each <dir>/<name>/SKILL.md) to use as "
                              "REAL competitors in the triggering eval instead of the canned decoys")
+        sp.add_argument("--intent", default=None,
+                        help="Intent brief: what the skill is FOR + target environment + success "
+                             "criteria; gates advanced features to the environment so the skill "
+                             "defaults lean. Pass a string, or '@path' to read from a file. If "
+                             "omitted, it is inferred from the docs and recorded as an assumption.")
+        sp.add_argument("--no-intent-inference", action="store_true",
+                        help="With no --intent, skip doc-based intent inference (build with no intent brief)")
         sp.add_argument("--force", action="store_true")
         sp.add_argument("--out", default=None)
 

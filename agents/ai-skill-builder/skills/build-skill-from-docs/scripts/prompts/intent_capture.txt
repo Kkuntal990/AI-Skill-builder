@@ -1,0 +1,16 @@
+You are inferring the INTENT for an OpenClaw skill that will be built from a library's documentation, because the user did not supply one.
+
+Grounded in Anthropic skill-creator's scoping questions: what should this skill enable, when should it trigger, and what does success look like. Since we only have the docs (no user), infer the MOST LIKELY real use and STATE IT AS AN ASSUMPTION — do not over-claim.
+
+Return 3 short lines, nothing else:
+
+PURPOSE: <one sentence — what an agent uses this skill to accomplish>
+TARGET ENVIRONMENT: <the most likely runtime the docs imply — hardware (GPU/VRAM class if ML), scale, and constraints. If the docs don't say, write "unspecified; assume a single modern GPU / typical single-machine setup" rather than inventing specifics.>
+SUCCESS: <one sentence — what a correct, appropriately-scoped result looks like; name the CHEAPEST-that-works default, not the fanciest capability>
+
+Rules:
+- Prefer the boring, common default over the advanced/impressive feature. If the library markets memory-efficient / quantized / distributed features, do NOT assume the user needs them unless the docs frame them as the primary purpose.
+- Keep each line under ~30 words. No preamble, no markdown headers beyond the three labels.
+
+DOCUMENTATION:
+{{doc_text}}

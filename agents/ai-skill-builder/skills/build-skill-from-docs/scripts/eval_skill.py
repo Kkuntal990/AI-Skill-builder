@@ -21,11 +21,13 @@ import argparse
 import json
 import os
 import re
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -320,6 +322,117 @@ def cmd_triggering(args: argparse.Namespace) -> dict:
             "specificity": round(tn / (tn + fp), 3) if (tn + fp) else 0.0,
         },
     }
+
+
+# ── claude -p eval executor (Phase 3.0-3) ────────────────────────────────────
+# The eval executor runs on the CLAUDE CLI / Opus SUBSCRIPTION — the same transport
+# skill_builder.py uses for synthesis — NOT the OpenRouter API that `openclaw agent`
+# uses. skill-tester's neutral-baseline persona becomes the system prompt; the skill is
+# placed in a temp `.claude/skills/` catalog so we measure ORGANIC activation
+# (available-not-forced) and detect the Skill/Read tool-call from the stream-json events
+# (Anthropic run_eval.py pattern). Model is pinned via SKILLBUILD_LLM_MODEL (default
+# "opus"), decoupled from the shared mlevolve MLEVAL_LLM_MODEL (a non-Claude slug).
+
+SKILLBUILD_LLM_MODEL = os.environ.get("SKILLBUILD_LLM_MODEL", "opus").strip() or "opus"
+
+# Mirrors agents/skill-tester/{SOUL,AGENTS}.md — a clean baseline executor.
+_SKILLTESTER_SYSTEM = (
+    "You are a bare evaluation-target agent. No personality, no greetings. Answer the "
+    "user's prompt directly and concisely. If one of your available skills is genuinely "
+    "relevant, use it; otherwise answer without it. Never force skill usage."
+)
+
+
+def _run_claude_executor(prompt: str, skill_dir: "Path | None" = None,
+                         timeout: int = 180, model: str = "") -> dict:
+    """Run one eval turn on `claude -p --model <opus>` (Claude subscription).
+
+    If `skill_dir` is given, the skill is copied into a temp `.claude/skills/<name>/`
+    catalog and made AVAILABLE (not force-read), so activation is ORGANIC. We detect the
+    Skill/Read tool-call from stream-json events and capture the final reply text.
+
+    Returns {activated: bool, reply: str, model: str, elapsed_ms: int, error?: str}.
+    """
+    model = model or SKILLBUILD_LLM_MODEL
+    workdir = Path(tempfile.mkdtemp(prefix="skilltester-"))
+    skill_key = ""
+    t0 = time.time()
+    try:
+        if skill_dir is not None:
+            skill_key = f"{skill_dir.name}-{uuid.uuid4().hex[:8]}"
+            dest = workdir / ".claude" / "skills" / skill_key
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(skill_dir / "SKILL.md", dest / "SKILL.md")
+            for sub in ("references", "scripts", "templates"):
+                if (skill_dir / sub).is_dir():
+                    shutil.copytree(skill_dir / sub, dest / sub)
+        cmd = ["claude", "-p", prompt, "--model", model,
+               "--output-format", "stream-json", "--verbose",
+               "--include-partial-messages",
+               "--append-system-prompt", _SKILLTESTER_SYSTEM]
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                cwd=str(workdir), env=env)
+        activated = False
+        reply = ""
+        buffer = ""
+
+        def _match(name: str, blob: str) -> bool:
+            if name not in ("Skill", "Read"):
+                return False
+            return (not skill_key) or (skill_key in blob) or (skill_dir and skill_dir.name in blob)
+
+        try:
+            while time.time() - t0 < timeout:
+                done = proc.poll() is not None
+                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if ready:
+                    chunk = os.read(proc.stdout.fileno(), 65536)
+                    if chunk:
+                        buffer += chunk.decode("utf-8", "replace")
+                elif done:
+                    break
+                elif not ready:
+                    continue
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    et = ev.get("type")
+                    if et == "assistant":
+                        for ci in ev.get("message", {}).get("content", []):
+                            if ci.get("type") == "tool_use" and _match(
+                                    ci.get("name", ""), json.dumps(ci.get("input", {}))):
+                                activated = True
+                    elif et == "stream_event":
+                        se = ev.get("event", {})
+                        if se.get("type") == "content_block_start":
+                            cb = se.get("content_block", {})
+                            if cb.get("type") == "tool_use" and cb.get("name") in ("Skill", "Read"):
+                                # provisional; confirmed by the assistant-event input match above
+                                activated = activated or (not skill_key)
+                    elif et == "result":
+                        r = ev.get("result")
+                        if isinstance(r, str):
+                            reply = r
+                if done and "\n" not in buffer:
+                    break
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        return {"activated": activated, "reply": reply.strip(), "model": model,
+                "elapsed_ms": int((time.time() - t0) * 1000)}
+    except (FileNotFoundError, OSError) as e:
+        return {"activated": False, "reply": "", "model": model,
+                "elapsed_ms": int((time.time() - t0) * 1000), "error": str(e)}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 # ── Functional A/B (with-skill vs without-skill via openclaw agent) ──────────

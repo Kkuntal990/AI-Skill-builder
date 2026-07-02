@@ -11,6 +11,7 @@ Hard rules:
 - IF the file will exceed ~100 lines (which is the common case), include a `## Contents` table of contents listing each `##` section by name BEFORE diving into content. The wrapper auto-injects a ToC if you omit it, but yours will be better — write it yourself.
 - Then: content organized by sub-topic with `##` headings.
 - Every code block must come from the source docs. Do not invent APIs.
+- **Precondition travels with the action (IMPORTANT).** The SKILL CONTRACT below lists the skill's gates. If THIS file documents an action a gate makes conditional (a resource-heavy / quantized / distributed / fallback path — e.g. QLoRA or 4-bit/8-bit loading, DoRA, DeepSpeed/FSDP, a "fit a large model" workflow), you MUST restate that precondition AT the action's point of use — a short "Use this only when …" line immediately before the recipe, matching the gate's WHEN clause. Never present a gated or resource-heavy action as the default or as unconditional; if the gate names a cheaper default (e.g. plain fp16/bf16 LoRA), say "otherwise use <that>" right there. A copy-paste recipe with no precondition is the bug this rule exists to prevent.
 - Imperative examples: show code + what it does + typical next step.
 - No re-explaining what the package is at a high level (that's in SKILL.md).
 - No links to URLs unless present in source.
@@ -29,6 +30,9 @@ Return ONLY the markdown content, starting with `# `.
 ---
 TOPIC FILENAME: {{filename}}
 TOPIC COVERS: {{topic_covers}}
+
+SKILL CONTRACT (gates declared in the SKILL.md body — honor these; restate any that gate an action documented in THIS file):
+{{contract}}
 
 DOCUMENTATION:
 {{doc_text}}

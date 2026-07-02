@@ -179,6 +179,9 @@ HARDWARE HINTS (raw sentences extracted from docs/README):
 INCLUDE WHEN-TO-USE SECTION: {{include_when_to_use}}
 INCLUDE HARDWARE SECTION: {{include_hardware}}
 
+INTENT (what this skill is FOR + target environment + success criteria — default to the cheapest approach that fits THIS environment; surface memory-efficient / quantized / distributed techniques only as gated escape-hatches per the precondition rule above, never as the default):
+{{intent}}
+
 README INSTALL SECTION:
 {{readme_install}}
 
