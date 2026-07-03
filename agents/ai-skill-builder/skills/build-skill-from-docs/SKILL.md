@@ -51,10 +51,13 @@ A closed generate -> gate -> critic -> repair loop (not a one-shot template):
 
 ```
 RESOLVE -> FETCH (doc, README, examples, [issues], [changelog])
-       -> PLAN STRUCTURE (LLM: references, decision tree, MCP triggers, scripts)
-       -> WRITE BODY (LLM)
-       -> CRITIC + REPAIR (<=3 rounds: critique P1-P4 -> repair body if blocking)
-       -> SYNTHESIZE in parallel (references + templates + scripts + evals)
+       -> INTENT (--intent / @file, else LLM-infer purpose·target-env·success)
+       -> PLAN STRUCTURE (LLM, intent-aware: references, decision tree, MCP triggers, scripts)
+       -> WRITE BODY (LLM, intent-aware)
+       -> CRITIC + REPAIR (<=3 rounds: critique P1-P4 [incl. P3 conditional-gating] -> repair body if blocking)
+       -> BUILD CONTRACT (deterministic: purpose + target-env + gates)
+       -> SYNTHESIZE in parallel (Contract-threaded references + templates + scripts + evals)
+       -> REFERENCE-SCAN CRITIC (flag ungated resource-heavy actions in references)
        -> TRIGGERING eval (judge vs siblings/decoys; optimize description on a miss)
        -> ASSEMBLE frontmatter (deterministic, no LLM)
        -> VALIDATE (P0 gates + dead-pointer + security scan + line cap + openclaw check)
@@ -100,6 +103,10 @@ Script exits clearly if no transport is available.
 
 ## Optional flags
 
+- `--intent "<brief>"` / `--intent @file` -- state the skill's purpose · target environment · success
+  criteria explicitly; otherwise it's inferred from the doc (`--no-intent-inference` skips inference). The
+  intent is threaded into planning, body, and the Skill Contract so heavy paths (QLoRA, distributed) stay
+  gated on a precondition instead of becoming the headline default.
 - `--with-scripts` -- generate 1-3 SHORT utility scripts in `scripts/` (executed, not
   read into context). Validated via `py_compile` / `bash -n`. Use for health checks,
   validators, probes the agent should run unattended.

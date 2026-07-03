@@ -2,8 +2,8 @@
 
 > For the design overview, see **[hld.md](hld.md)**.
 
-**Status:** 2.0.0 — closed critic→repair loop + Claude-subscription transport (see Phase 2.0)
-**Date:** 2026-06-24
+**Status:** 2.1.0 — Skills-3.0 intent capture + contract-threaded references + conditional-gating critic (see Phase 3.0)
+**Date:** 2026-06-28
 **Scope:** An OpenClaw agent that turns a Python package's docs URL into a progressive-disclosure SKILL.md + references + templates + evals, optionally augmented with curated community gotchas and runtime MCP fallback.
 
 ---
@@ -25,7 +25,18 @@ The skill is the durable artifact. MCPs are optional fetchers (build time) and r
 
 ## 2. Phase History
 
-### Phase 2.0 — Closed critic→repair loop + subscription transport (Jun 24, complete) — LATEST
+### Phase 3.0 — Skills 3.0: intent capture + contract-threaded references + claude-CLI eval executor (Jun 28, complete) — LATEST
+
+Three sub-phases (`BUILDER_VERSION` 2.1.0). Grounds the pipeline in Anthropic skill-creator's scoping discipline (state the intent, gate the heavy path) and closes the mvp-029 QLoRA gate-split at the *reference* layer, not just the body.
+- **3.0-1 Contract-threaded references** (`build_contract`, `critique_references`, `write_reference.txt`): after the body critic, a deterministic **Skill Contract** — `PURPOSE` + `INTENT / TARGET ENVIRONMENT` + `GATES` (lifted from the decision-tree rows) — is threaded into every `references/*.md` synthesis call. A post-synthesis **reference-scan critic** flags any reference documenting a resource-heavy/conditional action (QLoRA / 4-bit / DeepSpeed / FSDP …) without a restated precondition (`P3-ungated-reference` block finding → can flip `quality_gate` to `failed`). Fires only when the Contract declares gates.
+- **3.0-2 Intent capture** (`infer_intent`, `intent_capture.txt`, `--intent` / `--intent @file` / `--no-intent-inference`): explicit intent wins; otherwise one LLM call infers `{purpose · target environment · success}` from the doc, biased toward the cheapest-that-works default (does not assume quantized/distributed just because the library markets it). Best-effort — a failure ships `""` and the build proceeds. Threaded into plan + body + contract.
+- **3.0-3 claude-CLI eval executor** (`eval_skill.py` `_run_claude_executor`): a `claude -p` *organic-activation* executor that copies the skill into a temp `.claude/skills/` catalog and measures whether the model activates it unprompted (model `SKILLBUILD_LLM_MODEL`, default `opus`). **Wired as the `activation` subcommand** (`eval_skill.py activation <skill-dir> [--runs N] [--model opus] [--max-concurrency K]`, also `all --with-activation`): replays `triggering.json`'s should-trigger + near-miss prompts through the executor and reports organic-activation precision/recall/F1 + false-activation rate; `report`/`pass-bar` fold it in, gated by `activation_recall_min` (only enforced when activation was run). The live *functional* A/B still runs through `openclaw agent` — this adds a subscription-side activation signal alongside it.
+
+### Phase 2.1 — P3 conditional-gating critic (Jun 28, complete)
+
+Adds the body-level **P3 conditional-gating critic** (`critique_skill`, block→repair): a resource-heavy/optional technique presented as a headline default, or a workflow whose precondition is stranded in the Decision Tree, is a BLOCK finding and triggers a repair round. Direct fix for the mvp-029 QLoRA RCA where an ungated "Memory-efficient QLoRA" checklist trained 4-bit on a 48 GB GPU. See [skill-reliability-checklist.md](skill-reliability-checklist.md) P3 + [skill-shape-principles.md](skill-shape-principles.md) "a precondition travels with its action".
+
+### Phase 2.0 — Closed critic→repair loop + subscription transport (Jun 24, complete)
 
 Evolved the one-shot template into a closed generate→gate→critic→repair loop (Anthropic skill-creator pattern); see [hld.md](hld.md) Pipeline.
 - **P0 hard gates** in `validate_skill`: `name` charset/≤64/reserved-word/XML, `description` ≤1024/XML, and **dead-pointer** (every cited `references|scripts|templates/<f>` must be bundled) — reject the build.
@@ -211,12 +222,18 @@ agents/ai-skill-builder/
     ├── SKILL.md                             Tool definition
     ├── references/                          Anatomy / frontmatter / anti-patterns
     └── scripts/
-        ├── skill_builder.py                 ~1700 LOC pipeline
+        ├── skill_builder.py                 ~2,800 LOC pipeline
+        ├── eval_skill.py                    ~920 LOC Stage-1 eval harness (separate CLI; not run by the build)
         └── prompts/
+            ├── intent_capture.txt            Phase 3.0-2
             ├── plan_structure.txt
             ├── write_skill_body.txt          Includes `## Looking things up live` mandate (Phase 1.4)
-            ├── write_reference.txt
+            ├── write_decision_tree.txt       Optional refiner (decision tree currently emitted by plan_structure)
+            ├── critique_skill.txt            Phase 2.0
+            ├── repair_skill_body.txt         Phase 2.0
+            ├── write_reference.txt           Skill Contract threaded in (Phase 3.0-1)
             ├── write_template.txt
+            ├── write_scripts.txt             Phase 1.4
             ├── write_evals.txt
             ├── distill_pitfalls.txt
             ├── write_troubleshooting.txt
