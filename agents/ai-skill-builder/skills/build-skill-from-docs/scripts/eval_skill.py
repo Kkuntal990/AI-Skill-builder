@@ -12,7 +12,13 @@ Implements the methodology from Anthropic's `skill-creator` (anthropics/skills):
 Usage:
     python3 eval_skill.py triggering <skill-dir>
     python3 eval_skill.py functional  <skill-dir> [--runs N]
+    python3 eval_skill.py activation  <skill-dir> [--runs N] [--model opus]
     python3 eval_skill.py all         <skill-dir> [--runs N]
+
+`activation` runs the Skills-3.0 Phase 3-3 organic-activation executor
+(`_run_claude_executor`): the skill is placed AVAILABLE-not-forced in a temp
+`.claude/skills/` catalog and we measure whether `claude -p` reaches for it on
+its own (Skill/Read tool call), on the should-trigger and near-miss prompts.
 """
 
 from __future__ import annotations
@@ -708,10 +714,100 @@ def cmd_functional(args: argparse.Namespace) -> dict:
     }
 
 
+def cmd_activation(args: argparse.Namespace) -> dict:
+    """Organic-activation eval (Skills-3.0 Phase 3-3).
+
+    For every should-trigger and near-miss prompt in ``evals/triggering.json``, run
+    ``_run_claude_executor`` with the skill AVAILABLE (not force-read) and record whether
+    ``claude -p`` reached for it unprompted. Unlike ``cmd_triggering`` (an LLM *judge*
+    over descriptions), this measures real tool-call activation on the Claude subscription,
+    so it catches descriptions that judge well but the model never actually picks up.
+
+    Metrics mirror triggering (TP/FN/FP/TN → precision/recall/F1) but the positive event
+    is "the model organically activated the skill" rather than "a judge chose it".
+    """
+    skill_dir = Path(args.skill_dir).expanduser().resolve()
+    meta = _load_skill_meta(skill_dir)
+    triggering_path = skill_dir / "evals" / "triggering.json"
+    if not triggering_path.exists():
+        sb._die(f"missing {triggering_path}")
+    data = json.loads(triggering_path.read_text())
+    pos = data.get("should_trigger", [])
+    neg = data.get("should_not_trigger_near_miss", [])
+    runs = max(1, int(args.runs))
+    model = (getattr(args, "model", "") or SKILLBUILD_LLM_MODEL)
+    conc = max(1, int(getattr(args, "max_concurrency", 3)))
+    errors: list[str] = []
+
+    def activate_one(p: dict) -> tuple[dict, list[bool], list[dict]]:
+        acts: list[bool] = []
+        trials: list[dict] = []
+        for _ in range(runs):
+            r = _run_claude_executor(p["prompt"], skill_dir=skill_dir,
+                                     timeout=args.per_prompt_timeout, model=model)
+            if r.get("error"):
+                errors.append(str(r["error"]))
+            acts.append(bool(r.get("activated")))
+            trials.append({
+                "activated": bool(r.get("activated")),
+                "elapsed_ms": r.get("elapsed_ms"),
+                "reply_chars": len(r.get("reply", "")),
+                "error": r.get("error"),
+            })
+        return p, acts, trials
+
+    pos_results: list[dict] = []
+    neg_results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=conc) as pool:
+        for p, acts, trials in pool.map(activate_one, pos):
+            activated = sum(acts) >= (runs / 2)  # majority vote
+            print(f"  [activation] {p['id']}: {sum(acts)}/{runs} activated",
+                  file=sys.stderr, flush=True)
+            pos_results.append({"id": p["id"], "prompt": p["prompt"],
+                                "activations": acts, "activated": activated, "trials": trials})
+        for p, acts, trials in pool.map(activate_one, neg):
+            activated = sum(acts) >= (runs / 2)
+            print(f"  [activation:near-miss] {p['id']}: {sum(acts)}/{runs} activated",
+                  file=sys.stderr, flush=True)
+            neg_results.append({"id": p["id"], "prompt": p["prompt"],
+                                "activations": acts, "activated": activated, "trials": trials})
+
+    tp = sum(1 for r in pos_results if r["activated"])
+    fn = sum(1 for r in pos_results if not r["activated"])
+    fp = sum(1 for r in neg_results if r["activated"])
+    tn = sum(1 for r in neg_results if not r["activated"])
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    return {
+        "skill_name": meta["name"],
+        "executor": "claude -p (organic activation, available-not-forced)",
+        "model": model,
+        "runs_per_prompt": runs,
+        "should_trigger": pos_results,
+        "should_not_trigger": neg_results,
+        "errors": sorted(set(errors)),
+        "metrics": {
+            "true_positive": tp,
+            "false_negative": fn,
+            "false_positive": fp,
+            "true_negative": tn,
+            "activation_precision": round(precision, 3),
+            "activation_recall": round(recall, 3),
+            "activation_f1": round(f1, 3),
+            "false_activation_rate": round(fp / (fp + tn), 3) if (fp + tn) else 0.0,
+        },
+    }
+
+
 def cmd_all(args: argparse.Namespace) -> dict:
     triggering = cmd_triggering(args)
     functional = cmd_functional(args)
-    return {"triggering": triggering, "functional": functional}
+    out = {"triggering": triggering, "functional": functional}
+    if getattr(args, "with_activation", False):
+        out["activation"] = cmd_activation(args)
+    return out
 
 
 # ── Pass-bar thresholds + report ─────────────────────────────────────────────
@@ -722,6 +818,7 @@ DEFAULT_PASS_BAR = {
     "functional_pass_min": 0.60,
     "citation_accuracy_min": 0.50,
     "saturation_max_pass_rate": 0.90,
+    "activation_recall_min": 0.50,  # organic-activation recall (only enforced when activation was run)
 }
 
 
@@ -744,10 +841,10 @@ def _find_latest(skill_dir: Path, prefix: str) -> Path | None:
 
 
 def _build_report(skill_dir: Path, triggering: dict | None, functional: dict | None,
-                  pass_bar: dict) -> tuple[str, bool]:
+                  pass_bar: dict, activation: dict | None = None) -> tuple[str, bool]:
     """Return (markdown_report, overall_pass)."""
     lines = []
-    name = (functional or triggering or {}).get("skill_name") or skill_dir.name
+    name = (functional or triggering or activation or {}).get("skill_name") or skill_dir.name
     lines.append(f"# Skill eval report — {name}")
     lines.append("")
     verdicts = []
@@ -764,6 +861,24 @@ def _build_report(skill_dir: Path, triggering: dict | None, functional: dict | N
         lines.append(f"- TP {m['true_positive']} / FN {m['false_negative']} / "
                      f"FP {m['false_positive']} / TN {m['true_negative']}")
         lines.append(f"- Runs per prompt: {triggering.get('runs_per_prompt', '?')}")
+        lines.append("")
+
+    if activation:
+        am = activation["metrics"]
+        arec = am["activation_recall"]
+        apass = arec >= pass_bar["activation_recall_min"]
+        verdicts.append(apass)
+        lines.append("## Organic activation (`claude -p`, available-not-forced)")
+        lines.append(f"- Executor: {activation.get('executor', 'claude -p')} · model {activation.get('model', '?')}")
+        lines.append(f"- Activation recall: **{arec:.3f}** — "
+                     f"{'PASS' if apass else 'FAIL'} (bar ≥ {pass_bar['activation_recall_min']})")
+        lines.append(f"- Activation precision: {am['activation_precision']:.3f} · "
+                     f"F1 {am['activation_f1']:.3f}")
+        lines.append(f"- False-activation rate (near-miss): {am['false_activation_rate']:.3f}")
+        lines.append(f"- TP {am['true_positive']} / FN {am['false_negative']} / "
+                     f"FP {am['false_positive']} / TN {am['true_negative']}")
+        if activation.get("errors"):
+            lines.append(f"- ⚠️ executor errors: {activation['errors']}")
         lines.append("")
 
     if functional:
@@ -829,16 +944,21 @@ def cmd_report(args: argparse.Namespace) -> dict:
     skill_dir = Path(args.skill_dir).expanduser().resolve()
     triggering_path = _find_latest(skill_dir, "triggering") or _find_latest(skill_dir, "all")
     functional_path = _find_latest(skill_dir, "functional") or _find_latest(skill_dir, "all")
+    activation_path = _find_latest(skill_dir, "activation") or _find_latest(skill_dir, "all")
     triggering = None
     functional = None
+    activation = None
     if triggering_path:
         d = json.loads(triggering_path.read_text())
         triggering = d.get("triggering", d) if "triggering" in d else d
     if functional_path:
         d = json.loads(functional_path.read_text())
         functional = d.get("functional", d) if "functional" in d else d
+    if activation_path:
+        d = json.loads(activation_path.read_text())
+        activation = d.get("activation") if "activation" in d else (d if "should_trigger" in d and d.get("executor") else None)
     pass_bar = _load_pass_bar(skill_dir)
-    md, _ = _build_report(skill_dir, triggering, functional, pass_bar)
+    md, _ = _build_report(skill_dir, triggering, functional, pass_bar, activation)
     return {"markdown": md}
 
 
@@ -847,16 +967,21 @@ def cmd_pass_bar(args: argparse.Namespace) -> dict:
     skill_dir = Path(args.skill_dir).expanduser().resolve()
     triggering_path = _find_latest(skill_dir, "triggering") or _find_latest(skill_dir, "all")
     functional_path = _find_latest(skill_dir, "functional") or _find_latest(skill_dir, "all")
+    activation_path = _find_latest(skill_dir, "activation") or _find_latest(skill_dir, "all")
     triggering = None
     functional = None
+    activation = None
     if triggering_path:
         d = json.loads(triggering_path.read_text())
         triggering = d.get("triggering", d) if "triggering" in d else d
     if functional_path:
         d = json.loads(functional_path.read_text())
         functional = d.get("functional", d) if "functional" in d else d
+    if activation_path:
+        d = json.loads(activation_path.read_text())
+        activation = d.get("activation") if "activation" in d else (d if "should_trigger" in d and d.get("executor") else None)
     pass_bar = _load_pass_bar(skill_dir)
-    _, overall = _build_report(skill_dir, triggering, functional, pass_bar)
+    _, overall = _build_report(skill_dir, triggering, functional, pass_bar, activation)
     args._exit_code = 0 if overall else 1  # picked up in main()
     return {"pass": overall, "pass_bar": pass_bar}
 
@@ -881,8 +1006,22 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("functional", help="Functional A/B only")
     common(f); f.set_defaults(func=cmd_functional)
 
-    a = sub.add_parser("all", help="Triggering + functional")
-    common(a); a.set_defaults(func=cmd_all)
+    ac = sub.add_parser("activation",
+                        help="Organic-activation eval on `claude -p` (Skills-3.0 Phase 3-3)")
+    common(ac)
+    ac.add_argument("--model", default="",
+                    help=f"claude -p model (default ${{SKILLBUILD_LLM_MODEL}} = {SKILLBUILD_LLM_MODEL})")
+    ac.add_argument("--max-concurrency", type=int, default=3,
+                    help="parallel `claude -p` executors (default 3)")
+    ac.set_defaults(func=cmd_activation)
+
+    a = sub.add_parser("all", help="Triggering + functional [+ activation]")
+    common(a)
+    a.add_argument("--model", default="", help="claude -p model for --with-activation")
+    a.add_argument("--max-concurrency", type=int, default=3)
+    a.add_argument("--with-activation", action="store_true",
+                   help="also run the organic-activation executor (needs the `claude` CLI)")
+    a.set_defaults(func=cmd_all)
 
     r = sub.add_parser("report", help="Render markdown summary of latest grading results")
     r.add_argument("skill_dir")
