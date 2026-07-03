@@ -1,6 +1,6 @@
 # HLD: AI-Skill Builder — OpenClaw Agent
 
-**Status:** 2.0.0 — closed critic→repair loop + Claude-subscription transport (2026-06-24)
+**Status:** 2.1.0 — Skills-3.0 intent capture + contract-threaded references + P3 conditional-gating critic (2026-06-28). Builds on 2.0.0's closed critic→repair loop + Claude-subscription transport.
 **Companion to:** [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills) · [plan.md](plan.md) (phase progression and open items) · [skill-shape-principles.md](skill-shape-principles.md) (authoring guidance)
 
 ## Goal
@@ -26,9 +26,9 @@ MCP appears in three distinct seams. The skill is still the durable artifact; MC
 1. User gives the agent a URL (hosted docs page, or GitHub repo root)
 2. Agent invokes `skill_builder.py build <url>`
 3. Script resolves `owner/repo` from the URL and fetches sources in parallel (doc, README, examples; optionally issues, changelog, Stack Exchange Q&As)
-4. Regex side-channel extracts hardware-relevant sentences (VRAM/GPU/memory) from doc + README for the body prompt
-5. One LLM call plans structure: `references/*.md` files + workflows + templates + section flags (hardware, when-to-use)
-6. LLM drafts the SKILL.md body; a critic + repair loop (≤3 rounds) scores P1-P4 and auto-fixes any task-genre scope wall, then parallel LLM calls synthesize each reference file, runnable template/script, evals, and (when `--with-community`) `community-gotchas.md`
+4. Regex side-channel extracts hardware-relevant sentences (VRAM/GPU/memory) from doc + README; an **intent brief** (`{purpose · target environment · success}`) is captured — explicit `--intent` / `--intent @file`, or LLM-inferred from the doc unless `--no-intent-inference` — and threaded into the next two steps (Skills-3.0 Phase 2)
+5. One LLM call plans structure (intent-aware): `references/*.md` files + workflows + decision tree + MCP triggers + templates/scripts + section flags (hardware, when-to-use)
+6. LLM drafts the SKILL.md body; a critic + repair loop (≤3 rounds) scores P1-P4 and auto-fixes any task-genre scope wall (P4) or ungated resource-heavy default (P3 conditional-gating). A deterministic **Skill Contract** (purpose + target-env + gates) is then threaded into parallel LLM calls that synthesize each reference file, runnable template/script, evals, and (when `--with-community`) `community-gotchas.md`; a **reference-scan critic** flags any reference that documents a resource-heavy action without restating its precondition (Skills-3.0 Phase 1)
 7. Each template is validated with `python -m py_compile`; each script via `py_compile`/`bash -n`
 8. Triggering eval loop judges the description against the real co-resident siblings (`--siblings`) or canned decoys per eval prompt; rewrites the description once if any prompt fails (bidirectional — also catches over-triggering)
 9. Script assembles YAML frontmatter deterministically: `name`, `requires.bins`, `install`, runtime MCP declarations (`mcps.preferred`, `mcps.fallback`), and provenance (`source.{url, repo, fetched_at, content_sha256, builder_version}`, `coverage`)
@@ -38,23 +38,26 @@ MCP appears in three distinct seams. The skill is still the durable artifact; MC
 
 ## Pipeline
 
-Since 2.0.0 the pipeline is a **closed generate → gate → critic → repair loop**, not a one-shot template:
+Since 2.0.0 the pipeline is a **closed generate → gate → critic → repair loop**, not a one-shot template. 2.1.0 (Skills 3.0) threads an **intent brief** and a deterministic **Skill Contract** through it and adds a **reference-scan critic** (`[3.0-N]` marks the Skills-3.0 phase that introduced a stage):
 
 ```text
 RESOLVE -> FETCH (doc, README, examples, [issues], [changelog], [SE Q&As])
+       -> INTENT BRIEF (--intent / @file, else LLM-infer purpose·target-env·success)          [3.0-2]
        -> EXTRACT hardware hints (regex side-channel on doc + README)
        -> IPI SCAN on community sources (drop poisoned docs before LLM ingest)
-       -> PLAN STRUCTURE (LLM — references, workflows, decision tree, MCP triggers, scripts, flags)
-       -> WRITE BODY (LLM)
+       -> PLAN STRUCTURE (LLM, intent-aware — references, workflows, decision tree, MCP triggers, scripts, flags)
+       -> WRITE BODY (LLM, intent-aware)
        -> CRITIC + REPAIR loop (<=3 rounds):
-             critique P1-P4 (regex P3 + abstain-when-unsure LLM for P4 scope-honesty / P1)
-          |- if any BLOCK finding (task-genre wall): repair body (full regen) -> re-critique
-       -> SYNTHESIZE in parallel:
+             critique P1-P4 (regex P3 + abstain-when-unsure LLM for P4 scope-honesty / P1 / P3 conditional-gating)
+          |- if any BLOCK finding (task-genre wall OR ungated resource-heavy default): repair body (full regen) -> re-critique
+       -> BUILD CONTRACT (deterministic: purpose + target-env + gates from the decision tree)  [3.0-1]
+       -> SYNTHESIZE in parallel (Contract threaded into each reference):
              references/*.md + [templates/*.py] + [scripts/*] + evals/evals.json
            + [pitfalls.md] + [troubleshooting.md] + [community-gotchas.md]
+       -> REFERENCE-SCAN CRITIC (flag any reference w/ a resource-heavy action missing its precondition) [3.0-1]
        -> EVAL TRIGGERING (LLM judge vs real siblings [--siblings] or canned decoys; bidirectional)
           |- if win_rate < 1.0: IMPROVE DESCRIPTION (LLM) -> RE-JUDGE -> accept if better
-       -> ASSEMBLE frontmatter (deterministic): name + install + mcps + provenance (builder_version)
+       -> ASSEMBLE frontmatter (deterministic): name + install + mcps + provenance (builder_version 2.1.0)
        -> VALIDATE (P0 hard gates + dead-pointer + scan + line cap + fabrication + openclaw check)
        -> WRITE to workspace
        -> LOG
@@ -64,11 +67,14 @@ RESOLVE -> FETCH (doc, README, examples, [issues], [changelog], [SE Q&As])
 |-------|-------------|
 | Resolve | Parse URL → derive `owner/repo` when possible |
 | Fetch | `urllib` for doc HTML (regex-stripped to markdown); `gh api` for README, examples, issues, changelog |
+| Intent brief (`[3.0-2]`) | `infer_intent` (or explicit `--intent`/`@file`) yields a `{purpose · target environment · success}` brief; best-effort — a failure ships `""` and the build proceeds. Prompt: `intent_capture.txt` |
 | Extract hardware hints | Regex-grep doc + README for VRAM / GPU / A100 / H100 / DeepSpeed / FSDP / quantization mentions; up to 12 sentences |
-| Plan structure | One LLM call returns `references`, `workflows`, `decision_tree`, `mcp_workflow_triggers`, `templates`/`scripts` (0-3 each), and section flags |
-| Write body | One LLM call drafts the SKILL.md body from the plan |
-| Critic + repair | `critique_skill` scores P1-P4 (deterministic regex for P3 anti-patterns + mechanical P1/P2-bloat; one abstain-when-unsure LLM call for P4 scope-honesty + semantic P1). Any BLOCK (task-genre "NOT for" wall) triggers `repair_skill_body` (full regen, not diff-patch); loop ≤3 rounds. Residual ships as warnings + a `quality_gate` field |
-| Synthesize | Parallel `claude -p` (Claude subscription) calls — one per reference/template/script/evals file. Transport switchable via `MLEVAL_LLM_TRANSPORT` (claude default, openrouter fallback) |
+| Plan structure | One LLM call (intent-aware) returns `references`, `workflows`, `decision_tree`, `mcp_workflow_triggers`, `templates`/`scripts` (0-3 each), and section flags |
+| Write body | One LLM call drafts the SKILL.md body from the plan (intent-aware) |
+| Critic + repair | `critique_skill` scores P1-P4 (deterministic regex for P3 anti-patterns + mechanical P1/P2-bloat; one abstain-when-unsure LLM call for P4 scope-honesty + semantic P1 + **P3 conditional-gating**). Any BLOCK (task-genre "NOT for" wall OR a resource-heavy technique presented as an ungated default) triggers `repair_skill_body` (full regen, not diff-patch); loop ≤3 rounds. Residual ships as warnings + a `quality_gate` field |
+| Build contract (`[3.0-1]`) | `build_contract` formats a compact **Skill Contract** — `PURPOSE` + `INTENT / TARGET ENVIRONMENT` + `GATES` (from the decision-tree rows) — deterministically; empty if no gates/purpose |
+| Synthesize | Parallel `claude -p` (Claude subscription) calls — one per reference/template/script/evals file, with the Skill Contract threaded into each `write_reference` call. Transport switchable via `MLEVAL_LLM_TRANSPORT` (claude default, openrouter fallback) |
+| Reference-scan critic (`[3.0-1]`) | `critique_references` (deterministic regex; fires only when the Contract declares gates) flags any reference documenting a resource-heavy/conditional action (QLoRA / 4-bit / DeepSpeed / FSDP …) without a restated precondition — a `P3-ungated-reference` block finding that can flip `quality_gate` to `failed` |
 | Eval triggering | Per eval prompt the LLM judges our description against the real co-resident siblings (`--siblings`) or 5 canned decoys; bidirectional (also detects false positives on should-NOT-trigger prompts) |
 | Improve description | If `win_rate < 1.0`, one LLM call rewrites the description (third-person, pushy, what+when) from failing prompts |
 | Assemble | Python writes YAML frontmatter (LLM never writes frontmatter); stamps `builder_version` provenance |
@@ -143,7 +149,7 @@ metadata:
       repo: huggingface/peft
       fetched_at: 2026-05-07T18:30:00Z
       content_sha256: <hex>
-      builder_version: 1.4.0
+      builder_version: 2.1.0
     coverage: [html, gh-readme, gh-issues-open, stackexchange, gh-issues-question-closed]
 ```
 
@@ -237,15 +243,21 @@ agents/ai-skill-builder/
         │   ├── frontmatter-spec.md            OpenClaw metadata schema
         │   └── anti-patterns.md               Traps rejected by the validator
         └── scripts/
-            ├── skill_builder.py               Pipeline
+            ├── skill_builder.py               Pipeline (~2,800 LOC)
             └── prompts/
-                ├── plan_structure.txt         LLM: doc TOC → references + workflows + templates + section flags
-                ├── write_skill_body.txt       LLM: doc + workflows + hardware hints → SKILL.md body
-                ├── write_reference.txt        LLM: doc + topic → references/<topic>.md
+                ├── intent_capture.txt         LLM: doc → {purpose · target-env · success} brief  (3.0-2)
+                ├── plan_structure.txt         LLM: doc TOC → references + workflows + decision tree + templates + section flags
+                ├── write_skill_body.txt       LLM: doc + workflows + hardware hints + intent → SKILL.md body
+                ├── write_decision_tree.txt    LLM: optional decision-tree refiner (present on disk; decision tree is currently emitted inside plan_structure)
+                ├── critique_skill.txt         LLM: body → P1/P3/P4 findings (abstain-when-unsure)  (2.0.0)
+                ├── repair_skill_body.txt      LLM: body + blocking findings → repaired body  (2.0.0)
+                ├── write_reference.txt        LLM: doc + topic + Skill Contract → references/<topic>.md
                 ├── write_template.txt         LLM: workflow + doc → templates/*.py (py_compile validated)
+                ├── write_scripts.txt          LLM: workflow → scripts/*.{sh,py} utilities (1.4.0)
                 ├── write_evals.txt            LLM: body → evals/evals.json
                 ├── distill_pitfalls.txt       LLM: closed bugs → pitfalls.md
                 ├── write_troubleshooting.txt  LLM: open+closed issues+traces → troubleshooting.md
+                ├── distill_community_gotchas.txt  LLM: SE Q&As + closed question issues → community-gotchas.md (1.3.0)
                 ├── judge_triggering.txt       LLM: user msg + skills → which fires
                 └── improve_description.txt    LLM: failing prompts → better description
 ```
@@ -319,12 +331,14 @@ Per the [`anthropics/skills/skills/skill-creator/SKILL.md`](https://github.com/a
 
 Runtime cost ≈ ~2 minutes for triggering (60 parallel judge calls), ~5–10 minutes for functional A/B (5 sequential prompts × 2 conditions through OpenClaw gateway).
 
+> **Executor note (2.1.0):** the functional A/B distinguishes its two cells by prompt-injecting a "read the installed skill" marker into the with-skill cell; both cells run through `openclaw agent` (→ OpenRouter). A `claude -p` *organic-activation* executor (`_run_claude_executor`, Skills-3.0 Phase 3-3), which copies the skill into a temp `.claude/skills/` catalog and measures whether the model activates it on its own, is present in `eval_skill.py` but **not yet wired into any subcommand**. Triggering negatives are judged against 5 canned generic decoys (`DECOY_SKILLS`); the `--siblings` real-sibling path exists in the builder's own `evaluate_triggering` but is not used by `eval_skill.py`'s triggering command.
+
 The peft-tuning saturation result is informative: on canonical PEFT questions Sonnet's training data already covers the answer, so deterministic `must_contain` checks pass with or without the skill. The skill's actual lift shows up on **harder, niche, version-specific** questions — verified separately by the BOFT trajectory (`/tmp/agent-trajectories/06-mcp-fallback-boft.json`) where the agent fell through to Context7 to pull a complete `BOFTConfig` parameter table the without-skill arm wouldn't have had. Stage 2 is designed to surface this lift.
 
 ### Stage 2 — MLE-skill-bench (specified, not implemented)
 
 A containerised, runnable benchmark for ML-engineering skills. Combines:
-- MLAlgo-Bench's **EScore = ∆Score × pass-rate** (its eq. 4) — rewards a skill only when it *both* lifts pass-rate *and* keeps recipe fidelity high. Detects MLAlgo-Bench's "AIDE shortcut" failure mode (Table 6 — agent ignores prescribed recipe to game pass-rate).
+- MLAlgo-Bench's **EScore = ∆Score × pass-rate** (its eq. 4) — rewards a skill only when it *both* lifts pass-rate *and* keeps recipe fidelity high. Detects the recipe-ignoring / pass-rate-gaming shortcut (MLAlgo-Bench Table 6 — agent ignores prescribed recipe to game pass-rate).
 - MLE-Bench / RE-Bench's **container isolation + held-out test data + fixed compute budget** so OOM and wall-clock failures count as evaluation failures.
 - Anthropic skill-creator's **same-turn paired runs** for variance control + `text/passed/evidence` schema.
 - Eugene Yan's **two-judge averaging** (one Claude + one non-Claude) to neutralise the +25pp self-preference bias measured for Claude-v1.
@@ -374,7 +388,7 @@ SkillScore     = ∆Score(with_skill) − ∆Score(without_skill)
 EffectiveLift  = SkillScore × pass_rate(with_skill)
 ```
 
-A skill that lifts pass-rate but lowers fidelity (the AIDE-shortcut failure) gets penalised; only skills that lift *both* pass and recipe fidelity score well.
+A skill that lifts pass-rate but lowers fidelity (the recipe-ignoring / pass-rate-gaming shortcut, MLAlgo-Bench Table 6) gets penalised; only skills that lift *both* pass and recipe fidelity score well.
 
 #### Acceptance thresholds
 
@@ -394,7 +408,7 @@ When any skill clears 95% on the capability set, expand the eval set with harder
 ### Sources cited (curated)
 
 **Seed paper**
-- [MLAlgo-Bench (Wang et al., EMNLP Findings 2025) — *Can Machines Implement Machine Learning Algorithms?*](https://aclanthology.org/2025.findings-emnlp.772/) — instruction-fidelity benchmark, EScore metric, AIDE-shortcut warning.
+- [MLAlgo-Bench (Wang et al., EMNLP Findings 2025) — *Can Machines Implement Machine Learning Algorithms?*](https://aclanthology.org/2025.findings-emnlp.772/) — instruction-fidelity benchmark, EScore metric, recipe-ignoring / pass-rate-gaming shortcut warning (Table 6).
 
 **MLE benchmarks (Dimensions 4, 5, 7)**
 - [MLE-Bench (Chan et al., OpenAI 2024)](https://arxiv.org/abs/2410.07095)
