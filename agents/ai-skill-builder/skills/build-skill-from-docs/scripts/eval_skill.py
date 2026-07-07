@@ -34,10 +34,22 @@ import skill_builder as sb  # noqa: E402 — for the triggering judge + decoy li
 
 
 def cmd_triggering(args: argparse.Namespace) -> dict:
-    """Triggering F1: judge each prompt over the target skill + decoys."""
+    """Triggering F1: judge each prompt over the target skill + competitors.
+
+    P1.1: compete against REAL co-resident siblings by default (the install root, or
+    --siblings <dir>); fall back to the canned DECOY_SKILLS only when <2 siblings exist.
+    Real siblings are a far harder, more realistic precision test than generic decoys.
+    """
     skill_dir = Path(args.skill_dir).expanduser().resolve()
-    return ec.run_triggering(skill_dir, sb.judge_triggering, sb.DECOY_SKILLS,
-                             runs=args.runs)
+    meta = ec.load_skill_meta(skill_dir)
+    sib_dir = getattr(args, "siblings", None) or str(skill_dir.parent)
+    sibs = sb._load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
+    if len(sibs) >= 2:
+        decoys, label = sibs, "siblings"
+    else:
+        decoys, label = sb.DECOY_SKILLS, "decoys"
+    return ec.run_triggering(skill_dir, sb.judge_triggering, decoys,
+                             runs=args.runs, competitors_label=label)
 
 
 def cmd_functional(args: argparse.Namespace) -> dict:
@@ -114,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--runs", type=int, default=3, help="Triggering runs per prompt (default 3)"),
         sp.add_argument("--agent", default="ai-skill-builder", help="OpenClaw agent for functional runs"),
         sp.add_argument("--per-prompt-timeout", type=int, default=240),
+        sp.add_argument("--siblings", default="",
+                        help="dir of co-resident skills to judge triggering against "
+                             "(default: the target skill's parent dir; falls back to canned decoys if <2)"),
     )
 
     t = sub.add_parser("triggering", help="Triggering F1 only")

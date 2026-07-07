@@ -1156,10 +1156,31 @@ def write_reference(
     return raw.strip() + "\n"
 
 
-def write_evals(skill_name: str, skill_body: str) -> dict:
+def write_evals(skill_name: str, skill_body: str, examples_text=None,
+                changelog_text=None, sibling_names=None) -> dict:
+    """Generate situated eval prompts + near-miss negatives (P1.2).
+
+    Grounds generation in the fetched substrate — `examples_text` (tutorial-style
+    tasks), `changelog_text` (API-migration prompts) — and `sibling_names` (real
+    competitor libraries the near-miss negatives should name). All optional; missing
+    context degrades gracefully to "(none)". Returns {skill_name, prompts,
+    negative_prompts} — negative_prompts feed the bidirectional triggering eval.
+    """
+    def _clip(v, n: int) -> str:
+        if isinstance(v, list):
+            v = "\n".join(str(x) for x in v)
+        return (str(v or "")[:n]) or "(none)"
+
     tpl = _read_prompt("write_evals.txt")
-    prompt = _fill_prompt(tpl, skill_name=skill_name, skill_body=skill_body[:4000])
-    raw = _strip_fences(_llm_call(prompt, max_tokens=1000, temperature=0.5))
+    prompt = _fill_prompt(
+        tpl,
+        skill_name=skill_name,
+        skill_body=skill_body[:4000],
+        examples_text=_clip(examples_text, 1500),
+        changelog_text=_clip(changelog_text, 1200),
+        sibling_names=", ".join(sibling_names or []) or "(none known)",
+    )
+    raw = _strip_fences(_llm_call(prompt, max_tokens=1400, temperature=0.5))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         return {"skill_name": skill_name, "prompts": []}
@@ -2302,16 +2323,26 @@ def _pipeline(
             if any(f["severity"] == "block" for f in ref_findings):
                 critic_report["quality_gate"] = "failed"
 
-    evals_doc = write_evals(skill_name, body) if include_evals else None
+    # Real co-resident siblings (P1.1): default to the install root (SKILLS_DIR);
+    # override with --siblings. Used both to GROUND eval-prompt generation (P1.2 —
+    # near-miss negatives naming real competitors) and as triggering COMPETITORS below.
+    # <2 siblings found → fall back to the canned decoys in evaluate_triggering.
+    _sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
+    _sibs = _load_sibling_descriptions(_sib_dir, exclude_name=skill_name)
+    siblings = _sibs if len(_sibs) >= 2 else None
+    _sibling_names = [s["name"] for s in _sibs]
+
+    # P1.2: ground eval-prompt generation in the fetched substrate (examples +
+    # changelog) and the real sibling names, so prompts are situated and the
+    # near-miss negatives are genuinely tricky rather than obviously irrelevant.
+    evals_doc = write_evals(
+        skill_name, body,
+        examples_text=sources.get("examples"),
+        changelog_text=sources.get("changelog"),
+        sibling_names=_sibling_names,
+    ) if include_evals else None
 
     description = _extract_description(body)
-    # Real co-resident siblings (--siblings) replace the canned decoys in the
-    # triggering eval — a harder, realistic precision test. negative_prompts (when
-    # the eval doc carries them) make it bidirectional (catch over-triggering too).
-    siblings = (
-        _load_sibling_descriptions(args.siblings, exclude_name=skill_name)
-        if getattr(args, "siblings", None) else None
-    ) or None
     negative_prompts = evals_doc.get("negative_prompts") if evals_doc else None
     triggering_report = None
     if run_eval_loop and evals_doc and evals_doc.get("prompts"):

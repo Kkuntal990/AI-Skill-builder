@@ -457,13 +457,16 @@ def _stddev(xs: list[float]) -> float:
 # ── Eval cores (importable; take explicit params, no argparse / no skill_builder) ──
 
 
-def run_triggering(skill_dir: Path, judge_fn, decoys: list[dict], *, runs: int = 3) -> dict:
+def run_triggering(skill_dir: Path, judge_fn, decoys: list[dict], *, runs: int = 3,
+                   competitors_label: str = "decoys") -> dict:
     """Triggering F1 over should-trigger + near-miss prompts.
 
     `judge_fn(prompt, skills) -> {"choice": <name|"none">, ...}` is injected by the caller
     (skill_builder.judge_triggering) so this module never imports skill_builder.
-    `decoys` is the competitor skill list (real siblings or canned decoys).
+    `decoys` is the competitor skill list (real siblings or canned decoys);
+    `competitors_label` records which ("siblings" | "decoys") for the report.
     """
+    decoys = list(decoys)
     meta = load_skill_meta(skill_dir)
     triggering_path = skill_dir / "evals" / "triggering.json"
     if not triggering_path.exists():
@@ -505,6 +508,8 @@ def run_triggering(skill_dir: Path, judge_fn, decoys: list[dict], *, runs: int =
     return {
         "skill_name": meta["name"],
         "runs_per_prompt": runs,
+        "competitors": competitors_label,
+        "n_competitors": len(decoys),
         "should_trigger": pos_results,
         "should_not_trigger": neg_results,
         "metrics": {

@@ -1,37 +1,54 @@
-You are writing test prompts for an OpenClaw skill.
+You are writing test prompts for an OpenClaw skill, following Anthropic skill-creator's eval methodology.
 
-INPUT: package description + SKILL.md body (already drafted).
-OUTPUT: JSON matching `evals/evals.json` format.
+INPUT: the SKILL.md body (already drafted), plus grounding context — usage examples, changelog, and the names of REAL co-resident sibling skills.
+OUTPUT: JSON with situated should-trigger prompts AND genuinely-tricky near-miss negatives.
 
-Hard rules:
-- 2-3 test prompts. Not more.
-- Each prompt must be something a REAL USER would type — not test-like language.
-- At least one prompt must NOT mention the package name directly (tests that the skill triggers on capability, not keyword).
-- At least one prompt must be concrete (specific task, not "help me with X").
-- Do not include assertions. Just prompts.
+## What makes a good prompt (situated, not test-like)
 
-Return ONLY JSON matching this schema, using the skill name literally from "SKILL NAME" below:
+Write prompts a REAL USER would actually type. Make them concrete and detailed — include realistic specifics: file paths, module/class names, column names or values, model names, error messages, casual phrasing, occasional lowercase/abbreviations. Draw the specifics from the EXAMPLES and CHANGELOG context when present.
+
+- BAD (too short/abstract): "Format this data" / "help me fine-tune a model"
+- GOOD (situated): "I've got a train.jsonl of chat transcripts and a 24GB 4090 — walk me through fine-tuning Qwen2.5-7B on it so it stops refusing benign requests. Adapter is fine."
+
+## should_trigger prompts (positives)
+
+- 2-3 prompts.
+- At least one must NOT mention the package name directly (tests capability-triggering, not keyword-matching).
+- At least one should be an API-migration / version prompt if the CHANGELOG shows breaking changes ("I'm still on the old `X` API, how do I move to …").
+- At least one should reflect a realistic task from the EXAMPLES.
+
+## negative_prompts (near-miss negatives) — the hard part
+
+These SHOULD NOT trigger this skill. The valuable ones are near-misses: they share vocabulary or domain with the skill but actually need something else — often one of the SIBLING SKILLS. Do NOT write obviously-irrelevant prompts ("write a fibonacci function" for a PDF skill is useless). Name a sibling library/tool where natural.
+
+- 2-3 near-miss negatives.
+- Each must be a plausible request that a careless router might mis-route TO this skill, but that a correct router would send elsewhere.
+
+Return ONLY JSON in this schema, using the skill name literally from "SKILL NAME":
 
 {
   "skill_name": "<use the SKILL NAME value>",
   "prompts": [
-    {"id": 1, "prompt": "<realistic user message>"},
-    {"id": 2, "prompt": "<different realistic user message>"},
+    {"id": 1, "prompt": "<situated should-trigger message>"},
+    {"id": 2, "prompt": "<different situated should-trigger message>"},
     {"id": 3, "prompt": "<third, optional>"}
-  ]
-}
-
-Example for TRL:
-{
-  "skill_name": "trl-training",
-  "prompts": [
-    {"id": 1, "prompt": "I want to fine-tune Qwen2.5-0.5B on ultrafeedback to prefer helpful answers over unhelpful ones. Can you set that up?"},
-    {"id": 2, "prompt": "What's the difference between GRPO and RLOO and when should I use each?"},
-    {"id": 3, "prompt": "Walk me through TRL SFT with LoRA on Capybara dataset."}
+  ],
+  "negative_prompts": [
+    {"id": 1, "prompt": "<near-miss that should route to a sibling, not this skill>"},
+    {"id": 2, "prompt": "<another genuinely tricky near-miss>"}
   ]
 }
 
 ---
 SKILL NAME: {{skill_name}}
+
+REAL SIBLING SKILLS (route near-misses toward these, don't trigger on them): {{sibling_names}}
+
+USAGE EXAMPLES (mine these for realistic task specifics):
+{{examples_text}}
+
+CHANGELOG (mine this for API-migration prompts):
+{{changelog_text}}
+
 SKILL.md BODY:
 {{skill_body}}
