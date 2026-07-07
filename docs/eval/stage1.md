@@ -30,6 +30,23 @@ python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> \
   --agent skill-tester --runs 3        # MCP outcome plumbing
 ```
 
+## Two functional executors: told-to-read vs organic activation
+
+The harness measures a skill's *content* and its *discoverability* through two different executors.
+
+**1. Functional A/B (`functional` / `all`)** — the default, and what the "Test agent" table above configures. Both cells run through `openclaw agent --json` (→ OpenRouter); the with-skill cell appends a `(… a skill is installed at <dir>. Read SKILL.md …)` marker, the without-skill cell sends the bare prompt. Grading is deterministic — `_score_assertions` does literal `must_contain` / `must_contain_any` / `must_not_contain` / `expected_citations` matching, no LLM judge on this path. So it measures *"does the skill's content help once the agent reads it,"* not whether the agent finds it.
+
+**2. Organic-activation eval (`activation` / `all --with-activation`)** — Skills-3.0 Phase 3-3 (`_run_claude_executor` → `cmd_activation`). The skill is placed **AVAILABLE-not-forced** in a temp `.claude/skills/` catalog and the prompt runs through `claude -p` on the **Claude subscription** (model `SKILLBUILD_LLM_MODEL`, default `opus` — decoupled from the OpenRouter-slug `MLEVAL_LLM_MODEL`). It replays `triggering.json`'s should-trigger + near-miss prompts and records whether the model reads the skill *on its own*, reporting organic-activation **precision / recall / F1 + false-activation rate** (near-miss over-reads). This closes the gap the description-*judge* triggering test can't see: the judge ranks descriptions in the abstract; this observes a real tool-call under progressive disclosure.
+
+```bash
+python3 .../eval_skill.py activation ~/.openclaw/workspace/skills/<skill> \
+  --runs 3 --model opus --max-concurrency 3
+# or fold it into a full pass:
+python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> --with-activation
+```
+
+The description-judge triggering test still scores against 5 canned generic decoys (`DECOY_SKILLS`); the real-sibling `--siblings` path exists in the builder's own `evaluate_triggering` but not in `eval_skill.py`'s `triggering` command.
+
 ## MCP signal capture (four signals)
 
 Every functional trial captures four orthogonal MCP signals. Three were original; the fourth (outcome narration) was added 2026-05-24 to recover false negatives from a runtime bug — see below.
@@ -66,7 +83,7 @@ As of 2026-05-24, `eval_skill.py` writes full `reply_text` into each trial's JSO
 
 | File | Anthropic role | Size |
 |---|---|---|
-| `evals/triggering.json` | Tasks — does the skill activate on the right prompt? | 10 should-trigger + 10 near-miss |
+| `evals/triggering.json` | Tasks — does the skill activate on the right prompt? (reused by the `activation` executor) | 10 should-trigger + 10 near-miss |
 | `evals/functional.json` | Tasks — does the response contain required content + citations? | 5 tasks, each with `must_contain` / `must_not_contain` / `expected_citations` |
 
 | Tier | What it scores | Implementation |
@@ -86,6 +103,7 @@ As of 2026-05-24, `eval_skill.py` writes full `reply_text` into each trial's JSO
 - Lift (with-skill pass − without-skill pass), reported as signal not gate
 - Eval-saturation flag (`true` if both arms ≥ 0.9)
 - Token in/out ratio (with-skill / without-skill)
+- **Organic-activation precision / recall / F1 + false-activation rate** — only when the `activation` executor is run (`activation` or `all --with-activation`)
 
 ## Pass bar
 
@@ -94,6 +112,8 @@ Three gates, AND-combined. **All measured on the with-skill cell only.** Without
 - Triggering F1 ≥ 0.85
 - Functional pass rate ≥ 0.6
 - Citation accuracy ≥ 0.5
+
+A fourth gate, `activation_recall_min ≥ 0.50` (organic-activation recall), is **only enforced when the `activation` executor was run** — it's absent from a plain `functional`/`all` pass. Bars are advisory unless invoked via the `pass-bar` subcommand: `triggering` / `functional` / `all` emit JSON and never fail the process; only `pass-bar` turns the AND-combined verdict into an exit code.
 
 Lift is *signal not gate* in v0.1 — Goodhart-safe choice. A skill that performs well in absolute terms passes even if the base model already covered most prompts. `saturated=true` (both arms ≥ 0.9) flags for human review.
 

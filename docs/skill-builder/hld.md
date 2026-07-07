@@ -1,7 +1,8 @@
 # HLD: AI-Skill Builder — OpenClaw Agent
 
 **Status:** 2.1.0 — Skills-3.0 intent capture + contract-threaded references + P3 conditional-gating critic (2026-06-28). Builds on 2.0.0's closed critic→repair loop + Claude-subscription transport.
-**Companion to:** [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills) · [plan.md](plan.md) (phase progression and open items) · [skill-shape-principles.md](skill-shape-principles.md) (authoring guidance)
+**Index:** [README.md](README.md) — the skill-builder system map (start there to navigate all design + eval docs).
+**Companion to:** [plan.md](plan.md) (phase progression + open items) · [skill-shape-principles.md](skill-shape-principles.md) (content-shape authoring) · [skill-reliability-checklist.md](skill-reliability-checklist.md) (the P0–P4 reliability bar) · [../eval/stage1.md](../eval/stage1.md) + [../eval/stage2.md](../eval/stage2.md) + [../eval/skill-retrieval-design.md](../eval/skill-retrieval-design.md) (evaluation) · [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills)
 
 ## Goal
 

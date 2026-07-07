@@ -67,7 +67,7 @@ Dollar cost computable on demand from current model pricing × measured tokens. 
 
 ## Current status
 
-- **Stage 1**: locked, in production. Default test agent `main` for clean lift measurement; `skill-tester` for end-to-end MCP outcome plumbing. Four MCP signals captured: native tool calls, bash sidecar log, narration regex, outcome narration (Phase 1.5+ — recovers false negatives from OpenClaw's null-`toolSummary` bug on multi-step responses). Reply text preserved per trial for offline re-grading. See [stage1.md](./stage1.md).
+- **Stage 1**: locked, in production. Default test agent `main` for clean lift measurement; `skill-tester` for end-to-end MCP outcome plumbing. Four MCP signals captured: native tool calls, bash sidecar log, narration regex, outcome narration (Phase 1.5+ — recovers false negatives from OpenClaw's null-`toolSummary` bug on multi-step responses). Reply text preserved per trial for offline re-grading. A Skills-3.0 organic-activation executor (`activation` / `all --with-activation`) additionally measures whether the model reads the skill *unprompted* under progressive disclosure via `claude -p` (available-not-forced), reporting activation precision/recall/F1. See [stage1.md](./stage1.md).
 - **Stage 2 (v0.4, MLEvolve)**: harness validated end-to-end. `samsum` seed-0 paired A/B complete (spike-012) — with-skill reached ROUGE-L 0.4331 and kept the PEFT core valid; without-skill never scored and corrupted its code into parse-error nodes. Per-sub-stage metrics (`stage_metrics.py`) + L1+L2 report (`scripts/l1_l2_compare.py`) shipped. Seed 1 running; `gsm8k` + `boolq` instruction.md authoring next. Running results tracked in [peft-skill-eval-report.md](./peft-skill-eval-report.md).
 
 ## Schedule
