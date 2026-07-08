@@ -182,6 +182,9 @@ INCLUDE HARDWARE SECTION: {{include_hardware}}
 INTENT (what this skill is FOR + target environment + success criteria — default to the cheapest approach that fits THIS environment; surface memory-efficient / quantized / distributed techniques only as gated escape-hatches per the precondition rule above, never as the default):
 {{intent}}
 
+KNOWN BASELINE GAPS (what the base model got WRONG or MISSED when answering WITHOUT this skill — prioritize teaching exactly these; if this says "(no baseline probe run …)", ignore it):
+{{gap_notes}}
+
 README INSTALL SECTION:
 {{readme_install}}
 

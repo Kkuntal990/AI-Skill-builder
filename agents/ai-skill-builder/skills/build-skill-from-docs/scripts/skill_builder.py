@@ -733,6 +733,7 @@ def plan_structure(
     with_scripts: bool = False,
     with_version_notes: bool = False,
     intent: str = "",
+    gap_notes: str = "",
 ) -> dict:
     tpl = _read_prompt("plan_structure.txt")
     prompt = _fill_prompt(
@@ -744,6 +745,7 @@ def plan_structure(
         with_scripts=str(with_scripts).lower(),
         with_version_notes=str(with_version_notes).lower(),
         intent=intent or "(none provided — infer sensible, cheapest-that-works defaults)",
+        gap_notes=gap_notes or "(no baseline probe run — no observed gaps)",
     )
     raw = _strip_fences(_llm_call(prompt, max_tokens=3500, temperature=0.2))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -855,6 +857,48 @@ def infer_intent(doc_text: str) -> str:
     return raw[:1200]
 
 
+def baseline_gap_probe(intent_brief: str, doc_text: str, agent: str = "skill-tester",
+                       n_questions: int = 2, timeout: int = 180) -> str:
+    """P0.3 baseline-first: run the base model (no skill) on intent-derived probe
+    questions and summarize where it falls short, yielding `gap_notes` that steer
+    plan/body toward REAL gaps (Anthropic "run without-skill first, document failures").
+
+    Best-effort: returns "" on any failure so it never blocks a build. Prompt-level
+    only — asks questions and reads text answers; no task execution, no GPU.
+    """
+    if not intent_brief:
+        return ""
+    try:
+        import eval_core as ec
+        q_prompt = (
+            f"Given this skill INTENT and docs, list {n_questions} short, realistic user "
+            "questions whose answers the skill must get right. One per line, no numbering, "
+            "no preamble.\n\nINTENT:\n" + intent_brief
+            + "\n\nDOCS (excerpt):\n" + (doc_text or "")[:3000]
+        )
+        raw = _llm_call(q_prompt, max_tokens=300, temperature=0.3)
+        questions = [ln.strip("-*0123456789. ").strip() for ln in raw.splitlines() if ln.strip()][:n_questions]
+        if not questions:
+            return ""
+        pairs = []
+        for q in questions:
+            r = ec._run_agent(q, agent=agent, timeout=timeout)
+            pairs.append((q, (r.get("text") or "")[:1500]))
+        joined = "\n\n".join(f"Q: {q}\nBASELINE ANSWER (no skill): {a}" for q, a in pairs)
+        g_prompt = (
+            "Below are questions and the base model's answers WITHOUT the skill. In 3-6 terse "
+            "bullets, list what the baseline got WRONG, vague, or MISSED that a good skill must "
+            "nail — these become the skill's priorities. If the baseline already answers "
+            "everything well, reply exactly: NONE\n\n" + joined
+        )
+        gaps = _llm_call(g_prompt, max_tokens=500, temperature=0.2).strip()
+        if not gaps or gaps.upper().startswith("NONE") or len(gaps) < 10:
+            return ""
+        return gaps[:2000]
+    except (ImportError, RuntimeError, OSError, KeyError, ValueError):
+        return ""
+
+
 # Hardware requirement extraction — regex side-channel for the body prompt.
 _HW_MARKERS = re.compile(
     r"\b(?:VRAM|GPU memory|GPU RAM|memory footprint|gradient checkpoint"
@@ -911,6 +955,7 @@ def write_body(
     scripts: list[dict] | None = None,
     old_patterns: list[dict] | None = None,
     intent: str = "",
+    gap_notes: str = "",
 ) -> str:
     tpl = _read_prompt("write_skill_body.txt")
     mcp_workflow_triggers = mcp_workflow_triggers or []
@@ -970,6 +1015,7 @@ def write_body(
         readme_install=readme_install[:3000] or "(README install section not found)",
         doc_text=doc_text[:15000],
         intent=intent or "(none provided — default to the cheapest approach that works)",
+        gap_notes=gap_notes or "(no baseline probe run — no observed gaps)",
     )
     raw = _strip_fences(_llm_call(prompt, max_tokens=5000, temperature=0.3))
     idx = raw.find("# ")
@@ -2277,6 +2323,18 @@ def _pipeline(
         intent_source = "inferred" if intent_brief else "none"
     args.intent_brief = intent_brief  # consumed by build_contract below
 
+    # P0.3 baseline-first gap capture (opt-in via --baseline-probe): run the base model
+    # WITHOUT the skill on intent-derived questions, summarize what it misses, and thread
+    # those gap_notes into plan + body so the skill targets REAL gaps. Default off (makes
+    # live agent calls / costs credit); "" when off → behavior unchanged.
+    gap_notes = ""
+    if getattr(args, "baseline_probe", False):
+        gap_notes = baseline_gap_probe(
+            intent_brief, sources["doc"],
+            agent=getattr(args, "eval_agent", None) or "skill-tester",
+        )
+    args.gap_notes = gap_notes
+
     plan = plan_structure(
         doc_text=sources["doc"],
         with_pitfalls=args.with_pitfalls,
@@ -2285,6 +2343,7 @@ def _pipeline(
         with_scripts=with_scripts,
         with_version_notes=with_version_notes,
         intent=intent_brief,
+        gap_notes=gap_notes,
     )
     skill_name = args.name or plan["skill_name"]
 
@@ -2309,6 +2368,7 @@ def _pipeline(
         scripts=plan.get("scripts", []),
         old_patterns=plan.get("old_patterns", []),
         intent=intent_brief,
+        gap_notes=gap_notes,
     )
 
     # ── Quality critic + bounded repair loop (Phase C/D) ──
@@ -2882,6 +2942,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "omitted, it is inferred from the docs and recorded as an assumption.")
         sp.add_argument("--no-intent-inference", action="store_true",
                         help="With no --intent, skip doc-based intent inference (build with no intent brief)")
+        sp.add_argument("--baseline-probe", action="store_true",
+                        help="P0.3: probe the base model WITHOUT the skill on intent-derived "
+                             "questions and steer the build toward observed gaps (makes live "
+                             "agent calls; off by default)")
         sp.add_argument("--force", action="store_true")
         sp.add_argument("--out", default=None)
 
