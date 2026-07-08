@@ -23,10 +23,20 @@ LLM call or RNG-using code runs. Order matters:
                               agents (draft/improve/debug/evolution): Tier-0
                               catalog into EVERY node, plus a per-node temp-0
                               model selector that loads only the relevant
-                              skill(s)+references. Calls eval_harness for the
-                              non-skill harness append. Imports LAST so the
-                              library is populated and the hook is registered
-                              before MLEvolve loads any agent module.
+                              skill(s)+references, bounded by per-node injection
+                              caps (MLEVAL_SKILL_MAX_PER_NODE / _MAX_REFS_PER_NODE,
+                              default 3/3). Emits per-node + cell-init telemetry
+                              via selection_logger → $MLEVAL_SELECTION_LOG. Calls
+                              eval_harness for the non-skill harness append.
+                              Imports LAST so the library is populated and the
+                              hook is registered before MLEvolve loads any agent
+                              module.
+
+    (support) version          — SIDECAR_VERSION, the A/B comparability boundary
+                                 (side-effect-free; recorded in the manifest +
+                                 every selection event).
+    (support) selection_logger — structured selection telemetry writer (no patch;
+                                 imported by skill_injector).
 
 Each submodule applies its patch on import. The order ensures prompt_logger
 wraps the LLM call site BEFORE MLEvolve's agent modules cache references to it,
@@ -44,6 +54,8 @@ History note (spike-011): we previously also shipped:
 Both removed in favor of trusting the published MLEvolve config and
 limiting our patches to the minimum needed for the A/B treatment.
 """
+
+from .version import SIDECAR_VERSION  # noqa: F401 — exported for provenance
 
 from . import seed                # noqa: F401
 from . import openai_apikey_env   # noqa: F401

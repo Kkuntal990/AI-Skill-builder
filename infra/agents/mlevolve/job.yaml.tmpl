@@ -139,6 +139,14 @@ spec:
               value: "${MLEVAL_EXEC_TIMEOUT_SEC}"
             - name: MLEVAL_PROMPTS_LOG
               value: "/results/${MLEVAL_RUN_ID}/${MLEVAL_TRAJECTORY_ID}/prompts.jsonl"
+            - name: MLEVAL_SELECTION_LOG
+              value: "/results/${MLEVAL_RUN_ID}/${MLEVAL_TRAJECTORY_ID}/selection_events.jsonl"
+            # Per-node skill-injection caps (sidecar >= 1.0.0). Default 3/3; an
+            # ablation can retune via the orchestrator without an image rebuild.
+            - name: MLEVAL_SKILL_MAX_PER_NODE
+              value: "${MLEVAL_SKILL_MAX_PER_NODE}"
+            - name: MLEVAL_SKILL_MAX_REFS_PER_NODE
+              value: "${MLEVAL_SKILL_MAX_REFS_PER_NODE}"
 
             - name: OPENAI_BASE_URL
               value: "https://openrouter.ai/api/v1"

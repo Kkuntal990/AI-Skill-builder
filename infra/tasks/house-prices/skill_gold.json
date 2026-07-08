@@ -1,0 +1,10 @@
+{
+  "task": "house-prices",
+  "relevant_skills": ["tabular-baseline"],
+  "acceptable_skills": [],
+  "irrelevant_skills": ["peft-tuning", "vllm-inference"],
+  "relevant_references": {},
+  "confidence": "high",
+  "curated_by": "provisional (auto, 2026-07) — refine before citing",
+  "notes": "Tabular regression (predict SalePrice) with mixed dtypes — the tabular-baseline sweet spot. LLM PEFT / vLLM inference skills are off-domain."
+}

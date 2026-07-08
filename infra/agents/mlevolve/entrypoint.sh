@@ -93,6 +93,19 @@ export OPENAI_BASE_URL MLEVAL_LLM_MODEL
 # helper-pod smoke path goes through the entrypoint, so set it here.
 export MLEVAL_PROMPTS_LOG="${MLEVAL_PROMPTS_LOG:-$OUT_DIR/prompts.jsonl}"
 
+# selection_logger reads MLEVAL_SELECTION_LOG at write time (per-node + cell-init
+# skill-selection telemetry). Default alongside prompts.jsonl on the PVC. Job
+# manifest sets this too, but the helper-pod smoke path goes through here.
+export MLEVAL_SELECTION_LOG="${MLEVAL_SELECTION_LOG:-$OUT_DIR/selection_events.jsonl}"
+
+# Sidecar version — the A/B comparability boundary (injection caps + selection
+# telemetry). Read the constant from the side-effect-free version module by
+# exec'ing the file directly; importing the PACKAGE would apply every
+# monkey-patch, which we don't want in this throwaway shell context.
+MLEVAL_SIDECAR_VERSION=$(python3 -c "import importlib.util as u; s=u.spec_from_file_location('_v','/workspace/mlevolve_sidecar/version.py'); m=u.module_from_spec(s); s.loader.exec_module(m); print(m.SIDECAR_VERSION)" 2>/dev/null || echo unknown)
+export MLEVAL_SIDECAR_VERSION
+echo "[entrypoint] sidecar version: $MLEVAL_SIDECAR_VERSION"
+
 mkdir -p "$OUT_DIR" "$OUT_DIR/agent_logs"
 
 echo "[entrypoint] run_id=$RUN_ID trajectory_id=$TRAJECTORY_ID"
@@ -390,6 +403,9 @@ m = {
     'agent': {
         'name': 'mlevolve',
         'version': 'vendored-26bde89',
+        # sidecar_version is the selection-regime boundary (caps + telemetry);
+        # absent/unknown on pre-1.0.0 runs (mvp-032 and earlier).
+        'sidecar_version': os.environ.get('MLEVAL_SIDECAR_VERSION', 'unknown'),
         'llm_model': os.environ['MLEVAL_LLM_MODEL'],
     },
     'pod': {'hostname': socket.gethostname(), 'node': os.environ.get('KUBE_NODE_NAME', 'unknown')},

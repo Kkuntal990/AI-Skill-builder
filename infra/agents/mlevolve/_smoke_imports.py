@@ -147,6 +147,130 @@ with _tf0.TemporaryDirectory() as _libdir:
     assert skill_retriever.reload() == 0, "reset to 0 skills failed"
 
 # -----------------------------------------------------------------------------
+# 5. Per-node injection CAPS (sidecar >= 1.0.0). The selector's raw ask is
+#    bounded to _caps() skills + refs before it reaches the prompt. Catches: a
+#    cap regression that lets ["__all__"] splice ~2,300 lines back in, or the
+#    stats the telemetry reports drifting from what's actually injected.
+# -----------------------------------------------------------------------------
+import json as _json  # noqa: E402
+
+# default caps 3/3; env override read at call time (ablation lever, no rebuild)
+assert skill_injector._caps() == (3, 3), f"default caps not 3/3: {skill_injector._caps()}"
+os.environ["MLEVAL_SKILL_MAX_PER_NODE"] = "2"
+os.environ["MLEVAL_SKILL_MAX_REFS_PER_NODE"] = "1"
+assert skill_injector._caps() == (2, 1), f"env caps not honored: {skill_injector._caps()}"
+os.environ.pop("MLEVAL_SKILL_MAX_PER_NODE", None)
+os.environ.pop("MLEVAL_SKILL_MAX_REFS_PER_NODE", None)
+
+_skills_fix = [
+    {"name": "alpha", "description": "d", "body": "ALPHA_BODY",
+     "references": {"a1.md": "A1", "a2.md": "A2", "a3.md": "A3", "a4.md": "A4"},
+     "reference_files": ["a1.md", "a2.md", "a3.md", "a4.md"]},
+    {"name": "beta", "description": "d", "body": "BETA_BODY",
+     "references": {"b1.md": "B1"}, "reference_files": ["b1.md"]},
+    {"name": "gamma", "description": "d", "body": "GAMMA_BODY",
+     "references": {}, "reference_files": []},
+    {"name": "delta", "description": "d", "body": "DELTA_BODY",
+     "references": {}, "reference_files": []},
+]
+_sel = [
+    {"skill_name": "alpha", "references": ["__all__"], "reason": "r"},
+    {"skill_name": "beta", "references": ["b1.md"], "reason": "r"},
+    {"skill_name": "gamma", "references": [], "reason": "r"},
+    {"skill_name": "delta", "references": [], "reason": "r"},
+]
+_blocks, _stats = skill_injector._render_selected_bodies(_sel, _skills_fix, 3, 3)
+assert _stats["skills_truncated"] is True, "skills cap (3) not enforced on a 4-skill ask"
+assert _stats["selected_skills"] == ["alpha", "beta", "gamma"], _stats["selected_skills"]
+assert _stats["refs_truncated"] is True, "refs cap (3) not enforced vs alpha __all__ (4 refs)"
+_total_refs = sum(len(v) for v in _stats["selected_references"].values())
+assert _total_refs == 3, f"expected 3 refs total across node, got {_total_refs}: {_stats['selected_references']}"
+_joined = "\n".join(_blocks)
+assert "GAMMA_BODY" in _joined and "DELTA_BODY" not in _joined, "skill cap dropped the wrong body"
+# caps=0 → catalog-only ablation (no bodies)
+_b0, _s0 = skill_injector._render_selected_bodies(_sel, _skills_fix, 0, 3)
+assert _b0 == [] and _s0["selected_skills"] == [], "max_skills=0 must inject zero bodies"
+# fallback_all: every body, no refs, not skill-capped
+_bf, _sf = skill_injector._render_selected_bodies(skill_injector._FALLBACK_ALL, _skills_fix, 3, 3)
+assert len(_bf) == 4 and _sf["injected_ref_chars"] == 0, "fallback_all should load all bodies, no refs"
+
+# 5b. Selector schema carries the reason + decline_reason fields (strict-safe:
+#     every declared property is required).
+_spec2 = skill_injector._get_selector_spec()
+_props = _spec2.json_schema["properties"]
+assert "decline_reason" in _props and "decline_reason" in _spec2.json_schema["required"], \
+    "selector spec missing top-level decline_reason"
+_item = _props["selections"]["items"]
+assert "reason" in _item["properties"] and "reason" in _item["required"], \
+    "selector spec missing per-selection reason"
+
+# 5c. The selector routing context carries the factual Compute/hardware line
+#     (symmetric env fact) alongside the task signal.
+eval_harness._HARDWARE_CACHE = None  # reset: apply_impl_guideline_harness cached a CPU string earlier
+os.environ["MLEVAL_HARDWARE"] = "1 Test GPU (48 GB VRAM), 2 CPUs, 20 GB RAM"
+
+
+class _StubAgentSel:  # noqa: E306
+    task_desc = "RULE\n<!-- END_HARNESS_RULES -->\n## Description\nFine-tune with LoRA."
+
+
+_us = skill_injector._selector_user(_StubAgentSel(), "draft", None)
+assert "Compute:" in _us and "Test GPU" in _us, f"hardware line missing from selector context: {_us!r}"
+assert "Fine-tune with LoRA." in _us and "END_HARNESS_RULES" not in _us, \
+    f"selector context lost task signal / leaked harness header: {_us!r}"
+os.environ.pop("MLEVAL_HARDWARE", None)
+eval_harness._HARDWARE_CACHE = None
+
+# 5d. Fallback ladder: on selector error, retry once then fall back — ALL bodies
+#     for a small library, catalog-only for a large one (distractor guard).
+import llm as _llm  # noqa: E402
+_orig_query = _llm.query
+try:
+    def _boom(**_kw):
+        raise RuntimeError("selector transport down")
+    _llm.query = _boom
+
+    class _AgErr:  # noqa: E306
+        task_desc = "t"
+        _mleval_stage = "draft"
+        _mleval_parent = None
+        cfg = None
+
+        class acfg:
+            class feedback:
+                model = "m"
+
+    _small = [{"name": "only", "description": "d", "body": "B", "references": {}, "reference_files": []}]
+    _selk, _meta = skill_injector._run_selector(_AgErr(), _small)
+    assert _selk is skill_injector._FALLBACK_ALL, "small-lib selector error should fallback_all"
+    assert _meta["fallback_mode"] == "fallback_all" and _meta["selector_error"], _meta
+    _big = [{"name": f"s{i}", "description": "d", "body": "B", "references": {}, "reference_files": []}
+            for i in range(6)]
+    _selk2, _meta2 = skill_injector._run_selector(_AgErr(), _big)
+    assert _selk2 == [] and _meta2["fallback_mode"] == "catalog_only_on_error", _meta2
+finally:
+    _llm.query = _orig_query
+
+# 5e. selection_logger writes cell_init + node_selection records with the
+#     sidecar version stamp. This is the telemetry that makes a silently-emptied
+#     treatment (spike-023) grep-visible.
+from mlevolve_sidecar import selection_logger as _sl  # noqa: E402
+
+with _tf0.TemporaryDirectory() as _seldir:
+    _selpath = _pl.Path(_seldir) / "sel.jsonl"
+    os.environ["MLEVAL_SELECTION_LOG"] = str(_selpath)
+    _sl.log_cell_init(loaded_skill_count=0, library="", selector_active=False)
+    _sl.log_node_selection(stage="draft", fallback_mode="none",
+                           selected_skills=["x"], injected_body_chars=10)
+    _recs = [_json.loads(l) for l in _selpath.read_text().splitlines() if l.strip()]
+    assert len(_recs) == 2, f"expected 2 selection records, got {len(_recs)}"
+    assert _recs[0]["event"] == "cell_init" and _recs[0]["loaded_skill_count"] == 0
+    assert _recs[1]["event"] == "node_selection" and _recs[1]["selected_skills"] == ["x"]
+    assert _recs[0]["sidecar_version"] == mlevolve_sidecar.SIDECAR_VERSION, \
+        "selection record missing/wrong sidecar_version stamp"
+    os.environ.pop("MLEVAL_SELECTION_LOG", None)
+
+# -----------------------------------------------------------------------------
 # metric_direction pin — MLEvolve's LLM determine_metric_direction flips the
 # maximize/minimize boolean nondeterministically (spike-026 inverted the search).
 # (a) helper logic, (b) the meta_path finder actually patches the real
@@ -338,5 +462,6 @@ assert 'exp_name.split("_") + ["", "", ""]' in _rpa_src, \
 
 print(
     "OK: run_mlevolve.py + MLEvolve + mleval analyzer + skill_retriever "
-    "+ prompt_logger + grader + de_kaggle split-safety all import and behave correctly"
+    "+ skill_injector caps/fallback/selection-telemetry + prompt_logger + grader "
+    "+ de_kaggle split-safety all import and behave correctly"
 )

@@ -1,0 +1,10 @@
+{
+  "task": "samsum",
+  "relevant_skills": ["peft-tuning", "vllm-inference"],
+  "acceptable_skills": [],
+  "irrelevant_skills": ["tabular-baseline"],
+  "relevant_references": {},
+  "confidence": "high",
+  "curated_by": "provisional (auto, 2026-07) — refine before citing",
+  "notes": "Dialogue summarization: fine-tune the pinned causal LM (peft-tuning: LoRA) + batched ROUGE-L eval (vllm-inference / generation hygiene). Not tabular."
+}

@@ -1,0 +1,10 @@
+{
+  "task": "gsm8k",
+  "relevant_skills": ["peft-tuning", "vllm-inference"],
+  "acceptable_skills": [],
+  "irrelevant_skills": ["tabular-baseline"],
+  "relevant_references": {},
+  "confidence": "high",
+  "curated_by": "provisional (auto, 2026-07) — refine before citing",
+  "notes": "Fine-tune the pinned instruction-tuned causal LM (peft-tuning: LoRA) to generate chain-of-thought ending in a numeric answer; batched decoding for the held-out eval (vllm-inference / HF generation hygiene). Not tabular."
+}

@@ -1,0 +1,10 @@
+{
+  "task": "llama-inference",
+  "relevant_skills": ["vllm-inference"],
+  "acceptable_skills": [],
+  "irrelevant_skills": ["peft-tuning", "tabular-baseline"],
+  "relevant_references": {},
+  "confidence": "medium",
+  "curated_by": "provisional (auto, 2026-07) — refine before citing",
+  "notes": "Improve per-token generation speed of an inference script on a single A100 — fast-inference territory (vllm-inference: quantization, batching, tensor-parallel). No fine-tuning (peft off-domain), not tabular. NB: MLEvolve's submission-contract mismatch makes this task itself fragile (see project_mlevolve_contract) — the gold is for selector routing only."
+}

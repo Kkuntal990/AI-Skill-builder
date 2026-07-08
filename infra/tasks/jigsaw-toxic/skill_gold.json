@@ -1,0 +1,10 @@
+{
+  "task": "jigsaw-toxic",
+  "relevant_skills": ["peft-tuning"],
+  "acceptable_skills": ["tabular-baseline"],
+  "irrelevant_skills": ["vllm-inference"],
+  "relevant_references": {},
+  "confidence": "low",
+  "curated_by": "provisional (auto, 2026-07) — WEAKEST-fit task; refine before citing",
+  "notes": "Multi-label toxic-comment classification, mean col-wise ROC AUC; leaderboard ref is a fine-tuned BERT family → peft-tuning (LoRA on an encoder classifier) is the target. A TF-IDF/GBM baseline (tabular-baseline) is a defensible weak alternative → acceptable, not penalized. vLLM generation is off-domain (no text generation). Low confidence: none of the 3 skills is a strong match."
+}

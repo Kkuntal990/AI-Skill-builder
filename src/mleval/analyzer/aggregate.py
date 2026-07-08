@@ -123,6 +123,29 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
     except Exception:
         per_sub_stage = {}
 
+    # Skill-selection telemetry (M0). Per-node skill_selection is written by the
+    # adapter from selection_events.jsonl; None for without_skill / pre-1.0.0
+    # runs. treatment_empty_rate = fraction of selector nodes that injected NO
+    # skill body (declined or catalog-only-on-error) — the headline signal that
+    # would have caught spike-023's silently-emptied treatment.
+    sel_nodes = [r.get("skill_selection") for r in trajectory if r.get("skill_selection")]
+    skill_selection = None
+    if sel_nodes:
+        empty = sum(
+            1 for s in sel_nodes
+            if not s.get("selected_skills") and s.get("fallback_mode") != "fallback_all"
+        )
+        skill_selection = {
+            "nodes": len(sel_nodes),
+            "empty_nodes": empty,
+            "treatment_empty_rate": empty / len(sel_nodes),
+            "injected_body_chars": sum((s.get("injected_body_chars") or 0) for s in sel_nodes),
+            "injected_ref_chars": sum((s.get("injected_ref_chars") or 0) for s in sel_nodes),
+            "refs_truncated_nodes": sum(1 for s in sel_nodes if s.get("refs_truncated")),
+            "skills_truncated_nodes": sum(1 for s in sel_nodes if s.get("skills_truncated")),
+            "fallback_modes": dict(Counter(s.get("fallback_mode") for s in sel_nodes)),
+        }
+
     derived = _metrics.per_trajectory(traj_dir, REPO_ROOT)
     return {
         "task": manifest.get("task", {}).get("name"),
@@ -155,6 +178,7 @@ def _trajectory_summary(traj_dir: Path) -> dict | None:
         "convergence": derived["convergence"],
         "first_valid_submission": derived["first_valid_submission"],
         "skill_api_adoption": derived["skill_api_adoption"],
+        "skill_selection": skill_selection,
     }
 
 
@@ -270,6 +294,8 @@ def write_markdown(report: dict, out: Path) -> None:
             f"{adopt_str} | {_fmt(fvs.get('step'))} |"
         )
 
+    _write_skill_selection_section(report, lines)
+
     lines += [
         "",
         "## Per-trajectory — latency",
@@ -306,6 +332,33 @@ def write_markdown(report: dict, out: Path) -> None:
     _write_substage_section(report, lines)
 
     out.write_text("\n".join(lines) + "\n")
+
+
+def _write_skill_selection_section(report: dict, lines: list[str]) -> None:
+    """M0 skill-selection telemetry: treatment-empty rate + injected sizes.
+
+    Only emits when at least one trajectory carries selection telemetry (with_skill
+    on a >= 1.0.0-sidecar run). treatment-empty rate is the guardrail against the
+    spike-023 failure (with_skill silently near-baseline because the selector
+    declined every node)."""
+    rows = [s for s in report["trajectories"] if s.get("skill_selection")]
+    if not rows:
+        return
+    lines += [
+        "",
+        "## Skill selection (M0 telemetry)",
+        "",
+        "| cell | seed | sel-nodes | empty | treat-empty | body_chars | ref_chars | ref-trunc | fallbacks |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for s in rows:
+        ss = s["skill_selection"]
+        fb = ", ".join(f"{k}:{v}" for k, v in (ss.get("fallback_modes") or {}).items()) or "—"
+        lines.append(
+            f"| {s['cell']} | {s['seed']} | {ss['nodes']} | {ss['empty_nodes']} | "
+            f"{_fmt(ss['treatment_empty_rate'], '.2f')} | {ss['injected_body_chars']} | "
+            f"{ss['injected_ref_chars']} | {ss.get('refs_truncated_nodes', 0)} | {fb} |"
+        )
 
 
 def _write_substage_section(report: dict, lines: list[str]) -> None:
