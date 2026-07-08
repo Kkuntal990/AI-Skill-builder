@@ -921,6 +921,51 @@ def optimize_description(skill_dir: Path, judge_fn, decoys: list, improve_fn, *,
     }
 
 
+# ── P1.9 reconstruction / round-trip check (MIND-Skill-inspired; P2) ─────────
+# Inspired by / adapted from MIND-Skill (Li et al. 2026, arXiv:2605.08670): a frozen
+# agent reconstructs from the skill ALONE (no source); gaps vs source-derived gold notes
+# = knowledge the skill failed to carry. Adapted here to a doc-grounded one-shot QA check
+# (see docs/skill-builder/eval-gate-plan.md P1.9 for the four divergences from the paper).
+
+
+def reconstruction_check(skill_dir: Path, source_text: str, *, model: str = "",
+                         timeout: int = 180, llm=None, reconstruct=None) -> dict:
+    """Round-trip completeness: reconstruct workflows/preconditions/API usage from the
+    skill ALONE and diff against gold notes distilled from the source. Returns
+    {missing, passed}. `llm(prompt)->text` and `reconstruct()->text` are injectable for
+    testing; default to claude -p (gold/compare) + the skill-available executor
+    (reconstruction). Best-effort."""
+    llm = llm or (lambda p: _claude_text(p, model=model, timeout=timeout))
+    if reconstruct is None:
+        def reconstruct():
+            r = _run_claude_executor(
+                "Using ONLY your available skill, reconstruct its key workflows, "
+                "preconditions, and API usage as a concise bullet list.",
+                skill_dir=skill_dir, timeout=timeout, model=model)
+            return r.get("reply", "")
+    gold = llm("From these docs, list the KEY workflows, preconditions, and API calls a "
+               "skill about this library MUST convey. Terse bullets.\n\nDOCS:\n"
+               + (source_text or "")[:6000])
+    recon = reconstruct()
+    verdict = llm("GOLD NOTES (from source):\n" + (gold or "")
+                  + "\n\nRECONSTRUCTION (from the skill alone):\n" + (recon or "")
+                  + "\n\nList as terse bullets what is present in GOLD but MISSING or WRONG in "
+                    "the RECONSTRUCTION (knowledge the skill failed to carry). If nothing is "
+                    "missing, reply exactly: NONE")
+    v = (verdict or "").strip()
+    missing = [] if (not v or v.upper().startswith("NONE")) else [
+        ln.strip("-* ").strip() for ln in v.splitlines() if ln.strip()]
+    return {
+        "skill_name": skill_dir.name,
+        "gold_notes": gold,
+        "reconstruction": recon,
+        "missing": missing,
+        "n_missing": len(missing),
+        "passed": not missing,
+        "citation": "inspired by MIND-Skill (arXiv:2605.08670)",
+    }
+
+
 # ── Pass-bar thresholds + report ─────────────────────────────────────────────
 
 
