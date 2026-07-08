@@ -1632,6 +1632,114 @@ def _load_sibling_descriptions(siblings_dir: str, exclude_name: str = "") -> lis
     return out
 
 
+# ── M2: doc-faithfulness (P1.6) + executable artifact sanity (P1.8) ──────────
+# Conservative source-grounding: flag API symbols / CLI flags the skill asserts
+# that never appear in the fetched sources (candidate hallucination). Findings are
+# WARN by default; the single BLOCK case is `from <module> import <CamelCaseSymbol>`
+# where BOTH the module path and the symbol are absent from the source corpus.
+# Folded into the critic report (surfaced as warnings; feeds the M5 ship-gate).
+
+_IMPORT_FROM_RE = re.compile(r"^\s*from\s+([\w.]+)\s+import\s+([^\n#]+)", re.MULTILINE)
+_IMPORT_RE = re.compile(r"^\s*import\s+([\w.]+)", re.MULTILINE)
+_CLI_FLAG_RE = re.compile(r"(?<!\w)--[a-z][a-z0-9-]{2,}")
+_CODE_FENCE_RE = re.compile(r"```[\w-]*\n(.*?)```", re.DOTALL)
+
+
+def _source_corpus(sources: dict) -> str:
+    """Lowercased concat of the fetched source substrate to check claims against."""
+    parts = []
+    for key in ("doc", "readme", "readme_install", "examples", "changelog"):
+        v = sources.get(key)
+        if isinstance(v, list):
+            v = "\n".join(str(x) for x in v)
+        if v:
+            parts.append(str(v))
+    return "\n".join(parts).lower()
+
+
+def check_doc_faithfulness(body: str, references: "dict[str, str] | None", sources: dict) -> list[dict]:
+    """Flag imported API symbols + CLI flags in the skill's code blocks that are absent
+    from the fetched sources. Empty source corpus → no findings (never invent them)."""
+    corpus = _source_corpus(sources)
+    if not corpus:
+        return []
+    blobs = [body] + list((references or {}).values())
+    code = "\n".join(m.group(1) for b in blobs for m in _CODE_FENCE_RE.finditer(b))
+    fulltext = "\n".join(blobs)  # flags may be cited in prose/inline, not only in fences
+    findings: list[dict] = []
+    seen: set[str] = set()
+
+    for m in _IMPORT_FROM_RE.finditer(code):
+        module, names = m.group(1), m.group(2)
+        module_ok = module.lower() in corpus or module.split(".")[0].lower() in corpus
+        for raw in names.split(","):
+            sym = raw.strip().split(" as ")[0].strip().strip("()")
+            if not sym or sym == "*" or sym in seen or len(sym) < 3:
+                continue
+            seen.add(sym)
+            if sym.lower() in corpus:
+                continue
+            camel = sym[:1].isupper() and any(c.islower() for c in sym)
+            sev = "block" if (camel and not module_ok) else "warn"
+            findings.append({
+                "severity": sev, "where": "P1.6-faithfulness",
+                "message": (f"symbol `{sym}` (from `{module}`) is cited in the skill but absent "
+                            f"from the fetched sources — "
+                            f"{'likely fabricated API' if sev == 'block' else 'unattested; verify against upstream'}"),
+            })
+            if len(findings) >= 12:
+                return findings
+
+    for fl in dict.fromkeys(_CLI_FLAG_RE.findall(fulltext)):
+        if fl in seen:
+            continue
+        seen.add(fl)
+        if fl.lower() not in corpus:
+            findings.append({
+                "severity": "warn", "where": "P1.6-faithfulness",
+                "message": f"CLI flag `{fl}` is used in the skill but not found in the fetched docs — verify it exists",
+            })
+        if len(findings) >= 12:
+            break
+    return findings
+
+
+def check_artifact_imports(templates: "dict[str, str] | None",
+                           scripts: "dict[str, str] | None") -> list[dict]:
+    """P1.8: for bundled `.py` artifacts, probe whether imported top-level packages are
+    importable in the build env (find_spec, no side-effecting import). Missing packages
+    are WARN "unverified" — never a failure (the builder reads docs and may not have the
+    target library installed). No GPU, no task execution."""
+    import importlib.util
+    stdlib = getattr(sys, "stdlib_module_names", frozenset())
+    findings: list[dict] = []
+    reported: set[str] = set()
+    artifacts = {**(templates or {}), **(scripts or {})}
+    for fname, content in artifacts.items():
+        if not fname.endswith(".py"):
+            continue
+        tops: set[str] = set()
+        for m in _IMPORT_FROM_RE.finditer(content):
+            tops.add(m.group(1).split(".")[0])
+        for m in _IMPORT_RE.finditer(content):
+            tops.add(m.group(1).split(".")[0])
+        for top in sorted(tops):
+            if not top or top in stdlib or top in reported:
+                continue
+            try:
+                spec = importlib.util.find_spec(top)
+            except (ImportError, ModuleNotFoundError, ValueError):
+                spec = None
+            if spec is None:
+                reported.add(top)
+                findings.append({
+                    "severity": "warn", "where": "P1.8-executable",
+                    "message": (f"`{fname}` imports `{top}`, not importable in the build env — "
+                                f"import/signature check skipped (unverified: package absent)"),
+                })
+    return findings
+
+
 # ── Frontmatter assembly (deterministic) ──────────────────────────────────────
 
 
@@ -2321,6 +2429,23 @@ def _pipeline(
                                  "quality_gate": "passed"}
             critic_report["final_findings"] = list(critic_report.get("final_findings") or []) + ref_findings
             if any(f["severity"] == "block" for f in ref_findings):
+                critic_report["quality_gate"] = "failed"
+
+    # M2 — doc-faithfulness (P1.6) + executable artifact sanity (P1.8). Conservative:
+    # findings are WARN by default (a fabricated API symbol whose module is also absent
+    # is the one BLOCK case); they fold into the critic report like the ref-scan critic,
+    # surfacing as warnings now and feeding the hard ship-gate (M5 / Phase 3.0-6).
+    if not getattr(args, "no_critic", False):
+        extra_findings = (
+            check_doc_faithfulness(body, refs_content, sources)
+            + check_artifact_imports(templates_content, scripts_content)
+        )
+        if extra_findings:
+            if critic_report is None:
+                critic_report = {"rounds": 0, "repaired": False, "initial_findings": [],
+                                 "final_findings": [], "quality_gate": "passed"}
+            critic_report["final_findings"] = list(critic_report.get("final_findings") or []) + extra_findings
+            if any(f["severity"] == "block" for f in extra_findings):
                 critic_report["quality_gate"] = "failed"
 
     # Real co-resident siblings (P1.1): default to the install root (SKILLS_DIR);
