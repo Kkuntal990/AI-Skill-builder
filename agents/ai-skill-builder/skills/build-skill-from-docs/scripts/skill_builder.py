@@ -2836,6 +2836,63 @@ def cmd_preview(args: argparse.Namespace) -> dict:
     }
 
 
+def _split_frontmatter_body(skill_md: str) -> tuple[str, str]:
+    """Split assembled SKILL.md back into (frontmatter_block, body)."""
+    m = re.match(r"(---\n.*?\n---\n)(.*)", skill_md, re.DOTALL)
+    if m:
+        return m.group(1), m.group(2)
+    return "", skill_md
+
+
+def _replace_description(frontmatter: str, new_desc: str) -> str:
+    """Swap the `description:` line in a frontmatter block (YAML-safe: no raw quotes)."""
+    safe = new_desc.strip().replace('"', "'").replace("\n", " ")
+    out, n = re.subn(r'(?m)^description:.*$', f'description: "{safe}"', frontmatter, count=1)
+    return out if n else frontmatter
+
+
+def repair_result_for_gate(result: dict, gate: dict, args: argparse.Namespace) -> tuple[dict, bool]:
+    """M6 — behavior-driven repair: given a FAILED ship-gate, revise the skill toward the
+    observed failure and return (possibly-revised result, changed?). Triggering misses →
+    improve the description from the failing positives; residual critic blocks → one more
+    body-repair round (re-critiqued to refresh quality_gate). Returns changed=False when
+    nothing could be improved, so the caller's loop terminates.
+
+    (Richer transcript-driven repair from with/without functional failures activates once
+    the gate runs functional assertions; today the fresh-build gate repairs from triggering
+    + residual blocks.)
+    """
+    frontmatter, body = _split_frontmatter_body(result["skill_md"])
+    reasons = " ".join(gate.get("reasons") or [])
+    changed = False
+    new_result = dict(result)
+
+    if "triggering" in reasons and gate.get("failing_positives"):
+        desc = _extract_description(body)
+        new_desc = improve_description(result["skill_name"], body, desc, gate["failing_positives"])
+        if new_desc and new_desc.strip() and new_desc.strip() != desc.strip():
+            frontmatter = _replace_description(frontmatter, new_desc)
+            changed = True
+
+    if result.get("quality_gate") == "failed":
+        blocks = [f for f in (result.get("critic") or {}).get("final_findings", [])
+                  if f.get("severity") == "block"]
+        if blocks:
+            new_body = repair_skill_body(body, blocks, result["skill_name"])
+            if new_body and new_body.strip() != body.strip():
+                body = new_body
+                new_findings = critique_skill(body, result["skill_name"])
+                qg = "failed" if any(f["severity"] == "block" for f in new_findings) else "passed"
+                new_result["critic"] = {**(result.get("critic") or {}),
+                                        "final_findings": new_findings, "quality_gate": qg}
+                new_result["quality_gate"] = qg
+                changed = True
+
+    if changed:
+        new_result["skill_md"] = frontmatter + body
+    return new_result, changed
+
+
 def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespace,
                   profile: str) -> dict:
     """M5 — evaluate a staged skill and decide whether it may ship (P0.1).
@@ -2892,6 +2949,15 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
         wheres = sorted({f.get("where", "?") for f in blocks})
         reasons.append(f"quality_gate failed ({len(blocks)} unresolved block finding(s): {', '.join(wheres)})")
 
+    failing_pos = []
+    if triggering:
+        for p in triggering.get("should_trigger", []):
+            if not p.get("triggered"):
+                choices = p.get("choices") or []
+                failing_pos.append({"id": p.get("id"), "prompt": p.get("prompt"),
+                                    "judge_choice": (choices[0] if choices else "none"),
+                                    "judge_reason": ""})
+
     md, _ = ec.build_report(staging_skill_dir, triggering, None, pass_bar, activation)
     gate.update({
         "passed": not reasons,
@@ -2899,6 +2965,7 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
         "report": md,
         "triggering_metrics": (triggering or {}).get("metrics"),
         "activation_metrics": (activation or {}).get("metrics"),
+        "failing_positives": failing_pos,
         "quality_gate": result.get("quality_gate"),
     })
     return gate
@@ -2930,16 +2997,27 @@ def cmd_build(args: argparse.Namespace) -> dict:
     if ship_gate_mode != "off":
         import shutil as _shutil
         import tempfile as _tempfile
-        staging = Path(_tempfile.mkdtemp(prefix="skillbuild-gate-"))
-        try:
-            staged = write_skill(
-                out_dir=staging, skill_name=result["skill_name"], skill_md=result["skill_md"],
-                references=result["references"], evals=result["evals"],
-                templates=result.get("templates"), scripts=result.get("scripts"), force=True,
-            )
-            gate_result = run_ship_gate(staged, result, args, ship_gate_mode)
-        finally:
-            _shutil.rmtree(staging, ignore_errors=True)
+        max_rounds = max(0, int(getattr(args, "max_repair_eval_rounds", 2)))
+        round_i = 0
+        while True:
+            staging = Path(_tempfile.mkdtemp(prefix="skillbuild-gate-"))
+            try:
+                staged = write_skill(
+                    out_dir=staging, skill_name=result["skill_name"], skill_md=result["skill_md"],
+                    references=result["references"], evals=result["evals"],
+                    templates=result.get("templates"), scripts=result.get("scripts"), force=True,
+                )
+                gate_result = run_ship_gate(staged, result, args, ship_gate_mode)
+            finally:
+                _shutil.rmtree(staging, ignore_errors=True)
+            if gate_result["passed"] or round_i >= max_rounds:
+                break
+            # M6 behavior-driven repair: revise toward the observed failure, then re-gate.
+            result, changed = repair_result_for_gate(result, gate_result, args)
+            if not changed:
+                break  # nothing left to improve → stop (convergence)
+            round_i += 1
+        gate_result["repair_rounds"] = round_i
         if not gate_result["passed"] and not getattr(args, "ship_anyway", False):
             _audit("build.gate_rejected", {
                 "url": url, "skill_name": result["skill_name"], "reasons": gate_result["reasons"],
