@@ -1251,7 +1251,9 @@ def write_evals(skill_name: str, skill_body: str, examples_text=None,
     tasks), `changelog_text` (API-migration prompts) — and `sibling_names` (real
     competitor libraries the near-miss negatives should name). All optional; missing
     context degrades gracefully to "(none)". Returns {skill_name, prompts,
-    negative_prompts} — negative_prompts feed the bidirectional triggering eval.
+    negative_prompts, functional}: negative_prompts feed the bidirectional triggering
+    eval; functional (must_contain/must_not_contain/expected_citations test cases) feeds
+    the advisory with/without-skill functional A/B run in the `full` ship-gate.
     """
     def _clip(v, n: int) -> str:
         if isinstance(v, list):
@@ -1270,11 +1272,11 @@ def write_evals(skill_name: str, skill_body: str, examples_text=None,
     raw = _strip_fences(_llm_call(prompt, max_tokens=1400, temperature=0.5))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
-        return {"skill_name": skill_name, "prompts": []}
+        return {"skill_name": skill_name, "prompts": [], "negative_prompts": [], "functional": []}
     try:
         return json.loads(match.group(0))
     except json.JSONDecodeError:
-        return {"skill_name": skill_name, "prompts": []}
+        return {"skill_name": skill_name, "prompts": [], "negative_prompts": [], "functional": []}
 
 
 def distill_pitfalls(package_name: str, issues: list[dict]) -> str:
@@ -2811,12 +2813,19 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
     evals_doc = result.get("evals") or {}
     prompts = evals_doc.get("prompts") or []
     negs = evals_doc.get("negative_prompts") or []
+    functional_tests = evals_doc.get("functional") or []
 
     # (a) Author writes the eval set; the tester reads + measures it.
     if prompts:
-        tset = {"should_trigger": prompts, "should_not_trigger_near_miss": negs}
         (staging_skill_dir / "evals").mkdir(parents=True, exist_ok=True)
+        tset = {"should_trigger": prompts, "should_not_trigger_near_miss": negs}
         (staging_skill_dir / "evals" / "triggering.json").write_text(json.dumps(tset, indent=2))
+    if functional_tests:
+        # functional A/B (full profile only): with/without-skill content check on self-authored,
+        # analyzer-vetted assertions. run_functional reads evals/functional.json → {"tests": [...]}.
+        (staging_skill_dir / "evals").mkdir(parents=True, exist_ok=True)
+        (staging_skill_dir / "evals" / "functional.json").write_text(
+            json.dumps({"skill_name": result["skill_name"], "tests": functional_tests}, indent=2))
 
     # Delegate the behavioral verdict to skill-tester.
     sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)

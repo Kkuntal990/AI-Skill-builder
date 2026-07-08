@@ -39,6 +39,15 @@ Companion to [hld.md](hld.md), [stage1.md](../eval/stage1.md). Cites `file:line`
 > (compile + a stubbed end-to-end delegation test); a **live** gated build (which needs a
 > gateway restart so `skill-tester` picks up the new skill + workspace) has not been run.
 
+> **Functional A/B enabled in `full` (2026-07, advisory).** The prompt-level with/without-skill
+> content A/B (NOT the GPU task-solving Stage-2 A/B) is now part of the `full` gate. `write_evals`
+> emits functional test cases (`must_contain`/`must_not_contain`/`expected_citations`) into
+> `evals/functional.json`; `run_gate` runs `run_functional` (baseline executor = **`main`** — clean
+> A/B, never skill-tester) + `analyze()` and reports pass-rate + lift + non-discriminating/flaky
+> flags. It is **ADVISORY** (never added to `reasons`) because the assertions are self-authored —
+> hard-gating a self-graded number invites false confidence; the analyzer flags pass-in-both tests.
+> `smoke` stays cheap (triggering + critic only).
+
 ---
 
 ## Goal

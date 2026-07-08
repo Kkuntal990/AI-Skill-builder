@@ -42,11 +42,17 @@ where this SKILL.md is loaded and invoke with `python3`. `<SCRIPTS>` below = tha
 python3 <SCRIPTS>/eval_skill.py gate <dir> --profile <smoke|full> --siblings <sib-dir>
 ```
 
-- `smoke` — triggering only, 1 run/prompt (cheap). `full` — triggering ×3 + organic activation.
-- Reads `<dir>/evals/triggering.json` (the author writes it) and `<dir>/pass_bar.json`.
+- `smoke` — triggering only, 1 run/prompt (cheap). `full` — triggering ×3 + organic activation
+  **+ the functional with/without-skill A/B** (runs real agent turns via the `main` baseline;
+  minutes, not seconds).
+- Reads `<dir>/evals/triggering.json` and (in `full`) `<dir>/evals/functional.json` — both
+  written by the author — plus `<dir>/pass_bar.json`.
 - Emits the **behavioral verdict** JSON: `{passed, reasons, ran, skipped, triggering_metrics,
-  activation_metrics, failing_positives, report}`. The builder folds in its own artifact
-  `quality_gate` afterward — that part is not your job.
+  activation_metrics, functional_metrics, functional_analysis, failing_positives, report}`.
+  **Triggering + activation gate (hard); the functional A/B is ADVISORY** — its pass-rate/lift
+  and the analyzer's non-discriminating/flaky flags are reported but never added to `reasons`
+  (the assertions are self-authored). The builder folds in its own artifact `quality_gate`
+  afterward — that part is not your job.
 
 Return that JSON object and nothing else.
 

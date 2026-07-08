@@ -1276,13 +1276,15 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
     pass_bar.json. Returns the BEHAVIORAL verdict only — the artifact critic's
     quality_gate is the author's concern and is folded in caller-side. Never raises.
 
-    profile: 'smoke' = triggering runs=1, no activation; 'full' = runs=3 + activation.
+    profile: 'smoke' = triggering runs=1, no activation, no functional; 'full' = triggering
+    runs=3 + activation + the functional with/without-skill A/B (ADVISORY — reported with an
+    analyzer pass, never hard-blocks, because the assertions are self-authored).
     """
     skill_dir = Path(skill_dir).expanduser().resolve()
     pass_bar = load_pass_bar(skill_dir)
     meta = load_skill_meta(skill_dir)
     gate: dict = {"profile": profile, "ran": [], "skipped": []}
-    triggering = activation = None
+    triggering = activation = functional = fanalysis = None
 
     sib_dir = siblings_dir or str(skill_dir.parent)
     sibs = load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
@@ -1300,7 +1302,20 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
             gate["ran"].append("activation")
         except SystemExit:
             gate["skipped"].append("activation")
-    gate["skipped"].append("functional (advisory; fresh build has no assertions)")
+        # Functional with/without-skill A/B (ADVISORY). Clean baseline executor = `main`
+        # (never skill-tester — recursion; and ai-skill-builder's bundled skills confound
+        # the without-cell). analyze() flags non-discriminating / flaky self-authored tests.
+        if (skill_dir / "evals" / "functional.json").exists():
+            try:
+                functional = run_functional(skill_dir, agent="main", runs=2, per_prompt_timeout=240)
+                fanalysis = analyze(functional)
+                gate["ran"].append("functional (advisory)")
+            except SystemExit:
+                gate["skipped"].append("functional (no eval set)")
+        else:
+            gate["skipped"].append("functional (no functional.json)")
+    else:
+        gate["skipped"].append("functional (smoke profile skips it)")
 
     reasons: list[str] = []
     if triggering and triggering["metrics"]["f1"] < pass_bar["triggering_f1_min"]:
@@ -1318,13 +1333,28 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
                                     "judge_choice": (choices[0] if choices else "none"),
                                     "judge_reason": ""})
 
-    md, _ = build_report(skill_dir, triggering, None, pass_bar, activation)
+    md, _ = build_report(skill_dir, triggering, functional, pass_bar, activation)
+    # Functional is advisory: surface pass-rate + lift + the analyzer flags, but keep it OUT
+    # of `reasons` so it never blocks the ship (self-authored assertions).
+    functional_metrics = None
+    if functional:
+        wp = functional.get("with_skill_pass_rate")
+        wo = functional.get("without_skill_pass_rate")
+        functional_metrics = {
+            "with_skill_pass_rate": wp,
+            "without_skill_pass_rate": wo,
+            "lift": (round(wp - wo, 3) if (wp is not None and wo is not None) else None),
+            "saturated": functional.get("saturated"),
+            "advisory": True,
+        }
     gate.update({
         "passed": not reasons,
         "reasons": reasons,
         "report": md,
         "triggering_metrics": (triggering or {}).get("metrics"),
         "activation_metrics": (activation or {}).get("metrics"),
+        "functional_metrics": functional_metrics,
+        "functional_analysis": fanalysis,
         "failing_positives": failing_pos,
     })
     return gate

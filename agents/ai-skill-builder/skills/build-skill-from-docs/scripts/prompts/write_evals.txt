@@ -24,6 +24,25 @@ These SHOULD NOT trigger this skill. The valuable ones are near-misses: they sha
 - 2-3 near-miss negatives.
 - Each must be a plausible request that a careless router might mis-route TO this skill, but that a correct router would send elsewhere.
 
+## functional tests (with/without-skill content check) — assertions must be DISCRIMINATING
+
+These check whether the skill's CONTENT makes the answer better. The response is graded
+with and WITHOUT the skill, so an assertion is only useful if it would **fail without the
+skill and pass with it**. Write assertions on the specific, non-obvious things THIS skill
+teaches — exact API names, flags, version-correct calls, the recommended (vs naive)
+approach, gotchas from the docs.
+
+- 2-3 tests, each a realistic task prompt (reuse/adapt the should_trigger prompts).
+- `must_contain` / `must_contain_any`: exact substrings a CORRECT, skill-informed answer
+  includes — prefer specifics a base model would likely miss (precise symbol/flag names,
+  the version-correct idiom), NOT generic words the base model always emits.
+- `must_not_contain`: strings that mark the WRONG/outdated/naive approach the skill exists
+  to prevent (e.g. a deprecated API, a memory-blowup pattern). This is often the most
+  discriminating check.
+- `expected_citations`: file / function / flag names the skill's content points to.
+- Avoid assertions the base model trivially satisfies — they pass in both cells and measure
+  nothing (they get flagged as non-discriminating).
+
 Return ONLY JSON in this schema, using the skill name literally from "SKILL NAME":
 
 {
@@ -36,6 +55,17 @@ Return ONLY JSON in this schema, using the skill name literally from "SKILL NAME
   "negative_prompts": [
     {"id": 1, "prompt": "<near-miss that should route to a sibling, not this skill>"},
     {"id": 2, "prompt": "<another genuinely tricky near-miss>"}
+  ],
+  "functional": [
+    {"id": 1, "prompt": "<a should-trigger task prompt>",
+     "must_contain": ["<exact string the RIGHT answer must include>"],
+     "must_contain_any": [["<synonym A>", "<synonym B>"]],
+     "must_not_contain": ["<string that signals a WRONG/outdated approach>"],
+     "expected_citations": ["<file/function/flag the skill teaches>"]},
+    {"id": 2, "prompt": "<second functional task>",
+     "must_contain": ["..."], "must_not_contain": ["..."], "expected_citations": ["..."]},
+    {"id": 3, "prompt": "<third, optional>",
+     "must_contain": ["..."], "must_not_contain": ["..."], "expected_citations": ["..."]}
   ]
 }
 
