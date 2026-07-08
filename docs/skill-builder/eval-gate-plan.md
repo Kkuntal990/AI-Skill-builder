@@ -7,6 +7,18 @@ sibling-aware and situated. Implements P0 + P1 from [anthropic-parity.md](anthro
 
 Companion to [hld.md](hld.md), [stage1.md](../eval/stage1.md). Cites `file:line` at the seams.
 
+> **Implementation status (branch `skill-phase3`).** M0–M9 are implemented and committed.
+> All new behavior sits behind flags that default to today's behavior — `--ship-gate off`,
+> `--baseline-probe` off, `--llm-grader` off — so existing builds are unchanged. Every
+> milestone was verified **offline** (`py_compile` + stubbed unit tests); a **live**
+> end-to-end gated build (calling `claude -p` / `openclaw agent`, costs credit) has not been
+> run and needs the user's environment. **M10 (focused-skill splitter, P1.10) is not yet
+> built.** New surface: `eval_core.py` (shared primitives); `skill_builder.py` gains
+> `run_ship_gate` / `repair_result_for_gate` / `baseline_gap_probe` / `check_doc_faithfulness`
+> / `check_artifact_imports` / `cmd_freshness` and the `--ship-gate|--ship-anyway|--eval-agent
+> |--max-repair-eval-rounds|--baseline-probe` flags + `freshness` subcommand; `eval_skill.py`
+> gains `--siblings|--llm-grader` and the `optimize-description` subcommand.
+
 ---
 
 ## Goal
