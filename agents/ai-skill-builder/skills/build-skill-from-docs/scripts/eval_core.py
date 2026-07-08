@@ -397,9 +397,12 @@ def _run_agent(prompt: str, agent: str = "ai-skill-builder", timeout: int = 240,
     }
 
 
-def _score_assertions(test: dict, reply: str) -> dict:
+def _score_assertions(test: dict, reply: str, grader_fn=None) -> dict:
     """Deterministic scoring: must_contain (strict AND) + must_contain_any (OR-groups)
-    + must_not_contain (strict AND-negated) + citation_accuracy."""
+    + must_not_contain (strict AND-negated) + citation_accuracy. Optional LLM grader
+    tier (P1.5): `test["judge"]` assertions are graded by grader_fn(reply, text) ->
+    {passed, evidence}; skipped (no effect on overall_pass) when grader_fn is None, so
+    deterministic behavior is preserved for skills without judge assertions."""
     rl = reply.lower()
     mc = test.get("must_contain", [])
     mca = test.get("must_contain_any", [])  # list of lists
@@ -425,10 +428,29 @@ def _score_assertions(test: dict, reply: str) -> dict:
     cite_total = len(cites)
     citation_accuracy = (cite_matched / cite_total) if cite_total else 1.0
     cite_pass = citation_accuracy >= 0.5
-    overall_pass = contains_pass and any_pass and notcontains_pass
+
+    # P1.5 LLM grader tier — judge-type assertions substrings can't check. Skipped
+    # (no effect on overall_pass) when grader_fn is None → deterministic behavior kept.
+    judge_results = []
+    judge_pass = True
+    for spec in (test.get("judge") or []):
+        txt = spec if isinstance(spec, str) else (spec or {}).get("text", "")
+        if not txt:
+            continue
+        if grader_fn is not None:
+            v = grader_fn(reply, txt) or {}
+            passed = bool(v.get("passed"))
+            judge_results.append({"text": txt, "passed": passed, "evidence": v.get("evidence", "")})
+            judge_pass = judge_pass and passed
+        else:
+            judge_results.append({"text": txt, "passed": None, "evidence": "", "skipped": "no grader"})
+
+    overall_pass = contains_pass and any_pass and notcontains_pass and judge_pass
 
     return {
         "overall_pass": overall_pass,
+        "judge": judge_results,
+        "judge_pass": judge_pass,
         "must_contain": contains,
         "must_contain_pass": contains_pass,
         "must_contain_any": any_groups,
@@ -452,6 +474,89 @@ def _stddev(xs: list[float]) -> float:
         return 0.0
     m = _mean(xs)
     return (sum((x - m) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
+
+
+# ── P1.4 assertion analyzer (meta-evaluation) ────────────────────────────────
+
+
+def analyze(functional_result: dict, *, flaky_stddev: float = 0.3,
+            token_ratio: float = 1.5) -> dict:
+    """Flag eval-quality problems across the with/without cells (skill-creator's
+    analyzer pass). Does NOT propose skill fixes — that's the repair step.
+
+    - non_discriminating: a test whose pass_rate is identical with and without the
+      skill doesn't measure skill value → down-weight it in the gate (M5).
+    - flaky: a cell whose pass_stddev exceeds flaky_stddev is high-variance/unreliable.
+    - time_token: with-cell costs >token_ratio× the tokens for no pass gain.
+    """
+    tests = functional_result.get("results", []) or []
+    non_discriminating, flaky, time_token = [], [], []
+    for r in tests:
+        w = (r.get("with_skill") or {}).get("agg") or {}
+        wo = (r.get("without_skill") or {}).get("agg") or {}
+        wp, op = w.get("pass_rate"), wo.get("pass_rate")
+        if wp is not None and op is not None and wp == op:
+            non_discriminating.append(r.get("id"))
+        for cell, label in ((w, "with"), (wo, "without")):
+            sd = cell.get("pass_stddev") or 0.0
+            if sd > flaky_stddev:
+                flaky.append({"id": r.get("id"), "cell": label, "stddev": sd})
+        if wp is not None and op is not None and wp <= op:
+            wt = (w.get("tokens_input_total", 0) or 0) + (w.get("tokens_output_total", 0) or 0)
+            ot = (wo.get("tokens_input_total", 0) or 0) + (wo.get("tokens_output_total", 0) or 0)
+            if ot and wt > token_ratio * ot:
+                time_token.append({"id": r.get("id"), "with_tokens": wt, "without_tokens": ot})
+    return {
+        "n_tests": len(tests),
+        "non_discriminating": non_discriminating,
+        "n_non_discriminating": len(non_discriminating),
+        "flaky": flaky,
+        "time_token": time_token,
+        "note": ("non-discriminating tests pass/fail identically with and without the skill — "
+                 "they don't measure skill value; down-weight them in the gate"),
+    }
+
+
+# ── P1.5 LLM grader (claude -p) — optional judge for non-substring assertions ──
+
+_GRADE_PROMPT = (
+    "You are grading whether a REPLY satisfies an ASSERTION about it. Be strict and "
+    "literal. Reply with ONLY JSON: {{\"passed\": true|false, \"evidence\": \"<short quote "
+    "or one-line reason>\"}}.\n\nASSERTION: {a}\n\nREPLY:\n{r}"
+)
+
+
+def _claude_text(prompt: str, *, model: str = "", timeout: int = 120) -> str:
+    """Minimal `claude -p ... --output-format text` call (Claude subscription).
+    Best-effort: returns "" on any failure."""
+    model = model or SKILLBUILD_LLM_MODEL
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--output-format", "text"],
+                           capture_output=True, text=True, timeout=timeout, env=env)
+        return (r.stdout or "").strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+
+
+def make_claude_grader(*, model: str = "", timeout: int = 120):
+    """Return a grader_fn(reply, assertion_text) -> {passed, evidence} backed by
+    `claude -p`. Used to grade `test["judge"]` assertions in run_functional."""
+    model = model or SKILLBUILD_LLM_MODEL
+
+    def grader(reply: str, assertion_text: str) -> dict:
+        out = _claude_text(_GRADE_PROMPT.format(a=assertion_text, r=(reply or "")[:6000]),
+                           model=model, timeout=timeout)
+        m = re.search(r"\{.*\}", out, re.DOTALL)
+        if not m:
+            return {"passed": False, "evidence": "grader returned no JSON"}
+        try:
+            d = json.loads(m.group(0))
+            return {"passed": bool(d.get("passed")), "evidence": str(d.get("evidence", ""))[:300]}
+        except json.JSONDecodeError:
+            return {"passed": False, "evidence": "grader JSON parse failed"}
+
+    return grader
 
 
 # ── Eval cores (importable; take explicit params, no argparse / no skill_builder) ──
@@ -526,8 +631,9 @@ def run_triggering(skill_dir: Path, judge_fn, decoys: list[dict], *, runs: int =
 
 
 def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: int = 3,
-                   per_prompt_timeout: int = 240) -> dict:
-    """Run each functional prompt N trials, with and without skill, score every trial."""
+                   per_prompt_timeout: int = 240, grader_fn=None) -> dict:
+    """Run each functional prompt N trials, with and without skill, score every trial.
+    `grader_fn` (P1.5, optional) grades any `test["judge"]` assertions."""
     meta = load_skill_meta(skill_dir)
     declared_mcps = parse_declared_mcps(skill_dir)
     functional_path = skill_dir / "evals" / "functional.json"
@@ -546,7 +652,7 @@ def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: in
         trial_id = f"{test['id']}-{side}-{trial_idx}"
         reply = _run_agent(prompt, agent=agent, timeout=per_prompt_timeout,
                            trial_id=trial_id)
-        score = _score_assertions(test, reply.get("text", ""))
+        score = _score_assertions(test, reply.get("text", ""), grader_fn=grader_fn)
         signals = _extract_tool_signals(reply, declared_mcps)
         return {
             "reply_chars": len(reply.get("text", "")),
@@ -627,7 +733,7 @@ def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: in
         for k, v in wc.items():
             overall_class[k] = overall_class.get(k, 0) + v
 
-    return {
+    result = {
         "skill_name": meta["name"],
         "declared_mcps": declared_mcps,
         "n_tests": len(out_results),
@@ -647,6 +753,8 @@ def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: in
         },
         "results": out_results,
     }
+    result["analysis"] = analyze(result)  # P1.4 meta-eval attached to every run
+    return result
 
 
 def run_activation(skill_dir: Path, *, model: str = "", runs: int = 3,
@@ -849,6 +957,19 @@ def build_report(skill_dir: Path, triggering: dict | None, functional: dict | No
         lines.append(f"- Tokens in/out without-skill: {toks['without_skill_input']:,} / "
                      f"{toks['without_skill_output']:,}")
         lines.append(f"- Input-token ratio (with/without): **{ratio:.2f}×**")
+        lines.append("")
+
+    analysis = (functional or {}).get("analysis") if functional else None
+    if analysis:
+        nd = analysis.get("non_discriminating") or []
+        lines.append("## Eval quality (analyzer)")
+        lines.append(f"- Non-discriminating tests (same pass/fail with & without skill): "
+                     f"{len(nd)}/{analysis.get('n_tests', '?')}"
+                     f"{' — ' + ', '.join(str(x) for x in nd) if nd else ''}")
+        if analysis.get("flaky"):
+            lines.append(f"- Flaky (high-variance) cells: {analysis['flaky']}")
+        if analysis.get("time_token"):
+            lines.append(f"- Cost-inefficient (with-cell pricier, no pass gain): {analysis['time_token']}")
         lines.append("")
 
     overall = all(verdicts) if verdicts else False

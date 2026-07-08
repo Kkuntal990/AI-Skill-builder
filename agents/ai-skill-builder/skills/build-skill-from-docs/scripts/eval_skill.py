@@ -53,10 +53,12 @@ def cmd_triggering(args: argparse.Namespace) -> dict:
 
 
 def cmd_functional(args: argparse.Namespace) -> dict:
-    """Functional with/without-skill A/B, deterministic assertion scoring."""
+    """Functional with/without-skill A/B, deterministic assertion scoring (+ optional
+    LLM grader for test['judge'] assertions via --llm-grader)."""
     skill_dir = Path(args.skill_dir).expanduser().resolve()
+    grader = ec.make_claude_grader() if getattr(args, "llm_grader", False) else None
     return ec.run_functional(skill_dir, agent=args.agent, runs=args.runs,
-                             per_prompt_timeout=args.per_prompt_timeout)
+                             per_prompt_timeout=args.per_prompt_timeout, grader_fn=grader)
 
 
 def cmd_activation(args: argparse.Namespace) -> dict:
@@ -129,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--siblings", default="",
                         help="dir of co-resident skills to judge triggering against "
                              "(default: the target skill's parent dir; falls back to canned decoys if <2)"),
+        sp.add_argument("--llm-grader", action="store_true",
+                        help="grade test['judge'] assertions with a claude -p grader (P1.5)"),
     )
 
     t = sub.add_parser("triggering", help="Triggering F1 only")
