@@ -2836,6 +2836,74 @@ def cmd_preview(args: argparse.Namespace) -> dict:
     }
 
 
+def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespace,
+                  profile: str) -> dict:
+    """M5 — evaluate a staged skill and decide whether it may ship (P0.1).
+
+    Prompt-level only (no task execution / GPU). Runs the discriminating cheap signals:
+    triggering (judge vs real siblings), organic activation (profile=full), and the
+    critic's quality_gate (which already folds in P1.6 faithfulness + P3/P4 blocks).
+    Functional A/B is advisory and skipped here — a fresh build has no assertions.
+    Returns {passed, reasons, report, ...}. Never raises (best-effort per signal).
+    """
+    import eval_core as ec
+    pass_bar = ec.load_pass_bar(staging_skill_dir)
+    evals_doc = result.get("evals") or {}
+    prompts = evals_doc.get("prompts") or []
+    negs = evals_doc.get("negative_prompts") or []
+    gate: dict = {"profile": profile, "ran": [], "skipped": []}
+    triggering = activation = None
+
+    if prompts:
+        tset = {"should_trigger": prompts, "should_not_trigger_near_miss": negs}
+        (staging_skill_dir / "evals").mkdir(parents=True, exist_ok=True)
+        (staging_skill_dir / "evals" / "triggering.json").write_text(json.dumps(tset, indent=2))
+        sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
+        sibs = _load_sibling_descriptions(sib_dir, exclude_name=result["skill_name"])
+        decoys, label = (sibs, "siblings") if len(sibs) >= 2 else (DECOY_SKILLS, "decoys")
+        runs = 1 if profile == "smoke" else 3
+        try:
+            triggering = ec.run_triggering(staging_skill_dir, judge_triggering, decoys,
+                                           runs=runs, competitors_label=label)
+            gate["ran"].append("triggering")
+        except SystemExit:
+            gate["skipped"].append("triggering (no eval set)")
+        if profile == "full":
+            try:
+                activation = ec.run_activation(staging_skill_dir, runs=1, per_prompt_timeout=180)
+                gate["ran"].append("activation")
+            except SystemExit:
+                gate["skipped"].append("activation")
+    else:
+        gate["skipped"].append("triggering (no prompts generated)")
+    gate["skipped"].append("functional (advisory; fresh build has no assertions)")
+
+    # Gate policy: BLOCK on triggering F1 / activation recall below bar, or any residual
+    # critic block (quality_gate failed — includes P1.6 faithfulness). Functional advisory.
+    reasons: list[str] = []
+    if triggering and triggering["metrics"]["f1"] < pass_bar["triggering_f1_min"]:
+        reasons.append(f"triggering F1 {triggering['metrics']['f1']:.2f} < bar {pass_bar['triggering_f1_min']}")
+    if activation and activation["metrics"]["activation_recall"] < pass_bar["activation_recall_min"]:
+        reasons.append(f"activation recall {activation['metrics']['activation_recall']:.2f} "
+                       f"< bar {pass_bar['activation_recall_min']}")
+    if result.get("quality_gate") == "failed":
+        blocks = [f for f in (result.get("critic") or {}).get("final_findings", [])
+                  if f.get("severity") == "block"]
+        wheres = sorted({f.get("where", "?") for f in blocks})
+        reasons.append(f"quality_gate failed ({len(blocks)} unresolved block finding(s): {', '.join(wheres)})")
+
+    md, _ = ec.build_report(staging_skill_dir, triggering, None, pass_bar, activation)
+    gate.update({
+        "passed": not reasons,
+        "reasons": reasons,
+        "report": md,
+        "triggering_metrics": (triggering or {}).get("metrics"),
+        "activation_metrics": (activation or {}).get("metrics"),
+        "quality_gate": result.get("quality_gate"),
+    })
+    return gate
+
+
 def cmd_build(args: argparse.Namespace) -> dict:
     url = _normalize_url(args.url)
     result = _pipeline(url, args)
@@ -2853,6 +2921,36 @@ def cmd_build(args: argparse.Namespace) -> dict:
             "skill_name": result["skill_name"],
             "source_url": url,
         }
+
+    # M5 — eval-gated ship (P0.1). Default off: write straight to out_dir as before.
+    # smoke/full: build into a staging dir, run the gate, and only promote to out_dir on
+    # pass (or --ship-anyway, which writes with a loud gate:failed warning).
+    ship_gate_mode = getattr(args, "ship_gate", "off") or "off"
+    gate_result = None
+    if ship_gate_mode != "off":
+        import shutil as _shutil
+        import tempfile as _tempfile
+        staging = Path(_tempfile.mkdtemp(prefix="skillbuild-gate-"))
+        try:
+            staged = write_skill(
+                out_dir=staging, skill_name=result["skill_name"], skill_md=result["skill_md"],
+                references=result["references"], evals=result["evals"],
+                templates=result.get("templates"), scripts=result.get("scripts"), force=True,
+            )
+            gate_result = run_ship_gate(staged, result, args, ship_gate_mode)
+        finally:
+            _shutil.rmtree(staging, ignore_errors=True)
+        if not gate_result["passed"] and not getattr(args, "ship_anyway", False):
+            _audit("build.gate_rejected", {
+                "url": url, "skill_name": result["skill_name"], "reasons": gate_result["reasons"],
+            })
+            return {
+                "status": "rejected",
+                "reason": "ship-gate failed",
+                "ship_gate": gate_result,
+                "skill_name": result["skill_name"],
+                "source_url": url,
+            }
 
     out_dir = Path(args.out) if args.out else SKILLS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2887,6 +2985,8 @@ def cmd_build(args: argparse.Namespace) -> dict:
             *(["evals/evals.json"] if result["evals"] else []),
         ],
         "validation_warnings": [i for i in result["validation"] if i["severity"] == "warning"],
+        "ship_gate": gate_result,
+        "quality_gate": result.get("quality_gate"),
         "openclaw_skills_check": {"ok": ok, "output": check_out[:1000]},
         "triggering_report": result.get("triggering_report"),
         "quality_gate": result.get("quality_gate", "skipped"),
@@ -2946,6 +3046,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="P0.3: probe the base model WITHOUT the skill on intent-derived "
                              "questions and steer the build toward observed gaps (makes live "
                              "agent calls; off by default)")
+        sp.add_argument("--ship-gate", choices=["off", "smoke", "full"], default="off",
+                        help="M5: build into a staging dir and only promote on eval pass. "
+                             "smoke=cheap (triggering, runs=1); full adds organic activation. "
+                             "Default off (writes straight through, as before).")
+        sp.add_argument("--ship-anyway", action="store_true",
+                        help="on ship-gate FAIL, write anyway with a gate:failed warning (never silent)")
+        sp.add_argument("--eval-agent", default="skill-tester",
+                        help="agent for the baseline probe / functional eval (default skill-tester)")
+        sp.add_argument("--max-repair-eval-rounds", type=int, default=2,
+                        help="M6: max behavior-repair rounds when the ship-gate fails (default 2)")
         sp.add_argument("--force", action="store_true")
         sp.add_argument("--out", default=None)
 
