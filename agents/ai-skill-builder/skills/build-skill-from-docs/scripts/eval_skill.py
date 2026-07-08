@@ -69,6 +69,17 @@ def cmd_activation(args: argparse.Namespace) -> dict:
                              max_concurrency=getattr(args, "max_concurrency", 3))
 
 
+def cmd_optimize_description(args: argparse.Namespace) -> dict:
+    """P1.3: optimize the skill's description on a 60/40 held-out split of triggering.json."""
+    skill_dir = Path(args.skill_dir).expanduser().resolve()
+    meta = ec.load_skill_meta(skill_dir)
+    sib_dir = getattr(args, "siblings", None) or str(skill_dir.parent)
+    sibs = sb._load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
+    decoys = sibs if len(sibs) >= 2 else sb.DECOY_SKILLS
+    return ec.optimize_description(skill_dir, sb.judge_triggering, decoys, sb.improve_description,
+                                   holdout=args.holdout, runs=args.runs, max_iters=args.max_iters)
+
+
 def cmd_all(args: argparse.Namespace) -> dict:
     triggering = cmd_triggering(args)
     functional = cmd_functional(args)
@@ -157,6 +168,15 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--with-activation", action="store_true",
                    help="also run the organic-activation executor (needs the `claude` CLI)")
     a.set_defaults(func=cmd_all)
+
+    od = sub.add_parser("optimize-description",
+                        help="P1.3: held-out (60/40) description optimization")
+    od.add_argument("skill_dir")
+    od.add_argument("--runs", type=int, default=3)
+    od.add_argument("--siblings", default="")
+    od.add_argument("--holdout", type=float, default=0.4)
+    od.add_argument("--max-iters", type=int, default=5, dest="max_iters")
+    od.set_defaults(func=cmd_optimize_description)
 
     r = sub.add_parser("report", help="Render markdown summary of latest grading results")
     r.add_argument("skill_dir")

@@ -835,6 +835,92 @@ def run_activation(skill_dir: Path, *, model: str = "", runs: int = 3,
     }
 
 
+# ── P1.3 held-out description optimization (skill-creator run_loop.py) ───────
+
+
+def _score_description(description: str, skill_name: str, pos: list, neg: list,
+                       judge_fn, decoys: list, runs: int) -> dict:
+    """F1 of a candidate description over labeled queries, via the injected judge."""
+    skills = [{"name": skill_name, "description": description}] + list(decoys)
+
+    def majority(q) -> bool:
+        wins = sum(1 for _ in range(runs)
+                   if (judge_fn(q["prompt"], skills) or {}).get("choice") == skill_name)
+        return wins >= (runs / 2)
+
+    pos_hit = [(q, majority(q)) for q in pos]
+    neg_hit = [(q, majority(q)) for q in neg]
+    tp = sum(1 for _, t in pos_hit if t)
+    fn = len(pos) - tp
+    fp = sum(1 for _, t in neg_hit if t)
+    prec = tp / (tp + fp) if (tp + fp) else 0.0
+    rec = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+    return {"f1": round(f1, 3), "precision": round(prec, 3), "recall": round(rec, 3),
+            "failing": [q for q, t in pos_hit if not t]}
+
+
+def optimize_description(skill_dir: Path, judge_fn, decoys: list, improve_fn, *,
+                         holdout: float = 0.4, runs: int = 3, max_iters: int = 5) -> dict:
+    """Optimize the SKILL.md description on a 60/40 held-out split of the triggering set.
+
+    Iterates (≤max_iters) proposing rewrites from TRAIN failures only (improve_fn is blind
+    to the test split → anti-overfit), then selects best_description by TEST F1. Mirrors
+    skill-creator's run_loop.py. judge_fn + improve_fn injected (no skill_builder import)."""
+    meta = load_skill_meta(skill_dir)
+    tp_path = skill_dir / "evals" / "triggering.json"
+    if not tp_path.exists():
+        _die(f"missing {tp_path}")
+    data = json.loads(tp_path.read_text())
+    pos_all = data.get("should_trigger", [])
+    neg_all = data.get("should_not_trigger_near_miss", [])
+    test_start = int(round((1 - holdout) * 5))  # holdout=0.4 → i%5 in {3,4} = test (40%)
+
+    def split(items):
+        train, test = [], []
+        for i, it in enumerate(sorted(items, key=lambda x: str(x.get("id")))):
+            (test if (i % 5) >= test_start else train).append(it)
+        return train, test
+
+    pos_tr, pos_te = split(pos_all)
+    neg_tr, neg_te = split(neg_all)
+    name, cur = meta["name"], meta["description"]
+
+    def score(desc, p, n):
+        return _score_description(desc, name, p, n, judge_fn, decoys, runs)
+
+    init_tr, init_te = score(cur, pos_tr, neg_tr), score(cur, pos_te, neg_te)
+    candidates = [{"description": cur, "train_f1": init_tr["f1"], "test_f1": init_te["f1"], "source": "initial"}]
+    history = []
+    best_train_desc, best_train = cur, init_tr
+    for it in range(max_iters):
+        if not best_train["failing"]:
+            break
+        new_desc = improve_fn(name, "", best_train_desc, best_train["failing"])  # blind to test
+        if not new_desc or new_desc.strip() == best_train_desc.strip():
+            break
+        tr, te = score(new_desc, pos_tr, neg_tr), score(new_desc, pos_te, neg_te)
+        candidates.append({"description": new_desc, "train_f1": tr["f1"], "test_f1": te["f1"], "source": f"iter{it + 1}"})
+        history.append({"iter": it + 1, "train_f1": tr["f1"], "test_f1": te["f1"]})
+        if tr["f1"] > best_train["f1"]:
+            best_train_desc, best_train = new_desc, tr
+        else:
+            break  # no train improvement → stop
+    best = max(candidates, key=lambda c: c["test_f1"])  # SELECT BY TEST (anti-overfit)
+    return {
+        "skill_name": name,
+        "split": {"pos_train": len(pos_tr), "pos_test": len(pos_te),
+                  "neg_train": len(neg_tr), "neg_test": len(neg_te)},
+        "initial": {"train_f1": init_tr["f1"], "test_f1": init_te["f1"]},
+        "candidates": candidates,
+        "history": history,
+        "best_description": best["description"],
+        "best_test_f1": best["test_f1"],
+        "selected_by": "test",
+        "improved": best["description"].strip() != cur.strip(),
+    }
+
+
 # ── Pass-bar thresholds + report ─────────────────────────────────────────────
 
 
