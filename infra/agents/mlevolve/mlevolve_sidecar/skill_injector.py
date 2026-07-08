@@ -14,13 +14,15 @@ Three tiers (matching Anthropic Agent Skills):
   - Execution  : the same selector picks which ``references/*.md`` to load, so
                  we never dump every skill's full body into every node.
 
-Per-node injection CAPS (sidecar >= 1.0.0): the selector's picks are bounded to
+Per-node injection CAPS (sidecar >= 1.0.0): the selector's picks CAN be bounded to
 ``MLEVAL_SKILL_MAX_PER_NODE`` skills and ``MLEVAL_SKILL_MAX_REFS_PER_NODE``
-references total (default 3/3). SkillsBench (arXiv 2602.12670) finds 2–3 injected
-skills optimal (+18.6pp) vs 4+ (+5.9pp) and comprehensive bundles net-negative
-(−2.9pp); the ref cap also stops a ``["__all__"]`` pick from splicing ~2,300 lines
-of references into one prompt. Caps are read at call time so ablations can retune
-them via env without a rebuild (0 = inject none — a catalog-only ablation).
+references total, but the **default is UNCAPPED** — the selector's chosen refs are
+injected in full, as the pre-1.0.0 sidecar did (preserves mvp-032 comparability and
+keeps the treatment organic). A finite cap is an explicit ABLATION lever, read at
+call time so it can be set via env without a rebuild. Motivation for having the
+lever: SkillsBench (arXiv 2602.12670) finds 2–3 injected skills optimal (+18.6pp)
+vs 4+ (+5.9pp), comprehensive bundles net-negative (−2.9pp) — but whether a cap
+helps *here* is a hypothesis to A/B (uncapped vs e.g. 3/3), not a baked-in default.
 
 Why a sys.meta_path import hook (not an eager patch):
   ``agents/__init__.py`` is empty and the four codegen-agent modules
@@ -72,19 +74,33 @@ _TARGETS = {
 _SELECTOR_SPEC = None
 
 
-def _caps() -> tuple[int, int]:
-    """(max skills, max references) injected per node. Read at call time so an
-    ablation can retune via env without an image rebuild. Value is literal: 0
-    injects none (catalog-only), a large number is effectively unlimited.
-    Default 3/3. Invalid/empty → default."""
-    def _int(name: str, default: int) -> int:
-        raw = os.environ.get(name, "")
+_UNCAPPED = float("inf")
+
+
+def _caps() -> tuple[float, float]:
+    """(max skills, max references) injected per node, read at call time.
+
+    DEFAULT IS UNCAPPED — the selector's chosen refs are injected in full, exactly
+    as the pre-1.0.0 sidecar did. This preserves comparability with mvp-032 and
+    keeps the treatment organic. The 3/3 cap is an explicit ABLATION, not the
+    baseline: the mvp-032 replay showed 30/32 selections were DELIBERATE explicit
+    ref-lists (only 2 were ``__all__``), so a hard cap trims genuine selection
+    rather than catching a dump-everything pathology. Whether capping helps is a
+    hypothesis to A/B (uncapped vs 3/3), not a default to bake in.
+
+    Value semantics (per env var): unset / empty / negative → uncapped;
+    ``0`` → inject none (catalog-only ablation); positive ``N`` → cap at N.
+    """
+    def _cap(name: str) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return _UNCAPPED
         try:
-            v = int(raw.strip()) if raw.strip() else default
+            v = int(raw)
         except ValueError:
-            return default
-        return v if v >= 0 else default
-    return _int("MLEVAL_SKILL_MAX_PER_NODE", 3), _int("MLEVAL_SKILL_MAX_REFS_PER_NODE", 3)
+            return _UNCAPPED
+        return v if v >= 0 else _UNCAPPED
+    return _cap("MLEVAL_SKILL_MAX_PER_NODE"), _cap("MLEVAL_SKILL_MAX_REFS_PER_NODE")
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +430,9 @@ def _log_node_selection(agent, meta, stats, max_skills, max_refs) -> None:
             injected_ref_chars=stats.get("injected_ref_chars"),
             skills_truncated=stats.get("skills_truncated"),
             refs_truncated=stats.get("refs_truncated"),
-            cap_max_skills=max_skills,
-            cap_max_refs=max_refs,
+            # None when uncapped (inf isn't valid JSON); a number when a cap is set.
+            cap_max_skills=(None if max_skills == _UNCAPPED else max_skills),
+            cap_max_refs=(None if max_refs == _UNCAPPED else max_refs),
         )
     except Exception:  # noqa: BLE001
         pass

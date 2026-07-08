@@ -114,8 +114,8 @@ rationale and M4 trigger).
 the run sees; Layer 2 picks *content to inject* strictly from within Layer 1's output.
 They must not collapse into one call — different context (task-only vs per-node),
 different frequency (once vs per-node). A third, orthogonal control sits on top: the
-per-node **caps** (M1: 3 skills / 3 refs) bound how much of Layer 2's selection actually
-lands in the prompt.
+per-node **caps** (M1, optional; **default uncapped**) can bound how much of Layer 2's
+selection lands in the prompt.
 
 **Layer 2 is a router, not the codegen agent.** MLEvolve cannot read files mid-run, so it
 never pulls a skill organically. Layer 2 is a separate temp-0 `select_skills` LLM call
@@ -170,7 +170,7 @@ behind a trigger · ❌ reject.
 |---|---|---|
 | **Selection telemetry** (structured per-node event log) | ✅ **first** | spike-023 was silent for a full run. Selector calls already land in `prompts.jsonl` (`func_spec_name:"select_skills"`, `prompt_logger.py:91`) → past runs replayable. Missing: fallback_mode, injected-token counts, node join, without_skill confirmation, analyzer awareness (0 hits in `src/mleval/analyzer/`). |
 | **Reasons + `decline_reason` in schema** | ✅ | Cheap attribution; distinguishes "declined" from "silently empty". Bumps behavior (CoT effect) → version the sidecar, don't compare across the boundary. |
-| **Per-node caps** (skills + refs) | ✅ | Strongest result in the sweep: SkillsBench (2602.12670) — 2–3 skills **+18.6pp**, 4+ **+5.9pp**, comprehensive bundles **−2.9pp**. Live hazard: `["__all__"]` splices ~2,300 lines of vllm refs into one prompt (`_render_selected_bodies`, `:225`). Symmetric budget lever ⇒ non-nudging. Default 3/3. |
+| **Per-node caps** (skills + refs) | ✅ built as a lever; **default UNCAPPED** | SkillsBench (2602.12670) motivates *having* the lever — 2–3 skills **+18.6pp**, 4+ **+5.9pp**, comprehensive bundles **−2.9pp**. But the mvp-032 replay found 30/32 selections were DELIBERATE explicit ref-lists (only 2 `["__all__"]`), so a hard cap trims genuine selection, not a dump-everything pathology. Shipped as a symmetric, env-tunable lever (`_render_selected_bodies`); **default uncapped reproduces mvp-032** and whether a finite cap helps is a hypothesis to A/B (Stage 3), not a baked-in baseline. |
 | **Ablation arms** (oracle / random / catalog_only / none) | ✅ | SkillComposer's 5-arm design (No/All/Retrieved/Oracle/Gold = 22.2/29.3/44.0/44.0/51.1%) is the template; SkillsBench *lacks* this arm ⇒ publishable wedge. Answers the mvp-032 open question: selection-failure vs content-failure. |
 | **Offline replay harness** | ✅ | Near-free: mvp-032 selector contexts already on the PVC. Test selector variants before spending GPU-h. |
 | **Hardware fact → selector context** | ✅ (added) | Codegen prompt gets `**Compute**: …A6000 48GB` (`eval_harness.py:171`) but `_selector_user` (`:148`) doesn't — the selector that pulled `quantization.md` in mvp-032 never saw GPU size. Symmetric env fact. |
@@ -213,15 +213,19 @@ M3–M4 unbuilt.**
 ### M1 — Selection hardening ✅ BUILT (sidecar 1.0.0 = comparability boundary)
 
 - Schema: per-selection `reason`, top-level `decline_reason` (strict-safe: both required).
-- Caps: `MLEVAL_SKILL_MAX_PER_NODE=3`, `MLEVAL_SKILL_MAX_REFS_PER_NODE=3` (counting
-  `__all__` expansion), enforced in `_render_selected_bodies` with logged truncation.
+- Injection-cap lever `MLEVAL_SKILL_MAX_PER_NODE` / `MLEVAL_SKILL_MAX_REFS_PER_NODE`
+  (counting `__all__` expansion), enforced in `_render_selected_bodies` with logged
+  truncation. **Default uncapped** (unset/negative = uncapped, `0` = inject none,
+  positive N = cap N); a finite value is an explicit ablation arm, not the baseline.
 - Fallback ladder: retry once → `fallback_all` iff N≤5 else catalog_only, always logged.
 - One line in `_selector_user`: the `MLEVAL_HARDWARE` compute fact.
 - Threaded new env vars: orchestrator → `job.yaml.tmpl` → `entrypoint.sh` (+ `run_ab.py`
   CLI flags `--skill-max-per-node` / `--skill-max-refs-per-node`). Version recorded in
   `manifest.agent.sidecar_version`.
-- **As built:** default caps 3/3; `0` = catalog-only ablation. `["__all__"]` refs are
-  now bounded (was the ~2,300-line splice hazard).
+- **As built:** default **uncapped** (reproduces mvp-032 organic behavior). The
+  mvp-032 replay found 30/32 selections were deliberate explicit ref-lists (only 2
+  `["__all__"]`), so capping to 3 would trim *genuine* selection — hence uncapped
+  default, with 3/3 demoted to a Stage-3 ablation arm. `0` = catalog-only ablation.
 
 ### M2 — Replay + gold labels ✅ BUILT (local; no rebuild)
 
@@ -271,12 +275,14 @@ don't over-claim scale.
 
 Four stages, cheapest first:
 
-1. **Replay on existing PVC data — now, zero-GPU.** Pull the mvp-032/029/028
-   trajectory dirs and run `scripts/replay_skill_selector.py`. Yields the first
-   selector-accuracy table (recall/precision/decline vs gold) **and** shows how the
-   3/3 caps would have re-shaped those historical asks. Green here (good recall,
-   caps only trim `__all__` bloat) is the gate to spend any GPU. **No approval
-   needed — it reads already-persisted artifacts.**
+1. **Replay on existing PVC data — DONE (2026-07-07), zero-GPU.** Ran
+   `scripts/replay_skill_selector.py` over mvp-032/029/028. Result: the spike-023
+   header-strip fix is validated (post-fix recall **0.59–0.75** / empty **0.00–0.21**
+   vs pre-fix spike-018 recall **0.30** / empty **0.49**); **wrong-family = 0** in
+   every run (the selector under-triggers, never mis-picks). A 3-ref cap *would* have
+   truncated 12/25 mvp-032 nodes — but the categorization showed those were
+   DELIBERATE explicit 4–5-ref picks (only 2 `["__all__"]`), which is why the ref cap
+   is **not** the default. **No approval needed — reads persisted artifacts.**
 
 2. **Live plumbing smoke — 1 trajectory, needs approval.** One task × `with_skill`
    × 1 seed, small step/time budget, on `:dev`. Purpose is *plumbing, not science*:
@@ -284,11 +290,15 @@ Four stages, cheapest first:
    records carry the fields, caps truncate, `aggregate` computes treatment-empty
    rate, and `manifest.agent.sidecar_version == 1.0.0`. ~1 short pod.
 
-3. **Regression A/B — `without_skill` vs `with_skill` (organic), needs approval.**
-   Re-run one task (boolq — the mvp-032 QLoRA-tilt case) on `:dev`. Answers: did the
-   caps/telemetry break anything, and does the ref-cap (bounding the peft
-   `quantization.md` / `__all__` pull) move the QLoRA-tilt loss? Needs **no new
-   code** — the current image supports it.
+3. **Regression A/B + cap ablation — needs approval.** Re-run boolq (the mvp-032
+   QLoRA-tilt case) on `:dev`. Two questions, one sweep: (a) *regression* —
+   `without_skill` vs `with_skill` **uncapped** (the default, = mvp-032 recipe):
+   confirm telemetry lands and the with-skill result reproduces, nothing broken by
+   the sidecar changes; (b) *cap ablation* — add a `with_skill` arm at
+   `--skill-max-refs-per-node 3`: does bounding the peft `quantization.md` pull move
+   the QLoRA-tilt loss? If yes, the cap is *earned*; if not, the tilt is a content
+   problem (builder fix). Needs **no new code** — the current image supports it via
+   the CLI flag.
 
 4. **Attribution arms — needs M3 (unbuilt) + approval.** `oracle` / `random` /
    `catalog_only` / `none` separate selection-failure from content-failure. Build

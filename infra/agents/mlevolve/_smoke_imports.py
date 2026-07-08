@@ -154,11 +154,17 @@ with _tf0.TemporaryDirectory() as _libdir:
 # -----------------------------------------------------------------------------
 import json as _json  # noqa: E402
 
-# default caps 3/3; env override read at call time (ablation lever, no rebuild)
-assert skill_injector._caps() == (3, 3), f"default caps not 3/3: {skill_injector._caps()}"
+# DEFAULT is UNCAPPED (reproduces pre-1.0.0 organic behavior); a finite value is
+# an explicit ablation lever, read at call time. Semantics: unset/neg → uncapped;
+# 0 → inject none; positive N → cap N.
+_INF = float("inf")
+assert skill_injector._caps() == (_INF, _INF), f"default caps not uncapped: {skill_injector._caps()}"
 os.environ["MLEVAL_SKILL_MAX_PER_NODE"] = "2"
 os.environ["MLEVAL_SKILL_MAX_REFS_PER_NODE"] = "1"
 assert skill_injector._caps() == (2, 1), f"env caps not honored: {skill_injector._caps()}"
+os.environ["MLEVAL_SKILL_MAX_PER_NODE"] = "-1"
+os.environ["MLEVAL_SKILL_MAX_REFS_PER_NODE"] = "0"
+assert skill_injector._caps() == (_INF, 0), f"neg→uncapped / 0→none not honored: {skill_injector._caps()}"
 os.environ.pop("MLEVAL_SKILL_MAX_PER_NODE", None)
 os.environ.pop("MLEVAL_SKILL_MAX_REFS_PER_NODE", None)
 
@@ -193,6 +199,12 @@ assert _b0 == [] and _s0["selected_skills"] == [], "max_skills=0 must inject zer
 # fallback_all: every body, no refs, not skill-capped
 _bf, _sf = skill_injector._render_selected_bodies(skill_injector._FALLBACK_ALL, _skills_fix, 3, 3)
 assert len(_bf) == 4 and _sf["injected_ref_chars"] == 0, "fallback_all should load all bodies, no refs"
+# UNCAPPED (the default): every selected skill + every requested ref, no truncation
+_bu, _su = skill_injector._render_selected_bodies(_sel, _skills_fix, _INF, _INF)
+assert _su["selected_skills"] == ["alpha", "beta", "gamma", "delta"], _su["selected_skills"]
+assert not _su["skills_truncated"] and not _su["refs_truncated"], "uncapped must not truncate"
+assert sum(len(v) for v in _su["selected_references"].values()) == 5, \
+    f"uncapped should inject all 5 refs (alpha __all__=4 + beta 1): {_su['selected_references']}"
 
 # 5b. Selector schema carries the reason + decline_reason fields (strict-safe:
 #     every declared property is required).
