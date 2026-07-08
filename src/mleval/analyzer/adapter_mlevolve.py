@@ -52,8 +52,7 @@ def _read_journal(runs_dir: Path) -> tuple[dict[str, Any], Path] | None:
     return json.loads(path.read_text()), path
 
 
-def _read_prompts(out_dir: Path) -> list[dict[str, Any]]:
-    fp = out_dir / "prompts.jsonl"
+def _read_jsonl(fp: Path) -> list[dict[str, Any]]:
     if not fp.is_file():
         return []
     out: list[dict[str, Any]] = []
@@ -65,6 +64,22 @@ def _read_prompts(out_dir: Path) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return out
+
+
+def _read_prompts(out_dir: Path) -> list[dict[str, Any]]:
+    return _read_jsonl(out_dir / "prompts.jsonl")
+
+
+def _read_selection_events(out_dir: Path) -> list[dict[str, Any]]:
+    """node_selection telemetry from the skill injector (selection_logger).
+
+    Empty for without_skill / pre-1.0.0-sidecar runs — the adapter degrades
+    gracefully (no skill_selection field on the node records).
+    """
+    return [
+        e for e in _read_jsonl(out_dir / "selection_events.jsonl")
+        if e.get("event") == "node_selection"
+    ]
 
 
 def _bucket_prompts(prompts: list[dict[str, Any]], nodes: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -100,7 +115,33 @@ def _bucket_prompts(prompts: list[dict[str, Any]], nodes: list[dict[str, Any]]) 
     return buckets
 
 
-def _record(node: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, Any]:
+def _selection_for_node(sel_events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Condense this node's selection event(s) into the trajectory-schema field.
+
+    The selector runs once per node (cached), so there is normally exactly one
+    event; if a node somehow has several, the last one is authoritative.
+    """
+    if not sel_events:
+        return None
+    e = sel_events[-1]
+    return {
+        "fallback_mode": e.get("fallback_mode"),
+        "declined": e.get("declined"),
+        "selected_skills": e.get("selected_skills") or [],
+        "selected_references": e.get("selected_references") or {},
+        "injected_body_chars": e.get("injected_body_chars"),
+        "injected_ref_chars": e.get("injected_ref_chars"),
+        "skills_truncated": e.get("skills_truncated"),
+        "refs_truncated": e.get("refs_truncated"),
+        "selector_error": e.get("selector_error"),
+    }
+
+
+def _record(
+    node: dict[str, Any],
+    prompts: list[dict[str, Any]],
+    sel_events: list[dict[str, Any]],
+) -> dict[str, Any]:
     metric = node.get("metric")
     metric_value = None
     if isinstance(metric, dict):
@@ -142,6 +183,9 @@ def _record(node: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, An
         "llm_total_in_tokens": total_in,
         "llm_total_out_tokens": total_out,
         "llm_calls": llm_calls,
+        # None for without_skill / pre-telemetry runs; a dict when the injector
+        # logged a selection for this node (see selection_logger.py).
+        "skill_selection": _selection_for_node(sel_events),
     }
 
 
@@ -159,10 +203,14 @@ def adapt(out_dir: Path) -> Path:
     prompts = _read_prompts(out_dir)
     buckets = _bucket_prompts(prompts, nodes)
 
+    # Same ctime-window bucketing for selection events (they carry `ts` too).
+    sel_events = _read_selection_events(out_dir)
+    sel_buckets = _bucket_prompts(sel_events, nodes)
+
     out_path = out_dir / "trajectory.jsonl"
     with out_path.open("w") as f:
         for n in nodes:
-            rec = _record(n, buckets.get(n["id"], []))
+            rec = _record(n, buckets.get(n["id"], []), sel_buckets.get(n["id"], []))
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
     return out_path

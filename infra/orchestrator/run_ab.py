@@ -108,6 +108,11 @@ class Trajectory:
     # this explicitly when you need a specific per-exec window (e.g.
     # SAMSum needs ~40 min to finish 1 epoch of QLoRA + eval on A6000).
     exec_timeout_sec: int = 0  # 0 → entrypoint default (time_limit_sec/2)
+    # Per-node skill-injection caps (sidecar >= 1.0.0). Default -1 = UNCAPPED
+    # (reproduces mvp-032 organic behavior); a finite value is an explicit
+    # ablation lever. 0 = inject none (catalog-only ablation).
+    skill_max_per_node: int = -1
+    skill_max_refs_per_node: int = -1
 
     @property
     def trajectory_id(self) -> str:
@@ -161,6 +166,11 @@ class Trajectory:
                 "MLEVAL_SKILL_LIBRARY": self.skill_library if self.cell == "with_skill" else "",
                 "MLEVAL_TASK_REQS_PATH": self.task_reqs_path,
                 "MLEVAL_SKILL_REQS_PATH": self.skill_reqs_path,
+                # Per-node injection caps — apply to BOTH cells identically (a
+                # symmetric budget lever, not a skill nudge). without_skill loads
+                # no skills, so the caps are inert there.
+                "MLEVAL_SKILL_MAX_PER_NODE": str(self.skill_max_per_node),
+                "MLEVAL_SKILL_MAX_REFS_PER_NODE": str(self.skill_max_refs_per_node),
                 "MLEVAL_LLM_TIMEOUT_SEC": str(self.llm_timeout_sec),
                 # Empty string → entrypoint computes time_limit_sec / 2
                 "MLEVAL_EXEC_TIMEOUT_SEC": (
@@ -190,6 +200,8 @@ class Plan:
         step_limit: int,
         llm_timeout_sec: int = 120,
         exec_timeout_sec: int = 0,
+        skill_max_per_node: int = -1,
+        skill_max_refs_per_node: int = -1,
     ) -> None:
         for cell in self.cells:
             for seed in self.seeds:
@@ -206,6 +218,8 @@ class Plan:
                         step_limit=step_limit,
                         llm_timeout_sec=llm_timeout_sec,
                         exec_timeout_sec=exec_timeout_sec,
+                        skill_max_per_node=skill_max_per_node,
+                        skill_max_refs_per_node=skill_max_refs_per_node,
                     )
                 )
 
@@ -271,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--step-limit", type=int, default=5, help="Agent max steps per trajectory (MLEvolve agent.steps; the only LOOP exit since agent.time_limit is soft).")
     p.add_argument("--llm-timeout-sec", type=int, default=120, help="Per-LLM-request HTTP timeout (read).")
     p.add_argument("--exec-timeout-sec", type=int, default=0, help="Per-exec subprocess kill (MLEvolve exec.timeout). 0 → entrypoint default = time_limit_sec/2.")
+    p.add_argument("--skill-max-per-node", type=int, default=-1, help="Cap on skill BODIES injected per codegen node (sidecar >= 1.0.0). DEFAULT -1 = uncapped (organic). 0 = catalog-only. Applies to both cells symmetrically.")
+    p.add_argument("--skill-max-refs-per-node", type=int, default=-1, help="Cap on skill REFERENCES injected per codegen node (total across skills). DEFAULT -1 = uncapped; set e.g. 3 as an ablation arm.")
     p.add_argument(
         "--profile",
         choices=["gpu"],
@@ -308,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         step_limit=args.step_limit,
         llm_timeout_sec=args.llm_timeout_sec,
         exec_timeout_sec=args.exec_timeout_sec,
+        skill_max_per_node=args.skill_max_per_node,
+        skill_max_refs_per_node=args.skill_max_refs_per_node,
     )
 
     template_path = JOB_TEMPLATES[args.profile]

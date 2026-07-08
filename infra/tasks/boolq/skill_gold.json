@@ -1,0 +1,10 @@
+{
+  "task": "boolq",
+  "relevant_skills": ["peft-tuning", "vllm-inference"],
+  "acceptable_skills": [],
+  "irrelevant_skills": ["tabular-baseline"],
+  "relevant_references": {},
+  "confidence": "high",
+  "curated_by": "provisional (auto, 2026-07) — refine before citing",
+  "notes": "Fine-tune the pinned instruction-tuned causal LM (peft-tuning: LoRA) for yes/no reading comprehension; batched generation for eval (vllm-inference). Not tabular. NB mvp-032: the peft skill over-surfaced QLoRA/DoRA here — this gold is for whether the SELECTOR should pick peft, not whether the skill CONTENT is well-tuned."
+}
