@@ -857,46 +857,87 @@ def infer_intent(doc_text: str) -> str:
     return raw[:1200]
 
 
-def baseline_gap_probe(intent_brief: str, doc_text: str, agent: str = "skill-tester",
-                       n_questions: int = 2, timeout: int = 180) -> str:
-    """P0.3 baseline-first: run the base model (no skill) on intent-derived probe
-    questions and summarize where it falls short, yielding `gap_notes` that steer
-    plan/body toward REAL gaps (Anthropic "run without-skill first, document failures").
+# ── Delegation to the skill-tester agent (author↔tester split) ───────────────
+# The builder holds NO behavioral-eval logic. Both the ship-gate and the baseline
+# probe are delegated to skill-tester's `evaluate-skill` skill via a sub-agent call;
+# the tester runs eval_core (which it owns) and returns JSON, parsed back here.
 
-    Best-effort: returns "" on any failure so it never blocks a build. Prompt-level
-    only — asks questions and reads text answers; no task execution, no GPU.
-    """
+EVAL_AGENT_DEFAULT = "skill-tester"
+
+
+def _call_eval_agent(prompt: str, *, agent: str = EVAL_AGENT_DEFAULT, timeout: int = 900) -> str:
+    """Run one `openclaw agent` turn and return its reply text ("" on any failure)."""
+    try:
+        r = subprocess.run(
+            ["openclaw", "agent", "--agent", agent, "--json", "--timeout", str(timeout), "-m", prompt],
+            capture_output=True, text=True, timeout=timeout + 60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+    raw = (r.stdout or "") + (r.stderr or "")
+    idx = raw.find("\n{")
+    js = raw[idx + 1:] if idx >= 0 else (raw[raw.find("{"):] if "{" in raw else "")
+    try:
+        d = json.loads(js)
+    except json.JSONDecodeError:
+        return raw  # let _extract_json try the whole blob
+    payloads = (d.get("result") or d).get("payloads", [])
+    return "\n\n".join(p.get("text", "") for p in payloads if p.get("text"))
+
+
+def _extract_json(text: str) -> "dict | None":
+    """Pull a JSON object out of an agent reply (fenced or bare). None if absent/unparseable."""
+    if not text:
+        return None
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+    s, e = text.find("{"), text.rfind("}")
+    if 0 <= s < e:
+        try:
+            return json.loads(text[s:e + 1])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def baseline_gap_probe(intent_brief: str, doc_text: str, agent: str = EVAL_AGENT_DEFAULT,
+                       n_questions: int = 2, timeout: int = 180) -> str:
+    """P0.3 baseline-first: DELEGATE to skill-tester's evaluate-skill baseline-probe
+    (author↔tester — the builder owns none of this). Writes a small intent+docs payload
+    the tester reads, spawns the tester, and returns its `gap_notes`. Best-effort:
+    returns "" on any failure so it never blocks a build. Prompt-level only, no GPU."""
     if not intent_brief:
         return ""
+    tmp = None
     try:
-        import eval_core as ec
-        q_prompt = (
-            f"Given this skill INTENT and docs, list {n_questions} short, realistic user "
-            "questions whose answers the skill must get right. One per line, no numbering, "
-            "no preamble.\n\nINTENT:\n" + intent_brief
-            + "\n\nDOCS (excerpt):\n" + (doc_text or "")[:3000]
+        import tempfile
+        payload = {"intent": intent_brief, "doc_excerpt": (doc_text or "")[:3000],
+                   "n_questions": n_questions}
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(payload, fh)
+        fh.close()
+        tmp = fh.name
+        prompt = (
+            "Use your evaluate-skill skill's baseline-probe mode to find where the BASE "
+            "model (no skill) falls short for a skill we're about to build. The "
+            f"{{intent, doc_excerpt, n_questions}} payload is at:\n{tmp}\n"
+            "Run it and return ONLY the resulting JSON (shape: {\"gap_notes\": \"...\"})."
         )
-        raw = _llm_call(q_prompt, max_tokens=300, temperature=0.3)
-        questions = [ln.strip("-*0123456789. ").strip() for ln in raw.splitlines() if ln.strip()][:n_questions]
-        if not questions:
-            return ""
-        pairs = []
-        for q in questions:
-            r = ec._run_agent(q, agent=agent, timeout=timeout)
-            pairs.append((q, (r.get("text") or "")[:1500]))
-        joined = "\n\n".join(f"Q: {q}\nBASELINE ANSWER (no skill): {a}" for q, a in pairs)
-        g_prompt = (
-            "Below are questions and the base model's answers WITHOUT the skill. In 3-6 terse "
-            "bullets, list what the baseline got WRONG, vague, or MISSED that a good skill must "
-            "nail — these become the skill's priorities. If the baseline already answers "
-            "everything well, reply exactly: NONE\n\n" + joined
-        )
-        gaps = _llm_call(g_prompt, max_tokens=500, temperature=0.2).strip()
-        if not gaps or gaps.upper().startswith("NONE") or len(gaps) < 10:
-            return ""
-        return gaps[:2000]
-    except (ImportError, RuntimeError, OSError, KeyError, ValueError):
+        reply = _call_eval_agent(prompt, agent=agent, timeout=timeout + 120)
+        d = _extract_json(reply) or {}
+        return (d.get("gap_notes") or "")[:2000]
+    except (OSError, ValueError, RuntimeError):
         return ""
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 # Hardware requirement extraction — regex side-channel for the body prompt.
@@ -1323,117 +1364,6 @@ def write_troubleshooting(
 
 
 # ── Feature 2: triggering eval + description optimizer ───────────────────────
-
-DECOY_SKILLS = [
-    {
-        "name": "data-preprocessing",
-        "description": "Clean, transform, and prepare tabular or text data for ML models. Use when the user needs to handle missing values, tokenize text, normalize features, split datasets, or convert between data formats (pandas, parquet, arrow).",
-    },
-    {
-        "name": "model-evaluation",
-        "description": "Compute evaluation metrics for ML models. Use when the user wants to measure accuracy, F1, AUC, perplexity, BLEU, ROUGE, or compare model performance across runs.",
-    },
-    {
-        "name": "experiment-tracking",
-        "description": "Log, compare, and visualize ML experiments. Use when the user mentions tracking runs, comparing hyperparameters, viewing loss curves, or integrating with MLflow, W&B, or TensorBoard.",
-    },
-    {
-        "name": "vector-retrieval",
-        "description": "Build and query vector indexes for semantic search or RAG. Use when the user wants to embed documents, set up a vector database (FAISS, Chroma, Qdrant, Pinecone), or implement retrieval-augmented generation.",
-    },
-    {
-        "name": "deployment-serving",
-        "description": "Deploy and serve ML models in production. Use when the user asks about model serving, containerization, inference endpoints, autoscaling, or integrating with FastAPI, TorchServe, vLLM, or TGI.",
-    },
-]
-
-
-def judge_triggering(user_message: str, skills: list[dict]) -> dict:
-    """Ask an LLM which skill it would pick for a user message.
-
-    Returns {"choice": str, "reason": str, "confidence": float}.
-    """
-    tpl = _read_prompt("judge_triggering.txt")
-    skills_text = "\n".join(
-        f"- `{s['name']}`: {s['description']}" for s in skills
-    )
-    prompt = _fill_prompt(tpl, user_message=user_message, skills_list=skills_text)
-    raw = _strip_fences(_llm_call(prompt, max_tokens=400, temperature=0.0))
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        return {"choice": "none", "reason": "judge returned no JSON", "confidence": 0.0}
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {"choice": "none", "reason": "judge JSON parse failed", "confidence": 0.0}
-
-
-def evaluate_triggering(
-    skill_name: str,
-    skill_description: str,
-    eval_prompts: list[dict],
-    siblings: list[dict] | None = None,
-    negative_prompts: list[dict] | None = None,
-) -> dict:
-    """Run the triggering judge over each eval prompt. Returns per-prompt results + win rate.
-
-    `siblings`: real co-resident skill descriptions to compete against instead of
-    the canned `DECOY_SKILLS` (set via `--siblings`). Competing against the actual
-    sibling set is a far harder, more realistic precision test than synthetic decoys.
-
-    `negative_prompts`: should-NOT-trigger near-misses. If the target wins one, that
-    is a false positive (over-triggering). Makes the eval bidirectional — it catches
-    over-selection (the other half of the triggering failure mode), not just misses.
-    """
-    if not eval_prompts:
-        return {"win_rate": None, "results": [], "failing": []}
-    competitors = siblings if siblings else DECOY_SKILLS
-    skills = [{"name": skill_name, "description": skill_description}] + competitors
-    results = []
-    failing = []
-    for p in eval_prompts:
-        msg = p.get("prompt", "")
-        if not msg:
-            continue
-        verdict = judge_triggering(msg, skills)
-        won = verdict.get("choice") == skill_name
-        entry = {
-            "prompt_id": p.get("id"),
-            "prompt": msg,
-            "won": won,
-            "judge_choice": verdict.get("choice"),
-            "judge_reason": verdict.get("reason", ""),
-        }
-        results.append(entry)
-        if not won:
-            failing.append(entry)
-    total = len(results)
-    wins = sum(1 for r in results if r["won"])
-    # Bidirectional: should-NOT-trigger near-misses. Target winning = false positive.
-    false_positives = []
-    for p in (negative_prompts or []):
-        msg = p.get("prompt", "")
-        if not msg:
-            continue
-        verdict = judge_triggering(msg, skills)
-        if verdict.get("choice") == skill_name:
-            false_positives.append({
-                "prompt_id": p.get("id"),
-                "prompt": msg,
-                "judge_reason": verdict.get("reason", ""),
-            })
-    return {
-        "win_rate": wins / total if total else None,
-        "wins": wins,
-        "total": total,
-        "results": results,
-        "failing": failing,
-        "competitors": "siblings" if siblings else "decoys",
-        "n_competitors": len(competitors),
-        "false_positives": false_positives,
-        "fp_total": len(negative_prompts or []),
-    }
-
 
 def improve_description(
     skill_name: str,
@@ -2302,7 +2232,6 @@ def _pipeline(
         with_community,
     )
     include_evals = not args.no_evals
-    run_eval_loop = include_evals and not getattr(args, "no_eval_triggering", False)
 
     # Intent brief (Phase 3.0-2): what the skill is FOR + target environment + success
     # criteria. Explicit `--intent` (or `--intent @file`) wins; otherwise infer from the
@@ -2508,13 +2437,14 @@ def _pipeline(
             if any(f["severity"] == "block" for f in extra_findings):
                 critic_report["quality_gate"] = "failed"
 
-    # Real co-resident siblings (P1.1): default to the install root (SKILLS_DIR);
-    # override with --siblings. Used both to GROUND eval-prompt generation (P1.2 —
-    # near-miss negatives naming real competitors) and as triggering COMPETITORS below.
-    # <2 siblings found → fall back to the canned decoys in evaluate_triggering.
+    # Real co-resident siblings (P1.1/P1.2): default to the install root (SKILLS_DIR),
+    # override with --siblings. Used to GROUND eval-prompt generation (near-miss negatives
+    # naming real competitors). NOTE: triggering SCORING is the skill-tester agent's job now
+    # (author↔tester split) — the builder no longer runs the judge inline. Description
+    # tuning from triggering feedback happens in the DELEGATED ship-gate + repair loop
+    # (opt-in via --ship-gate), or via the tester's `optimize-description`.
     _sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
     _sibs = _load_sibling_descriptions(_sib_dir, exclude_name=skill_name)
-    siblings = _sibs if len(_sibs) >= 2 else None
     _sibling_names = [s["name"] for s in _sibs]
 
     # P1.2: ground eval-prompt generation in the fetched substrate (examples +
@@ -2528,33 +2458,7 @@ def _pipeline(
     ) if include_evals else None
 
     description = _extract_description(body)
-    negative_prompts = evals_doc.get("negative_prompts") if evals_doc else None
     triggering_report = None
-    if run_eval_loop and evals_doc and evals_doc.get("prompts"):
-        initial = evaluate_triggering(
-            skill_name, description, evals_doc["prompts"],
-            siblings=siblings, negative_prompts=negative_prompts,
-        )
-        triggering_report = {"initial": initial}
-        if initial.get("win_rate") is not None and initial["win_rate"] < 1.0 and initial["failing"]:
-            improved = improve_description(
-                skill_name=skill_name,
-                skill_body=body,
-                current_description=description,
-                failing=initial["failing"],
-            )
-            if improved and improved != description:
-                revised = evaluate_triggering(
-                    skill_name, improved, evals_doc["prompts"],
-                    siblings=siblings, negative_prompts=negative_prompts,
-                )
-                if revised.get("win_rate", 0) > initial.get("win_rate", 0):
-                    description = improved
-                    triggering_report["revised"] = revised
-                    triggering_report["description_updated"] = True
-                else:
-                    triggering_report["revised"] = revised
-                    triggering_report["description_updated"] = False
 
     install_entries = detect_install_commands(sources["readme"])
     bins = ["python3"]
@@ -2897,77 +2801,55 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
                   profile: str) -> dict:
     """M5 — evaluate a staged skill and decide whether it may ship (P0.1).
 
-    Prompt-level only (no task execution / GPU). Runs the discriminating cheap signals:
-    triggering (judge vs real siblings), organic activation (profile=full), and the
-    critic's quality_gate (which already folds in P1.6 faithfulness + P3/P4 blocks).
-    Functional A/B is advisory and skipped here — a fresh build has no assertions.
-    Returns {passed, reasons, report, ...}. Never raises (best-effort per signal).
+    Author↔tester split: the BEHAVIORAL eval (triggering + organic activation, scored
+    vs pass_bar) is DELEGATED to the skill-tester agent's evaluate-skill skill via a
+    sub-agent call. The builder only (a) writes the eval set it authored into the staged
+    bundle, and (b) folds in its own artifact-critic quality_gate — which is an authoring
+    concern, not behavioral eval. Prompt-level only (no task execution / GPU). Never
+    raises: on delegation failure the gate degrades to pass-with-note (best-effort).
     """
-    import eval_core as ec
-    pass_bar = ec.load_pass_bar(staging_skill_dir)
     evals_doc = result.get("evals") or {}
     prompts = evals_doc.get("prompts") or []
     negs = evals_doc.get("negative_prompts") or []
-    gate: dict = {"profile": profile, "ran": [], "skipped": []}
-    triggering = activation = None
 
+    # (a) Author writes the eval set; the tester reads + measures it.
     if prompts:
         tset = {"should_trigger": prompts, "should_not_trigger_near_miss": negs}
         (staging_skill_dir / "evals").mkdir(parents=True, exist_ok=True)
         (staging_skill_dir / "evals" / "triggering.json").write_text(json.dumps(tset, indent=2))
-        sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
-        sibs = _load_sibling_descriptions(sib_dir, exclude_name=result["skill_name"])
-        decoys, label = (sibs, "siblings") if len(sibs) >= 2 else (DECOY_SKILLS, "decoys")
-        runs = 1 if profile == "smoke" else 3
-        try:
-            triggering = ec.run_triggering(staging_skill_dir, judge_triggering, decoys,
-                                           runs=runs, competitors_label=label)
-            gate["ran"].append("triggering")
-        except SystemExit:
-            gate["skipped"].append("triggering (no eval set)")
-        if profile == "full":
-            try:
-                activation = ec.run_activation(staging_skill_dir, runs=1, per_prompt_timeout=180)
-                gate["ran"].append("activation")
-            except SystemExit:
-                gate["skipped"].append("activation")
-    else:
-        gate["skipped"].append("triggering (no prompts generated)")
-    gate["skipped"].append("functional (advisory; fresh build has no assertions)")
 
-    # Gate policy: BLOCK on triggering F1 / activation recall below bar, or any residual
-    # critic block (quality_gate failed — includes P1.6 faithfulness). Functional advisory.
-    reasons: list[str] = []
-    if triggering and triggering["metrics"]["f1"] < pass_bar["triggering_f1_min"]:
-        reasons.append(f"triggering F1 {triggering['metrics']['f1']:.2f} < bar {pass_bar['triggering_f1_min']}")
-    if activation and activation["metrics"]["activation_recall"] < pass_bar["activation_recall_min"]:
-        reasons.append(f"activation recall {activation['metrics']['activation_recall']:.2f} "
-                       f"< bar {pass_bar['activation_recall_min']}")
+    # Delegate the behavioral verdict to skill-tester.
+    sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
+    eval_agent = getattr(args, "eval_agent", EVAL_AGENT_DEFAULT) or EVAL_AGENT_DEFAULT
+    timeout = int(getattr(args, "eval_timeout", 900) or 900)
+    delegate_prompt = (
+        "Use your evaluate-skill skill to run the ship-gate on the skill bundle at:\n"
+        f"{staging_skill_dir}\n"
+        f"Profile: {profile}. Siblings dir: {sib_dir}.\n"
+        "Run the gate and return ONLY the verdict JSON it prints (keys: passed, reasons, "
+        "ran, skipped, triggering_metrics, activation_metrics, failing_positives)."
+    )
+    reply = _call_eval_agent(delegate_prompt, agent=eval_agent, timeout=timeout)
+    gate = _extract_json(reply)
+    if not isinstance(gate, dict) or "passed" not in gate:
+        # Best-effort degrade: don't block a build on a tester/delegation hiccup.
+        gate = {"profile": profile, "passed": True, "reasons": [], "ran": [],
+                "skipped": ["behavioral gate (skill-tester delegation failed — degraded)"],
+                "degraded": True}
+    gate.setdefault("reasons", [])
+    gate.setdefault("failing_positives", [])
+
+    # (b) Fold in the author-side artifact critic (quality_gate). NOT the tester's job.
+    reasons = list(gate.get("reasons") or [])
     if result.get("quality_gate") == "failed":
         blocks = [f for f in (result.get("critic") or {}).get("final_findings", [])
                   if f.get("severity") == "block"]
         wheres = sorted({f.get("where", "?") for f in blocks})
         reasons.append(f"quality_gate failed ({len(blocks)} unresolved block finding(s): {', '.join(wheres)})")
-
-    failing_pos = []
-    if triggering:
-        for p in triggering.get("should_trigger", []):
-            if not p.get("triggered"):
-                choices = p.get("choices") or []
-                failing_pos.append({"id": p.get("id"), "prompt": p.get("prompt"),
-                                    "judge_choice": (choices[0] if choices else "none"),
-                                    "judge_reason": ""})
-
-    md, _ = ec.build_report(staging_skill_dir, triggering, None, pass_bar, activation)
-    gate.update({
-        "passed": not reasons,
-        "reasons": reasons,
-        "report": md,
-        "triggering_metrics": (triggering or {}).get("metrics"),
-        "activation_metrics": (activation or {}).get("metrics"),
-        "failing_positives": failing_pos,
-        "quality_gate": result.get("quality_gate"),
-    })
+    gate["reasons"] = reasons
+    gate["passed"] = not reasons
+    gate["quality_gate"] = result.get("quality_gate")
+    gate["eval_agent"] = eval_agent
     return gate
 
 

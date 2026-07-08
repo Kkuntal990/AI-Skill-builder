@@ -559,6 +559,165 @@ def make_claude_grader(*, model: str = "", timeout: int = 120):
     return grader
 
 
+# ── Triggering judge + description optimizer (M0-relocate: were in skill_builder) ──
+# These moved here so eval_skill.py needs NOTHING from skill_builder — the whole
+# behavioral-eval stack is self-contained and can live inside the skill-tester agent.
+# LLM calls go through _claude_text (claude -p / subscription), not skill_builder._llm_call.
+
+
+def _strip_fences(text: str) -> str:
+    """Remove surrounding ```lang fences if present."""
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.split("\n")
+        if len(lines) >= 2:
+            lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            return "\n".join(lines).strip()
+    return t
+
+
+DECOY_SKILLS = [
+    {"name": "data-preprocessing",
+     "description": "Clean, transform, and prepare tabular or text data for ML models. Use when the user needs to handle missing values, tokenize text, normalize features, split datasets, or convert between data formats (pandas, parquet, arrow)."},
+    {"name": "model-evaluation",
+     "description": "Compute evaluation metrics for ML models. Use when the user wants to measure accuracy, F1, AUC, perplexity, BLEU, ROUGE, or compare model performance across runs."},
+    {"name": "experiment-tracking",
+     "description": "Log, compare, and visualize ML experiments. Use when the user mentions tracking runs, comparing hyperparameters, viewing loss curves, or integrating with MLflow, W&B, or TensorBoard."},
+    {"name": "vector-retrieval",
+     "description": "Build and query vector indexes for semantic search or RAG. Use when the user wants to embed documents, set up a vector database (FAISS, Chroma, Qdrant, Pinecone), or implement retrieval-augmented generation."},
+    {"name": "deployment-serving",
+     "description": "Deploy and serve ML models in production. Use when the user asks about model serving, containerization, inference endpoints, autoscaling, or integrating with FastAPI, TorchServe, vLLM, or TGI."},
+]
+
+_JUDGE_PROMPT = """You are simulating which skill an agent would pick for a user message.
+
+Given a USER MESSAGE and a list of SKILL DESCRIPTIONS, decide which skill (if
+any) would fire. Consider triggering keywords, task type, and fit.
+
+Rules:
+- Return ONLY a JSON object. No prose.
+- If no skill fits well, return `"choice": "none"`.
+- The `confidence` field is 0.0-1.0.
+- Be honest: if the target skill's description is vague, don't pick it.
+
+Return ONLY JSON:
+
+{
+  "choice": "<skill_name or 'none'>",
+  "reason": "<one short sentence>",
+  "confidence": <0.0-1.0>
+}
+
+---
+USER MESSAGE:
+{{user_message}}
+
+AVAILABLE SKILLS:
+{{skills_list}}
+"""
+
+_IMPROVE_PROMPT = """You are improving an OpenClaw skill description to make it trigger more reliably.
+
+The current description FAILED to trigger on these user messages (an LLM judge
+picked a different skill or "none"). Rewrite the description so the right
+messages trigger it, without becoming so broad it triggers on unrelated ones.
+
+Rules:
+- Keep it ONE paragraph (3-5 sentences).
+- Write in THIRD PERSON (no "I"/"you"/"we").
+- Start with an action verb ("Train...", "Apply...", "Generate...").
+- State BOTH what the skill does AND when to use it. Include a "Use when..." clause with
+  concrete scenarios from the failing messages, plus the key terms a user would mention.
+- Be a little "pushy" — agents tend to UNDER-trigger skills.
+- Cut BOTH failure modes: rewrite so failing messages now trigger (recall) WITHOUT
+  becoming so broad it fires on unrelated tasks (precision). If the judge picked another
+  skill because the description over-claimed its territory, narrow that claim.
+- Name specific capabilities (class/algorithm names) — not generic terms; no comma keyword lists.
+- Don't claim capabilities the skill doesn't have.
+- Keep it under ~900 characters (hard cap 1024).
+
+Return ONLY the new description as a single plain text paragraph. No quotes, no markdown.
+
+---
+SKILL NAME: {{skill_name}}
+
+CURRENT SKILL.md BODY (for capability reference):
+{{skill_body}}
+
+CURRENT DESCRIPTION:
+{{current_description}}
+
+FAILING USER MESSAGES (these SHOULD have triggered the skill):
+{{failing_prompts}}
+
+JUDGE'S REASONING (why other skills won):
+{{judge_reasons}}
+"""
+
+
+def judge_triggering(user_message: str, skills: list[dict]) -> dict:
+    """Ask claude -p which skill it would pick. Returns {choice, reason, confidence}."""
+    skills_text = "\n".join(f"- `{s['name']}`: {s['description']}" for s in skills)
+    prompt = _JUDGE_PROMPT.replace("{{user_message}}", user_message).replace("{{skills_list}}", skills_text)
+    raw = _strip_fences(_claude_text(prompt, timeout=120))
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return {"choice": "none", "reason": "judge returned no JSON", "confidence": 0.0}
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {"choice": "none", "reason": "judge JSON parse failed", "confidence": 0.0}
+
+
+def improve_description(skill_name: str, skill_body: str, current_description: str,
+                        failing: list[dict]) -> str:
+    """Rewrite the description from failing triggering prompts (claude -p)."""
+    if not failing:
+        return current_description
+    failing_prompts = "\n".join(f"- {f.get('prompt', '')}" for f in failing)
+    judge_reasons = "\n".join(
+        f"- (picked `{f.get('judge_choice', '?')}`) {f.get('judge_reason', '')}" for f in failing)
+    prompt = (_IMPROVE_PROMPT
+              .replace("{{skill_name}}", skill_name)
+              .replace("{{skill_body}}", (skill_body or "")[:4000])
+              .replace("{{current_description}}", current_description)
+              .replace("{{failing_prompts}}", failing_prompts)
+              .replace("{{judge_reasons}}", judge_reasons))
+    out = _strip_fences(_claude_text(prompt, timeout=120)).strip()
+    return out or current_description
+
+
+def load_sibling_descriptions(siblings_dir: str, exclude_name: str = "") -> list[dict]:
+    """Load {name, description} for each SKILL.md under siblings_dir (one level of
+    subdirs + the dir itself), excluding the skill under test. Lets triggering compete
+    against REAL co-resident skills instead of canned decoys."""
+    out: list[dict] = []
+    base = Path(siblings_dir).expanduser()
+    if not base.exists():
+        return out
+    candidates = sorted(base.glob("*/SKILL.md"))
+    if (base / "SKILL.md").exists():
+        candidates.append(base / "SKILL.md")
+    for p in candidates:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        fm = text[3:end] if end != -1 else text
+        nm = re.search(r"^name:\s*(.+?)\s*$", fm, re.MULTILINE)
+        dm = re.search(r"^description:\s*(.+?)\s*$", fm, re.MULTILINE)
+        name = nm.group(1).strip().strip("\"'") if nm else p.parent.name
+        descr = dm.group(1).strip().strip("\"'") if dm else ""
+        if name and name != exclude_name and descr:
+            out.append({"name": name, "description": descr})
+    return out
+
+
 # ── Eval cores (importable; take explicit params, no argparse / no skill_builder) ──
 
 
@@ -567,8 +726,8 @@ def run_triggering(skill_dir: Path, judge_fn, decoys: list[dict], *, runs: int =
     """Triggering F1 over should-trigger + near-miss prompts.
 
     `judge_fn(prompt, skills) -> {"choice": <name|"none">, ...}` is injected by the caller
-    (skill_builder.judge_triggering) so this module never imports skill_builder.
-    `decoys` is the competitor skill list (real siblings or canned decoys);
+    (typically this module's own `judge_triggering`); the injection seam is kept so callers
+    can supply an alternate judge. `decoys` is the competitor skill list (real siblings or canned);
     `competitors_label` records which ("siblings" | "decoys") for the report.
     """
     decoys = list(decoys)
@@ -1106,3 +1265,110 @@ def build_report(skill_dir: Path, triggering: dict | None, functional: dict | No
     overall = all(verdicts) if verdicts else False
     lines.append(f"## Verdict: **{'PASS' if overall else 'FAIL'}**")
     return "\n".join(lines), overall
+
+
+# ── Ship-gate verdict + baseline probe (tester-owned; the builder delegates here) ──
+
+
+def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> dict:
+    """Behavioral ship-gate verdict. Reads evals/triggering.json in skill_dir, runs
+    triggering (judge vs real siblings) + activation (profile=='full'), scores against
+    pass_bar.json. Returns the BEHAVIORAL verdict only — the artifact critic's
+    quality_gate is the author's concern and is folded in caller-side. Never raises.
+
+    profile: 'smoke' = triggering runs=1, no activation; 'full' = runs=3 + activation.
+    """
+    skill_dir = Path(skill_dir).expanduser().resolve()
+    pass_bar = load_pass_bar(skill_dir)
+    meta = load_skill_meta(skill_dir)
+    gate: dict = {"profile": profile, "ran": [], "skipped": []}
+    triggering = activation = None
+
+    sib_dir = siblings_dir or str(skill_dir.parent)
+    sibs = load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
+    decoys, label = (sibs, "siblings") if len(sibs) >= 2 else (DECOY_SKILLS, "decoys")
+    runs = 1 if profile == "smoke" else 3
+    try:
+        triggering = run_triggering(skill_dir, judge_triggering, decoys,
+                                    runs=runs, competitors_label=label)
+        gate["ran"].append("triggering")
+    except SystemExit:
+        gate["skipped"].append("triggering (no eval set)")
+    if profile == "full":
+        try:
+            activation = run_activation(skill_dir, runs=1, per_prompt_timeout=180)
+            gate["ran"].append("activation")
+        except SystemExit:
+            gate["skipped"].append("activation")
+    gate["skipped"].append("functional (advisory; fresh build has no assertions)")
+
+    reasons: list[str] = []
+    if triggering and triggering["metrics"]["f1"] < pass_bar["triggering_f1_min"]:
+        reasons.append(f"triggering F1 {triggering['metrics']['f1']:.2f} < bar {pass_bar['triggering_f1_min']}")
+    if activation and activation["metrics"]["activation_recall"] < pass_bar["activation_recall_min"]:
+        reasons.append(f"activation recall {activation['metrics']['activation_recall']:.2f} "
+                       f"< bar {pass_bar['activation_recall_min']}")
+
+    failing_pos = []
+    if triggering:
+        for p in triggering.get("should_trigger", []):
+            if not p.get("triggered"):
+                choices = p.get("choices") or []
+                failing_pos.append({"id": p.get("id"), "prompt": p.get("prompt"),
+                                    "judge_choice": (choices[0] if choices else "none"),
+                                    "judge_reason": ""})
+
+    md, _ = build_report(skill_dir, triggering, None, pass_bar, activation)
+    gate.update({
+        "passed": not reasons,
+        "reasons": reasons,
+        "report": md,
+        "triggering_metrics": (triggering or {}).get("metrics"),
+        "activation_metrics": (activation or {}).get("metrics"),
+        "failing_positives": failing_pos,
+    })
+    return gate
+
+
+def baseline_probe(intent_brief: str, doc_text: str = "", *, agent: str = "main",
+                   n_questions: int = 2, timeout: int = 180) -> dict:
+    """P0.3 baseline-first probe (tester-owned): generate intent-derived questions,
+    run the base model (no skill) on them via `agent`, summarize where it falls short.
+    Returns {gap_notes: str} — "" when the baseline already answers well. Best-effort;
+    never raises. LLM calls use claude -p; base runs use the OpenClaw `agent`.
+
+    Recursion guard: default executor is `main`, never `skill-tester`, so a tester
+    that hosts this can't spawn itself.
+    """
+    out = {"gap_notes": ""}
+    if not intent_brief:
+        return out
+    try:
+        q_prompt = (
+            f"Given this skill INTENT and docs, list {n_questions} short, realistic user "
+            "questions whose answers the skill must get right. One per line, no numbering, "
+            "no preamble.\n\nINTENT:\n" + intent_brief
+            + "\n\nDOCS (excerpt):\n" + (doc_text or "")[:3000]
+        )
+        raw = _claude_text(q_prompt, timeout=120)
+        questions = [ln.strip("-*0123456789. ").strip() for ln in raw.splitlines() if ln.strip()][:n_questions]
+        if not questions:
+            return out
+        pairs = []
+        for q in questions:
+            r = _run_agent(q, agent=agent, timeout=timeout)
+            pairs.append((q, (r.get("text") or "")[:1500]))
+        joined = "\n\n".join(f"Q: {q}\nBASELINE ANSWER (no skill): {a}" for q, a in pairs)
+        g_prompt = (
+            "Below are questions and the base model's answers WITHOUT the skill. In 3-6 terse "
+            "bullets, list what the baseline got WRONG, vague, or MISSED that a good skill must "
+            "nail — these become the skill's priorities. If the baseline already answers "
+            "everything well, reply exactly: NONE\n\n" + joined
+        )
+        gaps = _claude_text(g_prompt, timeout=120).strip()
+        if not gaps or gaps.upper().startswith("NONE") or len(gaps) < 10:
+            return out
+        out["gap_notes"] = gaps[:2000]
+        return out
+    except (RuntimeError, OSError, KeyError, ValueError):
+        return out

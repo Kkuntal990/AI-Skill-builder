@@ -22,8 +22,10 @@ baseline on realistic tasks, and rewrites the skill from **observed behavior** u
 converges. Evals come *before* the writing and *gate* the loop.
 
 Ours is an **autonomous, document-grounded, generate-then-validate pipeline** — one doc URL
-in, one skill out. Iteration is a *rule-based* body critic+repair loop; the *behavioral*
-eval (`eval_skill.py`) is a **separate CLI that the build never runs**, and our AGENTS.md
+in, one skill out. Iteration is a *rule-based* body critic+repair loop. As of the 2026-07
+author↔tester refactor the *behavioral* eval is **delegated to the `skill-tester` agent**
+(`evaluate-skill` skill, `eval_core.py` + `eval_skill.py`): the build calls it only when the
+ship-gate is on (`--ship-gate`), and it can still be run by hand. Our AGENTS.md
 [explicitly rejects](../../agents/ai-skill-builder/AGENTS.md) the interactive mode, pointing
 users to skill-creator for it.
 
@@ -128,9 +130,10 @@ CRITIC** (3.0-1) → **TRIGGERING eval** (description judge; `improve_descriptio
 - **Input / source of truth:** a library **documentation URL** (not a user task).
 - **Interactivity:** none by design — AGENTS.md refers interactive requests to skill-creator.
 
-**Evaluation** (`eval_skill.py`, a **separate CLI the build never invokes**; run by hand):
-- `triggering` — description LLM judge over positives + near-miss negatives, vs **5 canned
-  `DECOY_SKILLS`** (real siblings only via the builder's own `--siblings`, not here).
+**Evaluation** (owned by `skill-tester`'s `evaluate-skill` skill; the build **delegates** to it
+under `--ship-gate`, and it also runs by hand):
+- `triggering` — description LLM judge over positives + near-miss negatives, **sibling-aware by
+  default** (real co-resident skills; falls back to the 5 canned `DECOY_SKILLS` when <2 exist).
 - `functional` — with/without A/B via `openclaw agent` (with-cell = prompt marker
   "read the installed skill"), **deterministic** `must_contain` / `must_contain_any` /
   `must_not_contain` / `expected_citations`; no LLM grader.

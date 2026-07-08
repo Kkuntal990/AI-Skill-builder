@@ -20,7 +20,7 @@ Repo was forked from [aibuildai/AI-Build-AI](https://github.com/aibuildai/AI-Bui
 agents/
 ├── ai-skill-builder/             OpenClaw builder agent + bundled skills
 ├── ai-skill-scout/               OpenClaw discovery agent + bundled skills
-└── skill-tester/                 Stage-1 eval harness agent
+└── skill-tester/                 tester agent — owns behavioral eval (evaluate-skill skill: eval_core + eval_skill)
 
 docs/
 ├── eval/
@@ -213,9 +213,9 @@ Three agents live under `agents/`. Each follows the standard openclaw layout (`A
 
 | Agent | Doc | Role |
 |---|---|---|
-| `ai-skill-builder` | `docs/skill-builder/{hld,plan}.md` | Builds a `SKILL.md` from a Python package URL |
+| `ai-skill-builder` | `docs/skill-builder/{hld,plan}.md` | **Author.** Builds a `SKILL.md` from a Python package URL. Holds no behavioral-eval logic; delegates ship-gate evaluation to `skill-tester`. |
 | `ai-skill-scout` | `docs/skill-scout/{hld,plan}.md` | Searches GitHub for existing OpenClaw skills |
-| `skill-tester` | referenced from `docs/eval/stage1.md` | Test-harness agent (Stage 1 actually pins the `main` agent as baseline, not this one) |
+| `skill-tester` | referenced from `docs/eval/stage1.md` | **Tester.** Owns behavioral skill eval via its `evaluate-skill` skill (`eval_core.py` + `eval_skill.py`, relocated here 2026-07): triggering / activation / functional / gate verdict / description optimization. The builder delegates gating here (author↔tester split); can also serve as a clean A/B baseline. |
 
 These are tracked-in-repo canonical copies. The live agents run under `~/.openclaw/agents/` on the user's machine; this repo holds reproducible snapshots.
 

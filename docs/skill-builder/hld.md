@@ -259,9 +259,13 @@ agents/ai-skill-builder/
                 ├── distill_pitfalls.txt       LLM: closed bugs → pitfalls.md
                 ├── write_troubleshooting.txt  LLM: open+closed issues+traces → troubleshooting.md
                 ├── distill_community_gotchas.txt  LLM: SE Q&As + closed question issues → community-gotchas.md (1.3.0)
-                ├── judge_triggering.txt       LLM: user msg + skills → which fires
-                └── improve_description.txt    LLM: failing prompts → better description
+                └── improve_description.txt    LLM: failing prompts → better description (authoring/repair)
 ```
+
+> Note: `judge_triggering.txt` and the triggering-judge / functional-eval code moved to the
+> `skill-tester` agent (`skills/evaluate-skill/scripts/{eval_core,eval_skill}.py`) in the
+> 2026-07 author↔tester refactor. The builder delegates behavioral eval there via a sub-agent
+> call. See [eval-gate-plan.md](eval-gate-plan.md) and [../eval/stage1.md](../eval/stage1.md).
 
 ### Runtime state (gitignored, in `data/`)
 
@@ -314,7 +318,7 @@ python3 agents/ai-skill-builder/skills/build-skill-from-docs/scripts/skill_build
 
 ## Evaluation Methodology
 
-Two-stage evaluation pipeline. **Stage 1** is implemented today and ships as `agents/ai-skill-builder/skills/build-skill-from-docs/scripts/eval_skill.py`. **Stage 2** (`mle-skill-bench`) is specified here for ML-engineering-grade evaluation; not yet implemented.
+Two-stage evaluation pipeline. **Stage 1** is implemented today and ships in the `skill-tester` agent as `agents/skill-tester/skills/evaluate-skill/scripts/eval_skill.py` (+ `eval_core.py`); the builder delegates to it (author↔tester split). **Stage 2** (`mle-skill-bench`) is specified here for ML-engineering-grade evaluation; not yet implemented.
 
 The methodology is grounded in [MLAlgo-Bench (Wang et al., EMNLP Findings 2025)](https://aclanthology.org/2025.findings-emnlp.772/) — the closest peer-reviewed analogue to "did the agent follow the prescribed recipe or take a shortcut?" — combined with the Anthropic `skill-creator` 20-prompt 60/40 protocol and the MLE-Bench / RE-Bench containerised-runnable pattern.
 

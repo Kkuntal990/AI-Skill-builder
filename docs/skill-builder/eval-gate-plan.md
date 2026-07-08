@@ -19,6 +19,26 @@ Companion to [hld.md](hld.md), [stage1.md](../eval/stage1.md). Cites `file:line`
 > |--max-repair-eval-rounds|--baseline-probe` flags + `freshness` subcommand; `eval_skill.py`
 > gains `--siblings|--llm-grader` and the `optimize-description` subcommand.
 
+> **Author↔tester refactor (2026-07, supersedes the "single-agent" shape above).** The eval
+> stack was moved OUT of the builder and into the **`skill-tester`** agent to restore the
+> build/eval separation. Changes: (1) `eval_core.py` is now self-contained (absorbed
+> `judge_triggering`, `improve_description`, `DECOY_SKILLS`, `load_sibling_descriptions` +
+> inlined prompts; added `run_gate` + `baseline_probe`) and needs nothing from
+> `skill_builder`; (2) `eval_core.py` + `eval_skill.py` **relocated** to
+> `agents/skill-tester/skills/evaluate-skill/scripts/`, exposed via a new `evaluate-skill`
+> SKILL.md (contract: dir + profile → JSON verdict); (3) the builder's `run_ship_gate` and
+> `baseline_gap_probe` now **delegate** to `skill-tester` via an `openclaw agent` sub-call and
+> parse the returned JSON — the builder imports `eval_core` **zero** times and holds no
+> behavioral-eval logic; (4) `eval_skill.py` gained `gate` + `baseline-probe` subcommands.
+> **Behavior change:** the old build-time inline triggering-judge loop (which auto-tuned the
+> description on *every* default build) was **removed** — triggering scoring is now the
+> tester's job, and description tuning happens in the delegated ship-gate repair loop
+> (opt-in `--ship-gate`) or via the tester's `optimize-description`. `improve_description`
+> stays in the builder (authoring/repair) and is intentionally also present in `eval_core`
+> (the module boundary forbids a cross-import; it's one small function). Verified **offline**
+> (compile + a stubbed end-to-end delegation test); a **live** gated build (which needs a
+> gateway restart so `skill-tester` picks up the new skill + workspace) has not been run.
+
 ---
 
 ## Goal

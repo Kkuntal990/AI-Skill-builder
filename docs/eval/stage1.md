@@ -1,6 +1,13 @@
 # Stage 1 — Local skill eval
 
-Fast, CI-style evaluation of a skill in isolation. Runs on every `build-skill-from-docs` invocation. ~5 min, ~$1 per skill.
+Fast, CI-style evaluation of a skill in isolation. ~5 min, ~$1 per skill.
+
+> **Where this lives (author↔tester split, 2026-07).** The eval harness (`eval_core.py` +
+> the `eval_skill.py` CLI) is owned by the **`skill-tester`** agent, in its `evaluate-skill`
+> skill (`agents/skill-tester/skills/evaluate-skill/scripts/`). The **`ai-skill-builder`**
+> agent no longer contains any behavioral-eval logic; when its ship-gate is on it **delegates**
+> evaluation to `skill-tester` via a sub-agent call and parses the returned JSON verdict. You
+> can also run `eval_skill.py` directly by hand (paths below are relative to the tester's skill).
 
 Follows Anthropic's vocabulary verbatim ([Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), 2026-01):
 
@@ -45,7 +52,12 @@ python3 .../eval_skill.py activation ~/.openclaw/workspace/skills/<skill> \
 python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> --with-activation
 ```
 
-The description-judge triggering test still scores against 5 canned generic decoys (`DECOY_SKILLS`); the real-sibling `--siblings` path exists in the builder's own `evaluate_triggering` but not in `eval_skill.py`'s `triggering` command.
+The description-judge triggering test is **sibling-aware by default**: `eval_skill.py triggering`
+competes the target against the real co-resident skills in the install root (`--siblings <dir>`
+to override), falling back to the 5 canned generic decoys (`DECOY_SKILLS`) only when <2 siblings
+exist. (Historically the sibling path lived only in the builder's `evaluate_triggering`; that
+function was removed in the author↔tester refactor — the judge + sibling loader now live in
+`eval_core`, and `eval_skill.py` uses them directly.)
 
 ## MCP signal capture (four signals)
 

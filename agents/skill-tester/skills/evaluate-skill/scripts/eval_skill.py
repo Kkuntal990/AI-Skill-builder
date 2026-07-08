@@ -5,18 +5,22 @@ cost on an installed OpenClaw skill.
 
 Implements the methodology from Anthropic's `skill-creator` (anthropics/skills).
 
-As of the Skills-phase3 M0 refactor, the transport-agnostic primitives live in
-`eval_core.py` (so `skill_builder.py` can reuse them for its ship-gate without a
-circular import). This file is the thin CLI wrapper: it wires `eval_core`'s cores
-to `skill_builder`'s triggering judge + decoy list and handles argparse / output.
+As of the Skills-phase3 "tester-owns-eval" refactor, the whole behavioral-eval
+stack is self-contained in `eval_core.py` (triggering judge, decoy list, sibling
+loader, description optimizer all moved there). This file — and `eval_core` — live
+inside the **skill-tester** agent's `evaluate-skill` skill; the `ai-skill-builder`
+agent no longer imports either, it delegates gating to skill-tester via a sub-agent
+call. This module imports NOTHING from `skill_builder`.
 
 Usage:
-    python3 eval_skill.py triggering <skill-dir>
-    python3 eval_skill.py functional  <skill-dir> [--runs N]
-    python3 eval_skill.py activation  <skill-dir> [--runs N] [--model opus]
-    python3 eval_skill.py all         <skill-dir> [--runs N] [--with-activation]
-    python3 eval_skill.py report      <skill-dir>
-    python3 eval_skill.py pass-bar    <skill-dir>
+    python3 eval_skill.py triggering    <skill-dir>
+    python3 eval_skill.py functional    <skill-dir> [--runs N]
+    python3 eval_skill.py activation    <skill-dir> [--runs N] [--model opus]
+    python3 eval_skill.py all           <skill-dir> [--runs N] [--with-activation]
+    python3 eval_skill.py gate          <skill-dir> [--profile smoke|full]   # verdict JSON
+    python3 eval_skill.py baseline-probe <skill-dir?> --intent <brief>        # gap_notes JSON
+    python3 eval_skill.py report        <skill-dir>
+    python3 eval_skill.py pass-bar      <skill-dir>
 """
 
 from __future__ import annotations
@@ -30,25 +34,22 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 import eval_core as ec  # noqa: E402
-import skill_builder as sb  # noqa: E402 — for the triggering judge + decoy list
+
+
+def _decoys_for(skill_dir: Path, args: argparse.Namespace) -> tuple[list[dict], str]:
+    """Real co-resident siblings by default (--siblings <dir> or the install root);
+    fall back to canned DECOY_SKILLS only when <2 siblings exist."""
+    meta = ec.load_skill_meta(skill_dir)
+    sib_dir = getattr(args, "siblings", None) or str(skill_dir.parent)
+    sibs = ec.load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
+    return (sibs, "siblings") if len(sibs) >= 2 else (ec.DECOY_SKILLS, "decoys")
 
 
 def cmd_triggering(args: argparse.Namespace) -> dict:
-    """Triggering F1: judge each prompt over the target skill + competitors.
-
-    P1.1: compete against REAL co-resident siblings by default (the install root, or
-    --siblings <dir>); fall back to the canned DECOY_SKILLS only when <2 siblings exist.
-    Real siblings are a far harder, more realistic precision test than generic decoys.
-    """
+    """Triggering F1: judge each prompt over the target skill + competitors (P1.1)."""
     skill_dir = Path(args.skill_dir).expanduser().resolve()
-    meta = ec.load_skill_meta(skill_dir)
-    sib_dir = getattr(args, "siblings", None) or str(skill_dir.parent)
-    sibs = sb._load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
-    if len(sibs) >= 2:
-        decoys, label = sibs, "siblings"
-    else:
-        decoys, label = sb.DECOY_SKILLS, "decoys"
-    return ec.run_triggering(skill_dir, sb.judge_triggering, decoys,
+    decoys, label = _decoys_for(skill_dir, args)
+    return ec.run_triggering(skill_dir, ec.judge_triggering, decoys,
                              runs=args.runs, competitors_label=label)
 
 
@@ -72,12 +73,48 @@ def cmd_activation(args: argparse.Namespace) -> dict:
 def cmd_optimize_description(args: argparse.Namespace) -> dict:
     """P1.3: optimize the skill's description on a 60/40 held-out split of triggering.json."""
     skill_dir = Path(args.skill_dir).expanduser().resolve()
-    meta = ec.load_skill_meta(skill_dir)
-    sib_dir = getattr(args, "siblings", None) or str(skill_dir.parent)
-    sibs = sb._load_sibling_descriptions(sib_dir, exclude_name=meta["name"])
-    decoys = sibs if len(sibs) >= 2 else sb.DECOY_SKILLS
-    return ec.optimize_description(skill_dir, sb.judge_triggering, decoys, sb.improve_description,
+    decoys, _ = _decoys_for(skill_dir, args)
+    return ec.optimize_description(skill_dir, ec.judge_triggering, decoys, ec.improve_description,
                                    holdout=args.holdout, runs=args.runs, max_iters=args.max_iters)
+
+
+def cmd_gate(args: argparse.Namespace) -> dict:
+    """Behavioral ship-gate verdict (what the builder delegates to skill-tester).
+    Reads evals/triggering.json in the dir, runs the profile's eval suite, scores
+    vs pass_bar.json, and emits the verdict JSON the builder consumes."""
+    skill_dir = Path(args.skill_dir).expanduser().resolve()
+    return ec.run_gate(skill_dir, profile=getattr(args, "profile", "smoke"),
+                       siblings_dir=getattr(args, "siblings", "") or "")
+
+
+def cmd_baseline_probe(args: argparse.Namespace) -> dict:
+    """P0.3 baseline-first probe: run the base agent (no skill) on intent-derived
+    questions, return {gap_notes}. Intent+docs come from --payload-file (JSON
+    {intent, doc_excerpt, n_questions}, how the builder delegates) or from --intent
+    [+ --doc-file]."""
+    intent = getattr(args, "intent", "") or ""
+    doc_text = ""
+    n_q = getattr(args, "n_questions", 2)
+    pf = getattr(args, "payload_file", "") or ""
+    if pf:
+        try:
+            p = json.loads(Path(pf).expanduser().read_text())
+            intent = p.get("intent", intent) or intent
+            doc_text = p.get("doc_excerpt", "") or ""
+            n_q = int(p.get("n_questions", n_q) or n_q)
+        except (OSError, ValueError, TypeError):
+            pass
+    else:
+        doc_file = getattr(args, "doc_file", "") or ""
+        if doc_file:
+            try:
+                doc_text = Path(doc_file).expanduser().read_text(errors="replace")
+            except OSError:
+                doc_text = ""
+    if not intent:
+        return {"gap_notes": "", "error": "no intent (pass --intent or --payload-file)"}
+    return ec.baseline_probe(intent, doc_text, agent=getattr(args, "agent", "main") or "main",
+                             n_questions=n_q, timeout=getattr(args, "per_prompt_timeout", 180))
 
 
 def cmd_all(args: argparse.Namespace) -> dict:
@@ -178,6 +215,25 @@ def build_parser() -> argparse.ArgumentParser:
     od.add_argument("--max-iters", type=int, default=5, dest="max_iters")
     od.set_defaults(func=cmd_optimize_description)
 
+    g = sub.add_parser("gate", help="Behavioral ship-gate verdict JSON (builder delegates here)")
+    g.add_argument("skill_dir")
+    g.add_argument("--profile", choices=["smoke", "full"], default="smoke",
+                   help="smoke=triggering runs=1; full adds organic activation")
+    g.add_argument("--siblings", default="",
+                   help="dir of co-resident skills to judge triggering against")
+    g.set_defaults(func=cmd_gate)
+
+    bp = sub.add_parser("baseline-probe",
+                        help="P0.3: run base agent (no skill) on intent questions -> gap_notes JSON")
+    bp.add_argument("--intent", default="", help="the skill intent brief (or use --payload-file)")
+    bp.add_argument("--payload-file", default="", dest="payload_file",
+                    help="JSON {intent, doc_excerpt, n_questions} — how the builder delegates")
+    bp.add_argument("--doc-file", default="", help="optional path to source docs (excerpt used)")
+    bp.add_argument("--agent", default="main", help="OpenClaw agent for baseline runs (never skill-tester)")
+    bp.add_argument("--n-questions", type=int, default=2, dest="n_questions")
+    bp.add_argument("--per-prompt-timeout", type=int, default=180)
+    bp.set_defaults(func=cmd_baseline_probe)
+
     r = sub.add_parser("report", help="Render markdown summary of latest grading results")
     r.add_argument("skill_dir")
     r.set_defaults(func=cmd_report)
@@ -195,8 +251,10 @@ def main(argv: list[str] | None = None) -> int:
         print(out["markdown"])
     else:
         print(json.dumps(out, indent=2, default=str))
-    # Persist results / report. Skip pass-bar (just an exit code).
+    # Persist results / report. Skip pass-bar (just an exit code) + baseline-probe (no dir).
     try:
+        if not getattr(args, "skill_dir", None):
+            return getattr(args, "_exit_code", 0)
         skill_dir = Path(args.skill_dir).expanduser().resolve()
         out_dir = skill_dir / "evals" / "grading_results"
         out_dir.mkdir(parents=True, exist_ok=True)

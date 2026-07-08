@@ -12,14 +12,16 @@ skill's frontmatter (`metadata.openclaw.source.builder_version`).
 
 ## What it is (in one paragraph)
 
-`build-skill-from-docs` is a **single OpenClaw agent** whose `build <url>` command runs a
-deterministic Python pipeline (`skill_builder.py`, ~2,800 LOC) as a **closed generate →
-gate → critic → repair loop**. It is *not* a multi-agent system — there are no spawned
-sub-agents; the pipeline makes many single-shot LLM calls (plan → write → critique →
-repair → synthesize → judge), each through one `_llm_call` dispatcher (`claude -p` on the
-Claude subscription by default, OpenRouter fallback). The durable output is the skill
-artifact; MCP is a build-time fetcher and a runtime tail-coverage fallback, never the
-product.
+`build-skill-from-docs` is the **author** in an author↔tester split. Its `build <url>`
+command runs a deterministic Python pipeline (`skill_builder.py`) that generates → critiques
+→ repairs the skill artifact, making many single-shot LLM calls (plan → write → critique →
+repair → synthesize) through one `_llm_call` dispatcher (`claude -p` on the Claude
+subscription by default, OpenRouter fallback). **Behavioral evaluation is not done here** —
+when the ship-gate is on (`--ship-gate`), the builder *delegates* it to the **`skill-tester`
+agent** (a sub-agent call), which runs the shared `eval_core` harness and returns a JSON
+verdict; the builder then repairs and re-gates. The builder holds **zero behavioral-eval
+logic** — it authors and repairs; the tester scores. The durable output is the skill
+artifact; MCP is a build-time fetcher and a runtime tail-coverage fallback, never the product.
 
 ## Design docs (read in this order)
 
@@ -56,23 +58,30 @@ skills beyond the core builder.
 | Unit | Where | Role |
 |---|---|---|
 | `ai-skill-builder` | [`agents/ai-skill-builder/`](../../agents/ai-skill-builder/) | This agent. Core skill: `build-skill-from-docs`. |
-| ↳ `build-skill-from-docs` | [`.../skills/build-skill-from-docs/`](../../agents/ai-skill-builder/skills/build-skill-from-docs/) | The pipeline (`skill_builder.py`) + Stage-1 harness (`eval_skill.py`) + `prompts/` + authoring `references/`. |
+| ↳ `build-skill-from-docs` | [`.../skills/build-skill-from-docs/`](../../agents/ai-skill-builder/skills/build-skill-from-docs/) | The author pipeline (`skill_builder.py`) + `prompts/` + authoring `references/`. Delegates behavioral eval to `skill-tester`. |
 | ↳ ops skills | `.../skills/{build-mleval-image,monitor-mleval-job,refresh-mleval-pvc}/` | Eval-runtime helpers (image build, Job monitoring, PVC staging) — unrelated to skill creation. |
 | `ai-skill-scout` | [`agents/ai-skill-scout/`](../../agents/ai-skill-scout/) · [docs](../skill-scout/hld.md) | Finds & safely installs *existing* skills from GitHub. The builder imports Scout's security scanner. |
-| `skill-tester` | [`agents/skill-tester/`](../../agents/skill-tester/) | Stage-1 test-harness agent (Stage 1 actually pins `main` as the baseline). |
+| `skill-tester` | [`agents/skill-tester/`](../../agents/skill-tester/) | **The tester.** Owns behavioral skill eval via its `evaluate-skill` skill (`eval_core.py` + `eval_skill.py`): triggering, activation, functional A/B, description optimization, gate verdict. The builder delegates gating here; can also serve as a clean A/B baseline. |
 
 ## Code layout
 
 ```
-agents/ai-skill-builder/skills/build-skill-from-docs/
+agents/ai-skill-builder/skills/build-skill-from-docs/   # AUTHOR
 ├── SKILL.md                  the agent's tool definition (pipeline + flags)
 ├── scripts/
-│   ├── skill_builder.py      ~2,800 LOC build pipeline (BUILDER_VERSION = 2.1.0)
-│   ├── eval_skill.py         ~920 LOC Stage-1 eval harness (separate CLI; not run by the build)
+│   ├── skill_builder.py      build pipeline (BUILDER_VERSION = 2.1.0); delegates eval to skill-tester
 │   └── prompts/*.txt         per-phase LLM prompts (intent_capture, plan_structure, write_skill_body,
-│                             critique_skill, repair_skill_body, write_reference, judge_triggering, …)
+│                             critique_skill, repair_skill_body, write_reference, improve_description, …)
 └── references/               authoring rules the validator enforces
     ├── skill-anatomy.md · frontmatter-spec.md · anti-patterns.md
+
+agents/skill-tester/skills/evaluate-skill/            # TESTER (owns behavioral eval)
+├── SKILL.md                  contract: dir + profile → run harness → return verdict JSON
+└── scripts/
+    ├── eval_core.py          shared eval primitives (triggering judge, activation, functional,
+    │                         optimize_description, run_gate, baseline_probe) — self-contained
+    └── eval_skill.py         CLI over eval_core (triggering/functional/activation/all/gate/
+                              baseline-probe/optimize-description/report/pass-bar)
 ```
 
 The repo-root [`CLAUDE.md`](../../CLAUDE.md) is the whole-repo index (builder + scout + tester +
