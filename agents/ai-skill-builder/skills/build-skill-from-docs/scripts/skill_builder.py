@@ -3073,6 +3073,44 @@ def cmd_build(args: argparse.Namespace) -> dict:
     }
 
 
+def cmd_freshness(args: argparse.Namespace) -> dict:
+    """M8 (P1.7 / deferred R4): re-fetch the skill's source and diff API symbols vs the
+    installed skill — flag drift (symbols the skill cites that the CURRENT docs no longer
+    mention → likely removed/renamed). Reuses check_doc_faithfulness on fresh sources."""
+    skill_dir = Path(args.skill_dir).expanduser().resolve()
+    smd = (skill_dir / "SKILL.md").read_text()
+    m = re.search(r"^---\n(.*?)\n---", smd, re.DOTALL)
+    fm = m.group(1) if m else ""
+    url = ""
+    md_m = re.search(r"^metadata:\s*(\{.*\})\s*$", fm, re.MULTILINE | re.DOTALL)
+    if md_m:
+        try:
+            meta = json.loads(md_m.group(1))
+            url = ((meta.get("openclaw") or {}).get("source") or {}).get("url", "")
+        except json.JSONDecodeError:
+            pass
+    if not url:
+        return {"status": "unknown", "reason": "no source.url in provenance",
+                "skill_dir": str(skill_dir)}
+    sources = _gather_sources(url, False, False)
+    body = smd.split("\n---\n", 1)[-1] if "\n---\n" in smd else smd
+    refs = {}
+    rdir = skill_dir / "references"
+    if rdir.is_dir():
+        for p in sorted(rdir.glob("*.md")):
+            refs[p.name] = p.read_text(errors="replace")
+    drift = check_doc_faithfulness(body, refs, sources)
+    blocks = [f for f in drift if f.get("severity") == "block"]
+    return {
+        "status": "stale" if drift else "fresh",
+        "source_url": url,
+        "n_drift": len(drift),
+        "n_block": len(blocks),
+        "drift_findings": drift,
+        "recommendation": "rebuild" if blocks else ("review" if drift else "ok"),
+    }
+
+
 def cmd_built(_args: argparse.Namespace) -> dict:
     lockfile = DATA_DIR / "built-skills.json"
     if not lockfile.exists():
@@ -3162,6 +3200,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     built = sub.add_parser("built", help="List skills this agent has generated")
     built.set_defaults(func=cmd_built)
+
+    freshness = sub.add_parser(
+        "freshness", help="Re-fetch source + diff API symbols vs the installed skill (P1.7 / R4)")
+    freshness.add_argument("skill_dir")
+    freshness.set_defaults(func=cmd_freshness)
 
     serve = sub.add_parser(
         "serve",
