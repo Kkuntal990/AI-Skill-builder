@@ -96,15 +96,26 @@ LLM_TIMEOUT = 120
 USER_AGENT = "ai-skill-builder/1.0 (+https://github.com/Kkuntal990/AI-Skill-builder)"
 BUILDER_VERSION = "2.1.0"
 
-# Runtime MCP declarations. Skills *declare* expected MCPs in frontmatter; they
-# don't auto-install. The agent runtime decides whether to invoke them.
+# Runtime MCP declarations (capability contract). Skills *declare* expected MCPs in
+# frontmatter; they don't auto-install. The agent runtime decides whether to invoke them.
+# Tool names are EXACT callable names (`<server>/<tool>`) — a stale name (e.g. context7's
+# real tool is `query-docs`, NOT `get-library-docs`) breaks tool lookup. `on_unavailable`
+# is the failure behavior when no MCP client is reachable (e.g. the MLEvolve runtime).
+# The MCP-name validation gate (check_mcp_tool_names) verifies these against `mcporter list`.
+_MCP_CONTEXT7 = ["context7/resolve-library-id", "context7/query-docs"]
+_MCP_ON_UNAVAILABLE = (
+    "Answer from SKILL.md + references/ only; state the uncertainty rather than fabricate "
+    "API names, flags, or version details."
+)
 _MCP_HF = {
     "preferred": ["hf-mcp/doc_search", "hf-mcp/doc_fetch"],
-    "fallback": ["context7/get-library-docs"],
+    "fallback": list(_MCP_CONTEXT7),
+    "on_unavailable": _MCP_ON_UNAVAILABLE,
 }
 _MCP_GENERIC = {
     "preferred": [],
-    "fallback": ["context7/get-library-docs"],
+    "fallback": list(_MCP_CONTEXT7),
+    "on_unavailable": _MCP_ON_UNAVAILABLE,
 }
 
 
@@ -1718,6 +1729,66 @@ def check_artifact_imports(templates: "dict[str, str] | None",
     return findings
 
 
+# ── MCP tool-name validation gate (P1.8b) ────────────────────────────────────
+# A skill that names an MCP tool the server doesn't expose breaks tool lookup at
+# runtime (Anthropic's guidance: use exact, fully-qualified tool names). We extract
+# every `<server>/<tool>` (frontmatter) and `<server>__<tool>` (body) reference and
+# verify it against the server's REAL tools via `mcporter list <server> --json`.
+# Known-stale names are caught even when mcporter is offline.
+
+_MCP_REF_RE = re.compile(r"\b(context7|hf-mcp)(?:/|__)([a-z0-9][a-z0-9_-]*)")
+_KNOWN_STALE_MCP = {"context7": {"get-library-docs", "get_library_docs", "get-docs"}}
+
+
+def _mcp_real_tools(server: str, timeout: int = 20) -> "set[str] | None":
+    """Real tool names for an mcporter-configured server, or None if unavailable."""
+    try:
+        r = subprocess.run(["mcporter", "list", server, "--json"],
+                           capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        d = json.loads(r.stdout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        return None
+    tools = d.get("tools")
+    if tools is None and isinstance(d.get(server), dict):
+        tools = d[server].get("tools")
+    if not isinstance(tools, list):
+        return None
+    names = {t.get("name") for t in tools if isinstance(t, dict) and t.get("name")}
+    return names or None
+
+
+def check_mcp_tool_names(skill_md: str, *, live: bool = True) -> list[dict]:
+    """Flag MCP tool references that name a tool the server doesn't expose. BLOCK when
+    verified stale against a live server or matching a known-stale name; WARN when the
+    server can't be reached to confirm. Empty list = clean."""
+    refs: dict[str, set[str]] = {}
+    for m in _MCP_REF_RE.finditer(skill_md):
+        refs.setdefault(m.group(1), set()).add(m.group(2))
+    findings: list[dict] = []
+    for server, tools in sorted(refs.items()):
+        real = _mcp_real_tools(server) if live else None
+        stale = _KNOWN_STALE_MCP.get(server, set())
+        for tool in sorted(tools):
+            if real is not None:
+                if tool not in real:
+                    findings.append({
+                        "severity": "block", "where": "P1.8b-mcp",
+                        "message": (f"MCP tool `{server}/{tool}` is not exposed by `{server}` "
+                                    f"(real tools: {', '.join(sorted(real)) or 'none'}). "
+                                    f"Fix the tool name — a stale name breaks runtime tool lookup."),
+                    })
+            elif tool in stale:
+                findings.append({
+                    "severity": "block", "where": "P1.8b-mcp",
+                    "message": (f"MCP tool `{server}/{tool}` is a known-stale name "
+                                f"(the real `{server}` doc tool is `query-docs`). Fix it."),
+                })
+            # server unreachable + not known-stale → can't verify; stay silent (no noise)
+    return findings
+
+
 # ── Frontmatter assembly (deterministic) ──────────────────────────────────────
 
 
@@ -2430,6 +2501,7 @@ def _pipeline(
         extra_findings = (
             check_doc_faithfulness(body, refs_content, sources)
             + check_artifact_imports(templates_content, scripts_content)
+            + check_mcp_tool_names(body, live=not getattr(args, "no_mcp_check", False))
         )
         if extra_findings:
             if critic_report is None:
@@ -3039,6 +3111,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Skip the triggering judge + description optimizer loop")
         sp.add_argument("--no-critic", action="store_true",
                         help="Skip the quality critic + bounded repair loop (P1–P4 reliability checklist)")
+        sp.add_argument("--no-mcp-check", action="store_true",
+                        help="Skip the live `mcporter list` MCP tool-name verification (offline builds); "
+                             "the static known-stale-name check still runs")
         sp.add_argument("--siblings", default=None,
                         help="Directory of co-resident skills (each <dir>/<name>/SKILL.md) to use as "
                              "REAL competitors in the triggering eval instead of the canned decoys")
@@ -3053,10 +3128,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="P0.3: probe the base model WITHOUT the skill on intent-derived "
                              "questions and steer the build toward observed gaps (makes live "
                              "agent calls; off by default)")
-        sp.add_argument("--ship-gate", choices=["off", "smoke", "full"], default="off",
-                        help="M5: build into a staging dir and only promote on eval pass. "
-                             "smoke=cheap (triggering, runs=1); full adds organic activation. "
-                             "Default off (writes straight through, as before).")
+        sp.add_argument("--ship-gate", choices=["off", "smoke", "full"], default="full",
+                        help="M5: build into a staging dir and only promote on eval pass — DELEGATED "
+                             "to the skill-tester agent. smoke=cheap (triggering, runs=1); "
+                             "full adds organic activation + the advisory functional A/B. "
+                             "Default full; use off to write straight through (legacy behavior).")
         sp.add_argument("--ship-anyway", action="store_true",
                         help="on ship-gate FAIL, write anyway with a gate:failed warning (never silent)")
         sp.add_argument("--eval-agent", default="skill-tester",

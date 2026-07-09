@@ -48,6 +48,32 @@ metadata:
 
 Supported `install.kind` values: `pip`, `brew`, `npm`, `apt`, `cargo`. For commands not covered, use `kind: shell` with an explicit `command` string (must pass the security scan).
 
+## MCP capability contract (`metadata.openclaw.mcps`)
+
+If the skill's body instructs live-doc fallback via MCP, declare the contract here. It is a
+*declaration*, not an install — the agent runtime decides whether to invoke it, and some
+runtimes (e.g. the MLEvolve eval harness) have **no MCP client at all**, so the body must
+always work from `SKILL.md` + `references/` alone and treat MCP as a bonus.
+
+```yaml
+"mcps": {
+  "preferred": ["hf-mcp/doc_search", "hf-mcp/doc_fetch"],
+  "fallback":  ["context7/resolve-library-id", "context7/query-docs"],
+  "on_unavailable": "Answer from SKILL.md + references/ only; state the uncertainty rather than fabricate API names, flags, or version details"
+}
+```
+
+- **Exact tool names only.** Each entry is `<server>/<exact-tool-name>`. A stale name breaks
+  runtime tool lookup. context7's real tools are **`resolve-library-id`** and **`query-docs`**
+  — **NOT** `get-library-docs` (that's Anthropic's first-party name; see
+  [skill-shape-principles.md](../../../../docs/skill-builder/skill-shape-principles.md)).
+  The build's **MCP-name gate** (`check_mcp_tool_names`) verifies every declared/used name
+  against `mcporter list <server> --json` and **blocks** on a stale name (`--no-mcp-check`
+  falls back to the static known-stale denylist for offline builds).
+- **`on_unavailable`** states the failure behavior when no MCP client is reachable.
+- Body tool references use OpenClaw's double-underscore form: `context7__resolve-library-id`,
+  `context7__query-docs` (the gate checks both the `/` frontmatter form and the `__` body form).
+
 ## What the LLM Does NOT Write
 
 The script writes frontmatter deterministically from source data:
