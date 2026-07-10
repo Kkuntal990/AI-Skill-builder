@@ -241,7 +241,13 @@ def _extract_tool_signals(reply: dict, declared_mcps: list[str]) -> dict:
 
 SKILLBUILD_LLM_MODEL = os.environ.get("SKILLBUILD_LLM_MODEL", "opus").strip() or "opus"
 
-# Mirrors agents/skill-tester/{SOUL,AGENTS}.md — a clean baseline executor.
+# P1: functional-A/B executor concurrency. Trials are independent; run them in parallel.
+# Default 4 — deliberately under the claude-code plugin's maxConcurrentSessions (5) to avoid
+# concurrency session-limit errors. Rolling-window subscription limits are a hard ceiling the
+# cap can't fix (a bounded retry-on-empty absorbs transient blips only).
+EVAL_CONCURRENCY = max(1, int(os.environ.get("MLEVAL_EVAL_CONCURRENCY", "4")))
+
+# A clean baseline executor.
 _SKILLTESTER_SYSTEM = (
     "You are a bare evaluation-target agent. No personality, no greetings. Answer the "
     "user's prompt directly and concisely. If one of your available skills is genuinely "
@@ -852,10 +858,33 @@ def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: in
             "duration_ms_total": total_ms,
         }
 
-    for test in tests:
-        print(f"  running test: {test['id']} ({runs} trials × 2 cells)", file=sys.stderr, flush=True)
-        with_trials = [one_trial(test, with_skill=True, trial_idx=i) for i in range(runs)]
-        without_trials = [one_trial(test, with_skill=False, trial_idx=i) for i in range(runs)]
+    # P1: every (test, cell, run) trial is independent → fan out in parallel under a
+    # concurrency cap. Key results by (test_index, side, run_idx) so duplicate test ids
+    # can't collide. A bounded retry-on-empty absorbs transient concurrency/session blips.
+    def _run_trial(task):
+        ti, test, with_skill, i = task
+        attempts = 0
+        while True:
+            res = one_trial(test, with_skill=with_skill, trial_idx=i)
+            if (res.get("reply_text") or "").strip() or attempts >= 2:
+                return (ti, with_skill, i), res
+            attempts += 1
+            time.sleep(2 ** attempts)  # 2s, 4s backoff for a transient empty/error reply
+
+    tasks = [(ti, test, side, i)
+             for ti, test in enumerate(tests)
+             for side in (True, False)
+             for i in range(runs)]
+    print(f"  running {len(tasks)} trials ({len(tests)} tests × {runs} × 2 cells) "
+          f"@ concurrency {EVAL_CONCURRENCY}", file=sys.stderr, flush=True)
+    trial_out: dict = {}
+    with ThreadPoolExecutor(max_workers=EVAL_CONCURRENCY) as pool:
+        for key, res in pool.map(_run_trial, tasks):
+            trial_out[key] = res
+
+    for ti, test in enumerate(tests):
+        with_trials = [trial_out[(ti, True, i)] for i in range(runs)]
+        without_trials = [trial_out[(ti, False, i)] for i in range(runs)]
         out_results.append({
             "id": test["id"],
             "prompt": test["prompt"],
