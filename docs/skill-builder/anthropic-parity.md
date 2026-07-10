@@ -1,10 +1,14 @@
 # Anthropic skill-creator parity — comparison & replication plan
 
-How our `build-skill-from-docs` (builder 2.1.0) + `skill-tester` setup compares to
-Anthropic's official skill-creation and evaluation workflow, and a concrete plan to
-replicate the parts we're missing. Companion to [README.md](README.md), [hld.md](hld.md),
+How our `build-skill-from-docs` (builder 2.1.0) setup compares to Anthropic's official
+skill-creation and evaluation workflow, and a concrete plan to replicate the parts we're
+missing. Companion to [README.md](README.md), [hld.md](hld.md),
 [skill-reliability-checklist.md](skill-reliability-checklist.md), and the eval docs under
 [../eval/](../eval/overview.md).
+
+> **Note (2026-07-10):** references below to delegating eval to a `skill-tester` agent are
+> historical — that agent was removed; the builder now runs `eval_core` **in-process**. The
+> comparison/plan content is unaffected. See [../eval/subagent-orchestration.md](../eval/subagent-orchestration.md).
 
 Anthropic claims below are cited to primary sources (verified 2026-07, see [Sources](#sources)):
 **[OV]** overview · **[BP]** best-practices · **[ENG]** equipping-agents · **[SC]** the

@@ -1,8 +1,22 @@
 # Eval-gated build — P0 + P1 implementation plan
 
+> **⚠️ SUPERSEDED in part (2026-07-10): `skill-tester` agent removed.** This doc was written
+> around an "author↔tester split" where the builder **delegated** the behavioral eval to a
+> `skill-tester` agent turn. That delegation was **reverted** — the eval is a deterministic
+> pipeline, so an LLM orchestrator turn added an orphan failure with no benefit, and with no
+> human in the loop the agent had no role. The eval (`eval_core`/`eval_skill.py`) is now a
+> self-contained module in the builder's `scripts/`, called **in-process** by the ship-gate
+> (`eval_core.run_gate`). Everywhere below that says "delegate to skill-tester" / "skill-tester
+> runs the eval," read: "the builder calls `eval_core` directly." The only agent the eval
+> spawns is the functional-A/B **executor** (`main`). See
+> [../eval/subagent-orchestration.md](../eval/subagent-orchestration.md) for the rationale.
+> The milestone *content* (M0–M9: eval_core extraction, sibling triggering, faithfulness,
+> gap-probe, analyzer/grader, ship-gate, repair, description-opt, freshness, reconstruction)
+> all still stands — only the orchestration mechanism changed.
+
 Detailed plan to converge `build-skill-from-docs` on Anthropic's **evaluate-to-ship**
 method: evaluation becomes part of the build loop, iteration is driven by observed
-with/without **behavior** (run through our `skill-tester` agent), and triggering becomes
+with/without **behavior** (script-orchestrated in the builder), and triggering becomes
 sibling-aware and situated. Implements P0 + P1 from [anthropic-parity.md](anthropic-parity.md) §8.
 
 Companion to [hld.md](hld.md), [stage1.md](../eval/stage1.md). Cites `file:line` at the seams.

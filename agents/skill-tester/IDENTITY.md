@@ -1,2 +1,0 @@
-name: skill-tester
-emoji: 🧪

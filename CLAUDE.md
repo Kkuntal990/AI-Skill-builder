@@ -10,7 +10,7 @@ This repo houses three loosely-coupled bodies of work, all centered on **OpenCla
 |---|---|---|
 | **Skill-builder** | `agents/ai-skill-builder/`, `docs/skill-builder/` | OpenClaw agent that turns a Python package URL into a progressive-disclosure `SKILL.md` |
 | **Skill-scout** | `agents/ai-skill-scout/`, `docs/skill-scout/` | OpenClaw agent that searches GitHub for existing OpenClaw skills and installs them safely |
-| **Skill evaluation framework** | `agents/skill-tester/`, `docs/eval/`, `infra/`, `src/mleval/` | Two-stage A/B framework measuring whether a skill makes an MLE agent measurably better (Stage 1 local, Stage 2 plug-in MLE-agent A/B on Nautilus NRP — agent: MLEvolve) |
+| **Skill evaluation framework** | `docs/eval/`, `infra/`, `src/mleval/`, builder `scripts/eval_*.py` | Two-stage A/B framework measuring whether a skill makes an MLE agent measurably better (Stage 1 local, script-orchestrated in the builder; Stage 2 plug-in MLE-agent A/B on Nautilus NRP — agent: MLEvolve) |
 
 Repo was forked from [aibuildai/AI-Build-AI](https://github.com/aibuildai/AI-Build-AI) in 2026-04, then diverged completely — fork connection severed 2026-05.
 
@@ -18,9 +18,9 @@ Repo was forked from [aibuildai/AI-Build-AI](https://github.com/aibuildai/AI-Bui
 
 ```
 agents/
-├── ai-skill-builder/             OpenClaw builder agent + bundled skills
-├── ai-skill-scout/               OpenClaw discovery agent + bundled skills
-└── skill-tester/                 tester agent — owns behavioral eval (evaluate-skill skill: eval_core + eval_skill)
+├── ai-skill-builder/             OpenClaw builder agent + bundled skills (builds + evals skills; eval_core/eval_skill under build-skill-from-docs/scripts/)
+└── ai-skill-scout/               OpenClaw discovery agent + bundled skills
+                                  # (skill-tester agent removed 2026-07-10 — eval is script-orchestrated in the builder, no orchestrator agent)
 
 docs/
 ├── eval/
@@ -209,13 +209,14 @@ CI-style; runs on every `build-skill-from-docs` invocation. ~5 min, ~$1 per skil
 
 ## OpenClaw agents — `agents/`
 
-Three agents live under `agents/`. Each follows the standard openclaw layout (`AGENTS.md` + `IDENTITY.md` + `SOUL.md` + `TOOLS.md` + `HEARTBEAT.md` + `USER.md` + `skills/` + optional `data/`).
+Two agents live under `agents/`. Each follows the standard openclaw layout (`AGENTS.md` + `IDENTITY.md` + `SOUL.md` + `TOOLS.md` + `HEARTBEAT.md` + `USER.md` + `skills/` + optional `data/`).
 
 | Agent | Doc | Role |
 |---|---|---|
-| `ai-skill-builder` | `docs/skill-builder/{hld,plan}.md` | **Author.** Builds a `SKILL.md` from a Python package URL. Holds no behavioral-eval logic; delegates ship-gate evaluation to `skill-tester`. |
+| `ai-skill-builder` | `docs/skill-builder/{hld,plan}.md` | Builds a `SKILL.md` from a Python package URL, and runs the Stage-1 behavioral eval **in-process** (`eval_core.run_gate` under the ship-gate). |
 | `ai-skill-scout` | `docs/skill-scout/{hld,plan}.md` | Searches GitHub for existing OpenClaw skills |
-| `skill-tester` | referenced from `docs/eval/stage1.md` | **Tester.** Owns behavioral skill eval via its `evaluate-skill` skill (`eval_core.py` + `eval_skill.py`, relocated here 2026-07): triggering / activation / functional / gate verdict / description optimization. The builder delegates gating here (author↔tester split); can also serve as a clean A/B baseline. |
+
+> **`skill-tester` removed (2026-07-10).** It briefly owned the behavioral eval (the builder delegated the gate to a `skill-tester` sub-agent turn). Removed as redundant: the eval is a deterministic pipeline with no orchestration-level LLM decision, and wrapping it in an agent turn caused an orphan failure; with no human in the loop the orchestrator agent had no role. `eval_core`/`eval_skill.py` moved back into the builder; the gate calls them directly. The only agent the eval still spawns is the functional-A/B **executor** (`main`). See `docs/eval/subagent-orchestration.md`.
 
 These are tracked-in-repo canonical copies. The live agents run under `~/.openclaw/agents/` on the user's machine; this repo holds reproducible snapshots.
 

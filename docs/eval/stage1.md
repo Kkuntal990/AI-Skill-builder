@@ -2,12 +2,15 @@
 
 Fast, CI-style evaluation of a skill in isolation. ~5 min, ~$1 per skill.
 
-> **Where this lives (author↔tester split, 2026-07).** The eval harness (`eval_core.py` +
-> the `eval_skill.py` CLI) is owned by the **`skill-tester`** agent, in its `evaluate-skill`
-> skill (`agents/skill-tester/skills/evaluate-skill/scripts/`). The **`ai-skill-builder`**
-> agent no longer contains any behavioral-eval logic; when its ship-gate is on it **delegates**
-> evaluation to `skill-tester` via a sub-agent call and parses the returned JSON verdict. You
-> can also run `eval_skill.py` directly by hand (paths below are relative to the tester's skill).
+> **Where this lives (2026-07-10).** The eval harness (`eval_core.py` + the `eval_skill.py`
+> CLI) is a self-contained module in the builder's
+> `agents/ai-skill-builder/skills/build-skill-from-docs/scripts/`. The ship-gate calls it
+> **in-process** (`eval_core.run_gate`); the only agent the eval spawns is the functional-A/B
+> **executor** (`main`). You can also run `eval_skill.py` directly by hand.
+> *(History: a short-lived `skill-tester` agent "owned" the eval and the builder delegated the
+> gate to it via a sub-agent turn — removed as redundant, since deterministic orchestration
+> needs no LLM turn and there's no human in the loop. See
+> [subagent-orchestration.md](subagent-orchestration.md).)*
 
 Follows Anthropic's vocabulary verbatim ([Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), 2026-01):
 
@@ -18,23 +21,28 @@ Follows Anthropic's vocabulary verbatim ([Demystifying evals for AI agents](http
 
 ## Test agent
 
-`eval_skill.py` defaults to `--agent ai-skill-builder` (a CLI default, not the doc's recommendation). Choose based on what you're testing:
+The **executor** is the agent whose with/without-skill responses are graded (never the
+now-removed `skill-tester`). The ship-gate uses `main`; `eval_skill.py`'s own default is
+`--agent ai-skill-builder` (a legacy CLI default — prefer `main`).
 
-| Agent | Bootstrap | mcporter ambient? | Best for |
+| Agent | Bootstrap | MCP? | Best for |
 |---|---|---|---|
-| `main` | ~0K (no SOUL/IDENTITY/AGENTS files; no bundled skills) | No | Measuring the marginal lift of a skill in isolation. The cleanest A/B baseline. |
-| `skill-tester` | ~50K (OpenClaw system prompt + tools, plus the `mcporter` baseline skill) | **Yes** | Testing MCP-dependent skill features end-to-end — but see ambient-MCP confound below. |
-| `ai-skill-builder` | heavy — 18+ baseline skills | Yes | Avoid for skill A/B: baseline skills cover too much adjacent knowledge. |
+| `main` | ~0K (no SOUL/IDENTITY/AGENTS files; no bundled skills) | No | The cleanest content-lift A/B baseline. **Current executor.** |
+| `skill-eval-target` (planned, P3) | ~0K + scoped `mcpServers:[context7]` | **Yes** | The MCP-fallback test: questions the skill can't answer from `references/`, so MCP must fire. *Not yet built.* |
+| `ai-skill-builder` | heavy — 18+ baseline skills | — | Avoid for skill A/B: baseline skills cover too much adjacent knowledge. |
 
-**The ambient-MCP confound** (discovered 2026-05-24): when the test agent has `mcporter` bundled (as `skill-tester` does), Context7 is reachable regardless of whether the skill is loaded. A test that asks the agent to fetch live docs will fire MCP in **both** the with-skill and without-skill cells. So an MCP-must-use prompt cannot directly measure whether *the skill* triggers MCP — it can only measure whether the skill teaches better workflow choreography around MCP calls. To A/B-test the *triggering* of MCP from skill instructions, use `main` (no bundled mcporter).
+**The ambient-MCP confound** (discovered 2026-05-24): an MCP-capable executor can reach
+Context7 in *both* cells, so absolute "MCP fired" can't be attributed to the skill. The design
+(see [subagent-orchestration.md](subagent-orchestration.md)) resolves this by measuring the
+**delta** — with-skill firing rate − without-skill — since only the with-skill cell is *told*
+to call `context7__query-docs`. Today's `main` executor fires MCP 0% (no client), so the
+functional A/B measures pure content lift; the MCP-firing delta needs the planned
+`skill-eval-target`.
 
 Invocation:
 ```bash
 python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> \
-  --agent main --runs 3                # clean lift measurement
-# or
-python3 .../eval_skill.py all ~/.openclaw/workspace/skills/<skill> \
-  --agent skill-tester --runs 3        # MCP outcome plumbing
+  --agent main --runs 3                # clean content-lift A/B (current)
 ```
 
 ## Two functional executors: told-to-read vs organic activation

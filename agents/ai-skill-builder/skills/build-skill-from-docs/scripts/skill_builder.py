@@ -868,87 +868,31 @@ def infer_intent(doc_text: str) -> str:
     return raw[:1200]
 
 
-# ── Delegation to the skill-tester agent (author↔tester split) ───────────────
-# The builder holds NO behavioral-eval logic. Both the ship-gate and the baseline
-# probe are delegated to skill-tester's `evaluate-skill` skill via a sub-agent call;
-# the tester runs eval_core (which it owns) and returns JSON, parsed back here.
-
-EVAL_AGENT_DEFAULT = "skill-tester"
-
-
-def _call_eval_agent(prompt: str, *, agent: str = EVAL_AGENT_DEFAULT, timeout: int = 900) -> str:
-    """Run one `openclaw agent` turn and return its reply text ("" on any failure)."""
-    try:
-        r = subprocess.run(
-            ["openclaw", "agent", "--agent", agent, "--json", "--timeout", str(timeout), "-m", prompt],
-            capture_output=True, text=True, timeout=timeout + 60,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return ""
-    raw = (r.stdout or "") + (r.stderr or "")
-    idx = raw.find("\n{")
-    js = raw[idx + 1:] if idx >= 0 else (raw[raw.find("{"):] if "{" in raw else "")
-    try:
-        d = json.loads(js)
-    except json.JSONDecodeError:
-        return raw  # let _extract_json try the whole blob
-    payloads = (d.get("result") or d).get("payloads", [])
-    return "\n\n".join(p.get("text", "") for p in payloads if p.get("text"))
+# ── Behavioral eval (script-orchestrated; NOT an agent-turn delegation) ───────
+# eval_core is a self-contained module the builder imports and calls directly. The
+# only agent the eval spawns is the EXECUTOR (run_functional's `main`/skill-eval-target),
+# which must be an agent because we measure agent behavior. Orchestrating the fan-out
+# from a script (here) — rather than wrapping it in one skill-tester agent turn — is the
+# Anthropic pattern for many sub-agents and avoids the long-turn orphan.
+# See docs/eval/subagent-orchestration.md.
 
 
-def _extract_json(text: str) -> "dict | None":
-    """Pull a JSON object out of an agent reply (fenced or bare). None if absent/unparseable."""
-    if not text:
-        return None
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-    s, e = text.find("{"), text.rfind("}")
-    if 0 <= s < e:
-        try:
-            return json.loads(text[s:e + 1])
-        except json.JSONDecodeError:
-            return None
-    return None
-
-
-def baseline_gap_probe(intent_brief: str, doc_text: str, agent: str = EVAL_AGENT_DEFAULT,
+def baseline_gap_probe(intent_brief: str, doc_text: str, agent: str = "main",
                        n_questions: int = 2, timeout: int = 180) -> str:
-    """P0.3 baseline-first: DELEGATE to skill-tester's evaluate-skill baseline-probe
-    (author↔tester — the builder owns none of this). Writes a small intent+docs payload
-    the tester reads, spawns the tester, and returns its `gap_notes`. Best-effort:
-    returns "" on any failure so it never blocks a build. Prompt-level only, no GPU."""
+    """P0.3 baseline-first: run the base agent (no skill) on intent-derived questions and
+    summarize where it falls short (yields `gap_notes` that steer plan/body toward REAL
+    gaps). Calls eval_core.baseline_probe directly. Best-effort: returns "" on any failure
+    so it never blocks a build. Prompt-level only, no GPU. `agent` is the base executor
+    (never skill-tester)."""
     if not intent_brief:
         return ""
-    tmp = None
     try:
-        import tempfile
-        payload = {"intent": intent_brief, "doc_excerpt": (doc_text or "")[:3000],
-                   "n_questions": n_questions}
-        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-        json.dump(payload, fh)
-        fh.close()
-        tmp = fh.name
-        prompt = (
-            "Use your evaluate-skill skill's baseline-probe mode to find where the BASE "
-            "model (no skill) falls short for a skill we're about to build. The "
-            f"{{intent, doc_excerpt, n_questions}} payload is at:\n{tmp}\n"
-            "Run it and return ONLY the resulting JSON (shape: {\"gap_notes\": \"...\"})."
-        )
-        reply = _call_eval_agent(prompt, agent=agent, timeout=timeout + 120)
-        d = _extract_json(reply) or {}
-        return (d.get("gap_notes") or "")[:2000]
-    except (OSError, ValueError, RuntimeError):
+        import eval_core as ec
+        out = ec.baseline_probe(intent_brief, doc_text, agent=agent,
+                                n_questions=n_questions, timeout=timeout)
+        return (out.get("gap_notes") or "")[:2000]
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError):
         return ""
-    finally:
-        if tmp:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
 
 
 # Hardware requirement extraction — regex side-channel for the body prompt.
@@ -2333,7 +2277,7 @@ def _pipeline(
     if getattr(args, "baseline_probe", False):
         gap_notes = baseline_gap_probe(
             intent_brief, sources["doc"],
-            agent=getattr(args, "eval_agent", None) or "skill-tester",
+            agent=getattr(args, "baseline_agent", None) or "main",
         )
     args.gap_notes = gap_notes
 
@@ -2513,10 +2457,10 @@ def _pipeline(
 
     # Real co-resident siblings (P1.1/P1.2): default to the install root (SKILLS_DIR),
     # override with --siblings. Used to GROUND eval-prompt generation (near-miss negatives
-    # naming real competitors). NOTE: triggering SCORING is the skill-tester agent's job now
-    # (author↔tester split) — the builder no longer runs the judge inline. Description
-    # tuning from triggering feedback happens in the DELEGATED ship-gate + repair loop
-    # (opt-in via --ship-gate), or via the tester's `optimize-description`.
+    # naming real competitors). NOTE: triggering SCORING happens in the ship-gate
+    # (eval_core.run_gate, called directly), not inline here. Description tuning from
+    # triggering feedback happens in the ship-gate + repair loop (opt-in via --ship-gate),
+    # or via `eval_skill.py optimize-description`.
     _sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
     _sibs = _load_sibling_descriptions(_sib_dir, exclude_name=skill_name)
     _sibling_names = [s["name"] for s in _sibs]
@@ -2875,19 +2819,20 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
                   profile: str) -> dict:
     """M5 — evaluate a staged skill and decide whether it may ship (P0.1).
 
-    Author↔tester split: the BEHAVIORAL eval (triggering + organic activation, scored
-    vs pass_bar) is DELEGATED to the skill-tester agent's evaluate-skill skill via a
-    sub-agent call. The builder only (a) writes the eval set it authored into the staged
-    bundle, and (b) folds in its own artifact-critic quality_gate — which is an authoring
-    concern, not behavioral eval. Prompt-level only (no task execution / GPU). Never
-    raises: on delegation failure the gate degrades to pass-with-note (best-effort).
+    Script-orchestrated: the builder (a) writes the eval set it authored into the staged
+    bundle, (b) calls `eval_core.run_gate` directly for the BEHAVIORAL verdict (triggering
+    + organic activation + advisory functional A/B, scored vs pass_bar), and (c) folds in
+    its own artifact-critic quality_gate. The only agent the eval spawns is the functional
+    EXECUTOR inside run_functional (`main`) — measuring agent behavior requires an agent;
+    orchestration itself is a plain call, not a skill-tester turn. Prompt-level only (no
+    task execution / GPU). Never raises: eval_core.run_gate is best-effort per signal.
     """
     evals_doc = result.get("evals") or {}
     prompts = evals_doc.get("prompts") or []
     negs = evals_doc.get("negative_prompts") or []
     functional_tests = evals_doc.get("functional") or []
 
-    # (a) Author writes the eval set; the tester reads + measures it.
+    # (a) Write the eval set the pipeline authored into the staged bundle.
     if prompts:
         (staging_skill_dir / "evals").mkdir(parents=True, exist_ok=True)
         tset = {"should_trigger": prompts, "should_not_trigger_near_miss": negs}
@@ -2899,28 +2844,14 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
         (staging_skill_dir / "evals" / "functional.json").write_text(
             json.dumps({"skill_name": result["skill_name"], "tests": functional_tests}, indent=2))
 
-    # Delegate the behavioral verdict to skill-tester.
+    # (b) Behavioral verdict — direct call into the eval module (no agent-turn delegation).
+    import eval_core as ec
     sib_dir = getattr(args, "siblings", None) or str(SKILLS_DIR)
-    eval_agent = getattr(args, "eval_agent", EVAL_AGENT_DEFAULT) or EVAL_AGENT_DEFAULT
-    timeout = int(getattr(args, "eval_timeout", 900) or 900)
-    delegate_prompt = (
-        "Use your evaluate-skill skill to run the ship-gate on the skill bundle at:\n"
-        f"{staging_skill_dir}\n"
-        f"Profile: {profile}. Siblings dir: {sib_dir}.\n"
-        "Run the gate and return ONLY the verdict JSON it prints (keys: passed, reasons, "
-        "ran, skipped, triggering_metrics, activation_metrics, failing_positives)."
-    )
-    reply = _call_eval_agent(delegate_prompt, agent=eval_agent, timeout=timeout)
-    gate = _extract_json(reply)
-    if not isinstance(gate, dict) or "passed" not in gate:
-        # Best-effort degrade: don't block a build on a tester/delegation hiccup.
-        gate = {"profile": profile, "passed": True, "reasons": [], "ran": [],
-                "skipped": ["behavioral gate (skill-tester delegation failed — degraded)"],
-                "degraded": True}
+    gate = ec.run_gate(staging_skill_dir, profile=profile, siblings_dir=sib_dir)
     gate.setdefault("reasons", [])
     gate.setdefault("failing_positives", [])
 
-    # (b) Fold in the author-side artifact critic (quality_gate). NOT the tester's job.
+    # (c) Fold in the author-side artifact critic (quality_gate) — an authoring concern.
     reasons = list(gate.get("reasons") or [])
     if result.get("quality_gate") == "failed":
         blocks = [f for f in (result.get("critic") or {}).get("final_findings", [])
@@ -2930,7 +2861,6 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
     gate["reasons"] = reasons
     gate["passed"] = not reasons
     gate["quality_gate"] = result.get("quality_gate")
-    gate["eval_agent"] = eval_agent
     return gate
 
 
@@ -3129,15 +3059,15 @@ def build_parser() -> argparse.ArgumentParser:
                              "questions and steer the build toward observed gaps (makes live "
                              "agent calls; off by default)")
         sp.add_argument("--ship-gate", choices=["off", "smoke", "full"], default="smoke",
-                        help="M5: build into a staging dir and only promote on eval pass — DELEGATED "
-                             "to the skill-tester agent. smoke=cheap (triggering, runs=1; ~1 min, the "
-                             "DEFAULT — reliable through the delegation). full adds organic activation + "
-                             "the advisory functional A/B (~23 min: 24 nested agent turns — run it as an "
+                        help="M5: build into a staging dir and only promote on eval pass. The builder "
+                             "calls the eval directly (eval_core.run_gate). smoke=cheap (triggering, "
+                             "runs=1; ~1 min, the DEFAULT). full adds organic activation + the advisory "
+                             "functional A/B (~20 min: fans out executor agent turns — run it as an "
                              "explicit/owned op, not a per-build default). off writes straight through.")
         sp.add_argument("--ship-anyway", action="store_true",
                         help="on ship-gate FAIL, write anyway with a gate:failed warning (never silent)")
-        sp.add_argument("--eval-agent", default="skill-tester",
-                        help="agent for the baseline probe / functional eval (default skill-tester)")
+        sp.add_argument("--baseline-agent", default="main",
+                        help="base executor for --baseline-probe (default main; never skill-tester)")
         sp.add_argument("--max-repair-eval-rounds", type=int, default=2,
                         help="M6: max behavior-repair rounds when the ship-gate fails (default 2)")
         sp.add_argument("--force", action="store_true")
