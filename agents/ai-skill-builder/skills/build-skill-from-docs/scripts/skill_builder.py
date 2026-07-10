@@ -94,7 +94,7 @@ OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6"
 HTTP_TIMEOUT = 30
 LLM_TIMEOUT = 120
 USER_AGENT = "ai-skill-builder/1.0 (+https://github.com/Kkuntal990/AI-Skill-builder)"
-BUILDER_VERSION = "2.1.0"
+BUILDER_VERSION = "2.2.0"  # 2.2.0: capture library-docs version + docs_sha256 in provenance
 
 # Runtime MCP declarations (capability contract). Skills *declare* expected MCPs in
 # frontmatter; they don't auto-install. The agent runtime decides whether to invoke them.
@@ -464,6 +464,62 @@ def fetch_changelog(repo: str) -> str:
     # Fall back to latest release body
     out = _gh("api", f"repos/{repo}/releases/latest", "--jq", ".body", check=False)
     return out.strip()[:8000] if out.strip() else ""
+
+
+_VER_RE = re.compile(r"\bv?(\d+\.\d+(?:\.\d+)?(?:[.-]?(?:a|b|rc|dev|post)\d*)?)\b", re.IGNORECASE)
+
+
+def detect_library_version(url: str, repo: str = "", doc_text: str = "",
+                           changelog: str = "") -> dict:
+    """Determine WHICH VERSION of the library the fetched docs describe — the provenance
+    marking that matters most for staleness. A skill built from a `/latest/` docs URL is
+    only correct for whatever release was live at fetch time; six months on, `/latest/`
+    points elsewhere and the skill's API claims may be stale. Recording the version + how
+    it was found + whether the docs URL was version-pinned makes that drift detectable.
+
+    Returns {library_version, library_version_source, docs_url_pinned}. Best-effort; never
+    raises. Detection order, most→least authoritative:
+      1. a version pinned in the docs URL path (e.g. /en/v0.6.3/) → docs_url_pinned=True
+      2. the repo's latest GitHub release/tag (what an unpinned '/latest/' doc describes)
+      3. the top version heading in the CHANGELOG
+      4. a 'version X.Y.Z' string in the doc text
+    """
+    # 1. URL path pin — skip channel segments that track a moving target.
+    for seg in (s for s in re.split(r"[/#?]", url or "") if s):
+        if seg.lower() in ("latest", "stable", "main", "master", "dev", "en"):
+            continue
+        m = re.fullmatch(r"v?(\d+\.\d+(?:\.\d+)?)", seg)
+        if m:
+            return {"library_version": m.group(1),
+                    "library_version_source": "docs-url-path", "docs_url_pinned": True}
+
+    # Reached here ⇒ the docs URL tracks a moving channel (latest/stable), not a pin.
+    # 2. GitHub latest release, then newest tag.
+    if repo:
+        tag = _gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name", check=False).strip()
+        if not tag:
+            tag = _gh("api", f"repos/{repo}/tags", "--jq", ".[0].name", check=False).strip()
+        m = _VER_RE.search(tag or "")
+        if m:
+            return {"library_version": m.group(1),
+                    "library_version_source": "github-latest-release", "docs_url_pinned": False}
+
+    # 3. Top version heading in the changelog (headings / leading version lines only).
+    for line in (changelog or "").splitlines()[:40]:
+        if line.lstrip().startswith("#") or re.match(r"\s*\[?v?\d", line):
+            m = _VER_RE.search(line)
+            if m:
+                return {"library_version": m.group(1),
+                        "library_version_source": "changelog", "docs_url_pinned": False}
+
+    # 4. 'version X.Y.Z' in the doc text (weakest — last resort).
+    m = re.search(r"version[:\s]+v?(\d+\.\d+(?:\.\d+)?)", doc_text or "", re.IGNORECASE)
+    if m:
+        return {"library_version": m.group(1),
+                "library_version_source": "doc-text", "docs_url_pinned": False}
+
+    return {"library_version": "unknown",
+            "library_version_source": "undetermined", "docs_url_pinned": False}
 
 
 def fetch_question_issues(repo: str, limit: int = 15) -> list[dict]:
@@ -2498,12 +2554,22 @@ def _pipeline(
     install_entries = detect_install_commands(sources["readme"])
     bins = ["python3"]
 
-    # Provenance: SHA-256 of the synthesized body so drift can be detected later
-    # without re-running the pipeline. URL + repo + fetched_at are the audit trail.
+    # Provenance: two version markings + hashes so drift is detectable without re-running.
+    #   builder_version  — which builder produced this skill (ours).
+    #   library_version  — which library release the source DOCS describe (the one that
+    #                      matters most: a '/latest/' build is a snapshot that will drift).
+    # content_sha256 hashes our synthesized body; docs_sha256 hashes the fetched source doc
+    # so we can tell "the upstream docs changed" from "our synthesis changed".
+    version_info = detect_library_version(
+        url, sources["repo"] or "", sources.get("doc") or "", sources.get("changelog") or "")
     provenance = {
         "url": url,
         "repo": sources["repo"] or "",
         "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "library_version": version_info["library_version"],
+        "library_version_source": version_info["library_version_source"],
+        "docs_url_pinned": version_info["docs_url_pinned"],
+        "docs_sha256": hashlib.sha256((sources.get("doc") or "").encode("utf-8")).hexdigest(),
         "content_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "builder_version": BUILDER_VERSION,
     }
@@ -2934,6 +3000,10 @@ def cmd_build(args: argparse.Namespace) -> dict:
                 "status": "rejected",
                 "reason": "ship-gate failed",
                 "ship_gate": gate_result,
+                # Surface the artifact-critic block findings that caused the reject — a
+                # rejection you can't see isn't actionable (mirrors run_gate reply_text gap).
+                "critic_findings": [f for f in (result.get("critic") or {}).get("final_findings", [])
+                                    if f.get("severity") == "block"],
                 "skill_name": result["skill_name"],
                 "source_url": url,
             }
@@ -2973,6 +3043,8 @@ def cmd_build(args: argparse.Namespace) -> dict:
         "validation_warnings": [i for i in result["validation"] if i["severity"] == "warning"],
         "ship_gate": gate_result,
         "quality_gate": result.get("quality_gate"),
+        "critic_findings": [f for f in (result.get("critic") or {}).get("final_findings", [])
+                            if f.get("severity") == "block"],
         "openclaw_skills_check": {"ok": ok, "output": check_out[:1000]},
         "triggering_report": result.get("triggering_report"),
         "quality_gate": result.get("quality_gate", "skipped"),

@@ -74,6 +74,37 @@ always work from `SKILL.md` + `references/` alone and treat MCP as a bonus.
 - Body tool references use OpenClaw's double-underscore form: `context7__resolve-library-id`,
   `context7__query-docs` (the gate checks both the `/` frontmatter form and the `__` body form).
 
+## Provenance & version marking (`metadata.openclaw.source`)
+
+Every build records where the skill came from and — critically — **which library version the
+source docs described**. This is the top staleness signal: a skill built from a `/latest/` docs
+URL is only correct for whatever release was live at fetch time.
+
+```yaml
+"source": {
+  "url": "https://docs.vllm.ai/en/latest/",
+  "repo": "vllm-project/vllm",
+  "fetched_at": "2026-07-10T14:19:22Z",
+  "library_version": "0.24.0",                       # which library release the DOCS describe
+  "library_version_source": "github-latest-release", # how it was determined (see below)
+  "docs_url_pinned": false,                           # was the docs URL version-pinned? false ⇒ drift risk
+  "docs_sha256": "…",                                 # hash of the fetched source doc
+  "content_sha256": "…",                              # hash of our synthesized SKILL.md body
+  "builder_version": "2.2.0"                          # which builder produced this skill (ours)
+}
+```
+
+**Two version markings, both required:**
+- **`builder_version`** — the tool that produced the skill (ours). Bumps when build logic changes.
+- **`library_version`** — the release the upstream docs describe. `library_version_source` is one
+  of `docs-url-path` (URL pinned a version → `docs_url_pinned: true`), `github-latest-release`,
+  `changelog`, `doc-text`, or `undetermined`. When `docs_url_pinned` is `false`, the skill was
+  built off a moving channel and should be re-verified when the upstream release advances.
+
+`docs_sha256` vs `content_sha256` separates "the upstream docs changed" from "our synthesis
+changed" — either can trigger a rebuild. Detection is best-effort (`detect_library_version`) and
+never blocks a build; worst case `library_version` is `"unknown"`.
+
 ## What the LLM Does NOT Write
 
 The script writes frontmatter deterministically from source data:
