@@ -10,7 +10,7 @@ nothing from `skill_builder`.
 
 Public API (used by both callers):
     run_triggering(skill_dir, judge_fn, decoys, *, runs=3) -> dict
-    run_functional(skill_dir, *, agent="ai-skill-builder", runs=3,
+    run_functional(skill_dir, *, agent="skill-eval-target", runs=3,
                    per_prompt_timeout=240) -> dict
     run_activation(skill_dir, *, model="", runs=3, per_prompt_timeout=180,
                    max_concurrency=3) -> dict
@@ -41,6 +41,12 @@ def _die(msg: str):
     should guard their inputs (e.g. check the evals file exists) before calling."""
     print(f"error: {msg}", file=sys.stderr)
     raise SystemExit(1)
+
+
+# A context7-style resolved library id: `/org/project` (optionally `/org/project/version`).
+# Used as MCP-usage ground truth — it's a return value from resolve-library-id, so its
+# presence in a reply is strong evidence the MCP was actually called (see _extract_tool_signals).
+_LIBID_RE = re.compile(r"/[a-z0-9][\w.-]*/[a-z0-9][\w.-]+", re.IGNORECASE)
 
 
 # ── Skill metadata / MCP declaration parsing ─────────────────────────────────
@@ -180,8 +186,22 @@ def _extract_tool_signals(reply: dict, declared_mcps: list[str]) -> dict:
         "via the registered ", "via context7", "via mcp ", "via mcporter",
         "from context7", "queried context7", "queried via",
         "libraryid:", "libraryid =", "libraryid=\"/", "libraryid='/",
+        # realistic narration observed live (skill-eval-target on peft, 2026-07-10):
+        # "Queried live PEFT docs (context7, `/huggingface/peft`) per the skill's MCP fallback."
+        "queried live", "queried the live", "live docs", "docs via context7",
+        "docs (context7", "(context7,", "skill's mcp fallback", "per the mcp fallback",
     )
     saw_outcome_text = any(pat in text_lower for pat in _OUTCOME_PATTERNS)
+    # A resolved library-id path (e.g. `/huggingface/peft`) is a RETURN VALUE from
+    # resolve-library-id — you only have that exact string if the MCP was actually called.
+    # Strong ground-truth evidence, gated on a declared-server mention so a local skill
+    # file path (references/…, /tmp/…) can't spoof it.
+    if not saw_outcome_text and any(srv and srv.lower() in text_lower for srv in declared_mcps):
+        m = _LIBID_RE.search(text)
+        if m and not any(x in m.group(0).lower() for x in
+                         (".md", ".py", ".txt", ".json", "references/", "templates/",
+                          "scripts/", "/tmp/", "/users/", "/private/", "/var/")):
+            saw_outcome_text = True
     if saw_outcome_text:
         for srv in declared_mcps:
             if srv and srv.lower() in text_lower and srv not in text_mcp_hits:
@@ -246,6 +266,13 @@ SKILLBUILD_LLM_MODEL = os.environ.get("SKILLBUILD_LLM_MODEL", "opus").strip() or
 # concurrency session-limit errors. Rolling-window subscription limits are a hard ceiling the
 # cap can't fix (a bounded retry-on-empty absorbs transient blips only).
 EVAL_CONCURRENCY = max(1, int(os.environ.get("MLEVAL_EVAL_CONCURRENCY", "4")))
+
+# P3: the functional-A/B executor. `skill-eval-target` is a minimal agent (bare persona +
+# `mcporter`/context7, no bundled content skills) so (a) the without-skill cell is a clean
+# baseline and (b) MCP fallback actually fires — unlike `main`, which has no MCP client and
+# scored every fallback trial `clean_miss`. Override to "main" (env) to fall back to the old
+# tool-free baseline if the target agent isn't registered.
+FUNCTIONAL_EXECUTOR = os.environ.get("MLEVAL_FUNCTIONAL_EXECUTOR", "skill-eval-target").strip() or "skill-eval-target"
 
 # A clean baseline executor.
 _SKILLTESTER_SYSTEM = (
@@ -795,7 +822,7 @@ def run_triggering(skill_dir: Path, judge_fn, decoys: list[dict], *, runs: int =
     }
 
 
-def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: int = 3,
+def run_functional(skill_dir: Path, *, agent: str = FUNCTIONAL_EXECUTOR, runs: int = 3,
                    per_prompt_timeout: int = 240, grader_fn=None) -> dict:
     """Run each functional prompt N trials, with and without skill, score every trial.
     `grader_fn` (P1.5, optional) grades any `test["judge"]` assertions."""
@@ -892,9 +919,16 @@ def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: in
             "without_skill": {"trials": without_trials, "agg": aggregate(without_trials)},
         })
 
-    def gather(field_path: str, side: str) -> list[float]:
+    # P3: tag each result with whether its source test is an mcp_fallback case — those are
+    # graded on tool-firing, not content substrings, so they're excluded from content lift.
+    for r, test in zip(out_results, tests):
+        r["mcp_fallback"] = bool(test.get("mcp_fallback"))
+    content_results = [r for r in out_results if not r["mcp_fallback"]]
+    fallback_results = [r for r in out_results if r["mcp_fallback"]]
+
+    def gather(field_path: str, side: str, subset: "list | None" = None) -> list[float]:
         out = []
-        for r in out_results:
+        for r in (out_results if subset is None else subset):
             cur = r[side]
             for part in field_path.split("."):
                 cur = cur.get(part) if isinstance(cur, dict) else None
@@ -904,36 +938,63 @@ def run_functional(skill_dir: Path, *, agent: str = "ai-skill-builder", runs: in
                 out.append(float(cur))
         return out
 
-    with_pass = _mean(gather("agg.pass_rate", "with_skill"))
-    without_pass = _mean(gather("agg.pass_rate", "without_skill"))
-    with_cite = _mean(gather("agg.citation_accuracy_mean", "with_skill"))
+    # Content lift over CONTENT tests only (fallback tests have no meaningful substrings).
+    _content = content_results or out_results
+    with_pass = _mean(gather("agg.pass_rate", "with_skill", _content))
+    without_pass = _mean(gather("agg.pass_rate", "without_skill", _content))
+    with_cite = _mean(gather("agg.citation_accuracy_mean", "with_skill", _content))
+
+    # MCP firing in BOTH cells: an MCP-capable executor can reach context7 either way; the
+    # skill's instruction to use it shows up as the with−without DELTA (not the absolute),
+    # per docs/eval/subagent-orchestration.md §3.
     with_actual_mcp = _mean(gather("agg.actual_mcp_call_rate", "with_skill"))
+    without_actual_mcp = _mean(gather("agg.actual_mcp_call_rate", "without_skill"))
     with_rel_sidecar = _mean(gather("agg.relevant_sidecar_rate", "with_skill"))
     with_text_mcp = _mean(gather("agg.text_mcp_call_rate", "with_skill"))
+
+    # Fallback-subset firing — the beyond-references cases where MCP is the only real path.
+    fb_with = (_mean(gather("agg.actual_mcp_call_rate", "with_skill", fallback_results))
+               if fallback_results else None)
+    fb_without = (_mean(gather("agg.actual_mcp_call_rate", "without_skill", fallback_results))
+                  if fallback_results else None)
+
     with_in = sum(int(x) for x in gather("agg.tokens_input_total", "with_skill"))
     with_out_t = sum(int(x) for x in gather("agg.tokens_output_total", "with_skill"))
     wo_in = sum(int(x) for x in gather("agg.tokens_input_total", "without_skill"))
     wo_out = sum(int(x) for x in gather("agg.tokens_output_total", "without_skill"))
 
-    overall_class = {"best_case": 0, "stealth_use": 0, "lip_service": 0, "clean_miss": 0}
-    for r in out_results:
-        wc = (r["with_skill"]["agg"] or {}).get("mcp_classification_counts") or {}
-        for k, v in wc.items():
-            overall_class[k] = overall_class.get(k, 0) + v
+    def _class_counts(side: str) -> dict:
+        cc = {"best_case": 0, "stealth_use": 0, "lip_service": 0, "clean_miss": 0}
+        for r in out_results:
+            sc = (r[side]["agg"] or {}).get("mcp_classification_counts") or {}
+            for k, v in sc.items():
+                cc[k] = cc.get(k, 0) + v
+        return cc
+    overall_class = _class_counts("with_skill")
+    overall_class_without = _class_counts("without_skill")
 
     result = {
         "skill_name": meta["name"],
         "declared_mcps": declared_mcps,
         "n_tests": len(out_results),
+        "n_content_tests": len(content_results),
+        "n_mcp_fallback_tests": len(fallback_results),
         "runs_per_cell": runs,
         "with_skill_pass_rate": round(with_pass, 3),
         "without_skill_pass_rate": round(without_pass, 3),
         "lift_pp": round((with_pass - without_pass) * 100, 1),
         "citation_accuracy_with_skill": round(with_cite, 3),
         "actual_mcp_call_rate_with_skill": round(with_actual_mcp, 3),
+        "actual_mcp_call_rate_without_skill": round(without_actual_mcp, 3),
+        "mcp_firing_delta": round(with_actual_mcp - without_actual_mcp, 3),
         "relevant_sidecar_rate_with_skill": round(with_rel_sidecar, 3),
         "text_mcp_call_rate_with_skill": round(with_text_mcp, 3),
         "mcp_classification_counts_with_skill": overall_class,
+        "mcp_classification_counts_without_skill": overall_class_without,
+        "mcp_fallback_firing_rate_with_skill": (round(fb_with, 3) if fb_with is not None else None),
+        "mcp_fallback_firing_rate_without_skill": (round(fb_without, 3) if fb_without is not None else None),
+        "mcp_fallback_firing_delta": (round(fb_with - fb_without, 3)
+                                      if (fb_with is not None and fb_without is not None) else None),
         "saturated": bool(with_pass >= 0.9 and without_pass >= 0.9),
         "tokens": {
             "with_skill_input": with_in, "with_skill_output": with_out_t,
@@ -1231,10 +1292,14 @@ def build_report(skill_dir: Path, triggering: dict | None, functional: dict | No
         cite = functional["citation_accuracy_with_skill"]
         saturated = functional["saturated"]
         actual_rate = functional.get("actual_mcp_call_rate_with_skill", 0.0)
+        actual_rate_wo = functional.get("actual_mcp_call_rate_without_skill", 0.0)
+        firing_delta = functional.get("mcp_firing_delta", 0.0)
         rel_sidecar = functional.get("relevant_sidecar_rate_with_skill", 0.0)
         text_rate = functional.get("text_mcp_call_rate_with_skill", 0.0)
         class_counts = functional.get("mcp_classification_counts_with_skill") or {}
         declared = functional.get("declared_mcps") or []
+        n_fb = functional.get("n_mcp_fallback_tests") or 0
+        fb_delta = functional.get("mcp_fallback_firing_delta")
 
         fpass = with_pass >= pass_bar["functional_pass_min"]
         cpass = cite >= pass_bar["citation_accuracy_min"]
@@ -1252,10 +1317,14 @@ def build_report(skill_dir: Path, triggering: dict | None, functional: dict | No
                      f"{functional.get('runs_per_cell', '?')}")
         lines.append("")
 
-        lines.append("## MCP usage (with-skill cells)")
+        lines.append("## MCP usage (firing delta = skill's attribution)")
         lines.append(f"- Declared MCP servers: {declared or 'none'}")
-        lines.append(f"- **Actual call rate (sidecar log, ground truth): {actual_rate:.3f}**")
-        lines.append(f"- Relevant-server actual call rate:               {rel_sidecar:.3f}")
+        lines.append(f"- **Firing rate with-skill: {actual_rate:.3f} vs without-skill: "
+                     f"{actual_rate_wo:.3f} → delta {firing_delta:+.3f}**")
+        if n_fb:
+            fb_txt = f"{fb_delta:+.3f}" if fb_delta is not None else "n/a"
+            lines.append(f"- Beyond-references (mcp_fallback) cases: {n_fb} · firing delta {fb_txt}")
+        lines.append(f"- Relevant-server actual call rate (with-skill):  {rel_sidecar:.3f}")
         lines.append(f"- Narrated call rate (reply text mentions):       {text_rate:.3f}")
         if class_counts:
             total_cells = sum(class_counts.values()) or 1
@@ -1331,12 +1400,14 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
             gate["ran"].append("activation")
         except SystemExit:
             gate["skipped"].append("activation")
-        # Functional with/without-skill A/B (ADVISORY). Clean baseline executor = `main`
-        # (never skill-tester — recursion; and ai-skill-builder's bundled skills confound
-        # the without-cell). analyze() flags non-discriminating / flaky self-authored tests.
+        # Functional with/without-skill A/B (ADVISORY). Executor = `skill-eval-target`
+        # (FUNCTIONAL_EXECUTOR): a minimal MCP-capable agent — no bundled content skills to
+        # confound the without-cell, but with context7 so MCP fallback fires. analyze() flags
+        # non-discriminating / flaky self-authored tests.
         if (skill_dir / "evals" / "functional.json").exists():
             try:
-                functional = run_functional(skill_dir, agent="main", runs=2, per_prompt_timeout=240)
+                functional = run_functional(skill_dir, agent=FUNCTIONAL_EXECUTOR,
+                                             runs=2, per_prompt_timeout=240)
                 fanalysis = analyze(functional)
                 gate["ran"].append("functional (advisory)")
             except SystemExit:
@@ -1366,6 +1437,7 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
     # Functional is advisory: surface pass-rate + lift + the analyzer flags, but keep it OUT
     # of `reasons` so it never blocks the ship (self-authored assertions).
     functional_metrics = None
+    mcp_metrics = None
     if functional:
         wp = functional.get("with_skill_pass_rate")
         wo = functional.get("without_skill_pass_rate")
@@ -1373,9 +1445,28 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
             "with_skill_pass_rate": wp,
             "without_skill_pass_rate": wo,
             "lift": (round(wp - wo, 3) if (wp is not None and wo is not None) else None),
+            "n_content_tests": functional.get("n_content_tests"),
             "saturated": functional.get("saturated"),
             "advisory": True,
         }
+        # P3: surface the MCP-firing signals the verdict used to drop. Content-lift is the
+        # substring A/B above; this is the orthogonal "did the skill make the executor reach
+        # live docs" measure — attributed by the with−without DELTA, both cells being
+        # MCP-capable. Fallback-subset is the beyond-references cases. Advisory only.
+        if functional.get("declared_mcps"):
+            mcp_metrics = {
+                "declared_mcps": functional.get("declared_mcps"),
+                "actual_mcp_call_rate_with_skill": functional.get("actual_mcp_call_rate_with_skill"),
+                "actual_mcp_call_rate_without_skill": functional.get("actual_mcp_call_rate_without_skill"),
+                "mcp_firing_delta": functional.get("mcp_firing_delta"),
+                "classification_counts_with_skill": functional.get("mcp_classification_counts_with_skill"),
+                "classification_counts_without_skill": functional.get("mcp_classification_counts_without_skill"),
+                "n_mcp_fallback_tests": functional.get("n_mcp_fallback_tests"),
+                "mcp_fallback_firing_rate_with_skill": functional.get("mcp_fallback_firing_rate_with_skill"),
+                "mcp_fallback_firing_rate_without_skill": functional.get("mcp_fallback_firing_rate_without_skill"),
+                "mcp_fallback_firing_delta": functional.get("mcp_fallback_firing_delta"),
+                "advisory": True,
+            }
     gate.update({
         "passed": not reasons,
         "reasons": reasons,
@@ -1383,6 +1474,7 @@ def run_gate(skill_dir, profile: str = "smoke", *, siblings_dir: str = "") -> di
         "triggering_metrics": (triggering or {}).get("metrics"),
         "activation_metrics": (activation or {}).get("metrics"),
         "functional_metrics": functional_metrics,
+        "mcp_metrics": mcp_metrics,
         "functional_analysis": fanalysis,
         "failing_positives": failing_pos,
     })

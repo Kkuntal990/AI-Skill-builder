@@ -174,7 +174,8 @@ def build_parser() -> argparse.ArgumentParser:
     common = lambda sp: (
         sp.add_argument("skill_dir"),
         sp.add_argument("--runs", type=int, default=3, help="Triggering runs per prompt (default 3)"),
-        sp.add_argument("--agent", default="ai-skill-builder", help="OpenClaw agent for functional runs"),
+        sp.add_argument("--agent", default=ec.FUNCTIONAL_EXECUTOR,
+                        help="OpenClaw agent for functional runs (default skill-eval-target)"),
         sp.add_argument("--per-prompt-timeout", type=int, default=240),
         sp.add_argument("--siblings", default="",
                         help="dir of co-resident skills to judge triggering against "

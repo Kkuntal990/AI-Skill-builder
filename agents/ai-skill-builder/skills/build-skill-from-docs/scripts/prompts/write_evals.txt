@@ -24,24 +24,57 @@ These SHOULD NOT trigger this skill. The valuable ones are near-misses: they sha
 - 2-3 near-miss negatives.
 - Each must be a plausible request that a careless router might mis-route TO this skill, but that a correct router would send elsewhere.
 
-## functional tests (with/without-skill content check) — assertions must be DISCRIMINATING
+## functional tests (with/without-skill content check) — write each one as a TRAP for the base model
 
-These check whether the skill's CONTENT makes the answer better. The response is graded
-with and WITHOUT the skill, so an assertion is only useful if it would **fail without the
-skill and pass with it**. Write assertions on the specific, non-obvious things THIS skill
-teaches — exact API names, flags, version-correct calls, the recommended (vs naive)
-approach, gotchas from the docs.
+These grade whether the skill's CONTENT changes the answer. Each test is run WITH and WITHOUT
+the skill, so an assertion earns its place ONLY if it would **fail without the skill and pass
+with it**. The failure mode to beat: on a well-known library the base model already emits the
+obvious-correct answer, so assertions on standard API names pass in BOTH cells and measure
+nothing (they get flagged non-discriminating, and lift reads ~0). Defeat this on purpose:
 
-- 2-3 tests, each a realistic task prompt (reuse/adapt the should_trigger prompts).
-- `must_contain` / `must_contain_any`: exact substrings a CORRECT, skill-informed answer
-  includes — prefer specifics a base model would likely miss (precise symbol/flag names,
-  the version-correct idiom), NOT generic words the base model always emits.
-- `must_not_contain`: strings that mark the WRONG/outdated/naive approach the skill exists
-  to prevent (e.g. a deprecated API, a memory-blowup pattern). This is often the most
-  discriminating check.
+**Method — predict, then trap:**
+1. For each prompt, first PREDICT what a competent base model with NO skill would answer.
+2. Locate where that prediction is WRONG, INCOMPLETE, or NAIVE — the one thing this skill
+   exists to fix: a skipped precondition, a wrong/oversized default, a deprecated API it still
+   reaches for, a memory-blowup or silent-correctness gotcha, a required call-ordering. Mine the
+   SKILL.md body's pitfalls / gotchas / "common mistakes" content for these.
+3. Assert on THAT — not on the parts the base model already gets right.
+
+**Rules:**
+- 2-3 tests, each a realistic task prompt whose correct answer HINGES on such a gotcha (reuse/
+  adapt the should_trigger prompts). If a prompt's answer has no gotcha the base model would
+  miss, it's a weak functional test — pick a different prompt.
+- `must_not_contain` is the PRIMARY discriminator and is REQUIRED on every test: name the exact
+  wrong / naive / outdated / oversized-default approach the base model reaches for and the skill
+  prevents. This is the trap — it's what flips the WITHOUT-skill cell to FAIL.
+- `must_contain` / `must_contain_any`: 1-2 exact, NON-obvious substrings the skill-correct answer
+  needs — a precise precondition call, a version-correct flag or default value. Do NOT AND
+  together several common symbols every answer emits (that fails on phrasing, not on skill value,
+  and adds noise, not discrimination). Use `must_contain_any` OR-groups when wording varies.
 - `expected_citations`: file / function / flag names the skill's content points to.
-- Avoid assertions the base model trivially satisfies — they pass in both cells and measure
-  nothing (they get flagged as non-discriminating).
+
+- BAD (base model already does all of this → non-discriminating): `must_contain`:
+  ["LoraConfig", "get_peft_model", "save_pretrained"] — every base answer names these.
+- GOOD (traps the naive default): for "QLoRA a 70B on a 24GB card", `must_contain`:
+  ["prepare_model_for_kbit_training"] + `must_not_contain`: ["full fine-tune"] — base answers
+  routinely skip the kbit-prep step (breaks the grad path), so the WITHOUT-skill cell fails it.
+
+## mcp_fallback test (ONLY if MCP SERVERS below is non-empty) — graded on tool-firing, not text
+
+If the skill declares an MCP for live docs (see MCP SERVERS), write EXACTLY ONE extra test
+that can ONLY be answered by fetching live documentation — a **beyond-references** question the
+skill's static SKILL.md + references/ deliberately cannot cover: a very recent release's exact
+API, a niche parameter's current default, a version-specific signature. The point is to force
+the skill's MCP-fallback path so we can measure whether it actually fires.
+
+- Set `"mcp_fallback": true` on this test. It is graded on whether the agent CALLS the MCP
+  (the harness measures the with/without firing delta), NOT on substrings — so `must_contain`
+  should be empty or minimal.
+- Use `must_not_contain` to catch fabrication when the agent should have looked it up but
+  didn't (e.g. a plausible-but-wrong invented flag), if you can name one.
+- The prompt must be answerable ONLY via the declared MCP — if the skill's own references
+  already contain the answer, it is NOT a valid mcp_fallback case.
+- Omit this test entirely if MCP SERVERS is "(none)".
 
 Return ONLY JSON in this schema, using the skill name literally from "SKILL NAME":
 
@@ -57,20 +90,24 @@ Return ONLY JSON in this schema, using the skill name literally from "SKILL NAME
     {"id": 2, "prompt": "<another genuinely tricky near-miss>"}
   ],
   "functional": [
-    {"id": 1, "prompt": "<a should-trigger task prompt>",
-     "must_contain": ["<exact string the RIGHT answer must include>"],
+    {"id": 1, "prompt": "<a should-trigger task prompt whose answer hinges on a gotcha>",
+     "must_contain": ["<1-2 non-obvious substrings the base model omits>"],
      "must_contain_any": [["<synonym A>", "<synonym B>"]],
-     "must_not_contain": ["<string that signals a WRONG/outdated approach>"],
+     "must_not_contain": ["<REQUIRED: the naive/wrong/default approach the base model reaches for>"],
      "expected_citations": ["<file/function/flag the skill teaches>"]},
     {"id": 2, "prompt": "<second functional task>",
-     "must_contain": ["..."], "must_not_contain": ["..."], "expected_citations": ["..."]},
+     "must_contain": ["..."], "must_not_contain": ["<REQUIRED: the trap>"], "expected_citations": ["..."]},
     {"id": 3, "prompt": "<third, optional>",
-     "must_contain": ["..."], "must_not_contain": ["..."], "expected_citations": ["..."]}
+     "must_contain": ["..."], "must_not_contain": ["<REQUIRED: the trap>"], "expected_citations": ["..."]},
+    {"id": 4, "prompt": "<beyond-references question needing live docs — ONLY if MCP SERVERS is non-empty>",
+     "mcp_fallback": true, "must_contain": [], "must_not_contain": ["<a plausible fabricated flag/default>"]}
   ]
 }
 
 ---
 SKILL NAME: {{skill_name}}
+
+MCP SERVERS (live-docs fallback the skill declares; write an mcp_fallback test only if non-empty): {{mcp_servers}}
 
 REAL SIBLING SKILLS (route near-misses toward these, don't trigger on them): {{sibling_names}}
 

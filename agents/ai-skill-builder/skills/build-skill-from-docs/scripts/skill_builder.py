@@ -870,7 +870,7 @@ def infer_intent(doc_text: str) -> str:
 
 # ── Behavioral eval (script-orchestrated; NOT an agent-turn delegation) ───────
 # eval_core is a self-contained module the builder imports and calls directly. The
-# only agent the eval spawns is the EXECUTOR (run_functional's `main`/skill-eval-target),
+# only agent the eval spawns is the EXECUTOR (run_functional's `skill-eval-target`),
 # which must be an agent because we measure agent behavior. Orchestrating the fan-out
 # from a script (here) — rather than wrapping it in one skill-tester agent turn — is the
 # Anthropic pattern for many sub-agents and avoids the long-turn orphan.
@@ -1199,16 +1199,19 @@ def write_reference(
 
 
 def write_evals(skill_name: str, skill_body: str, examples_text=None,
-                changelog_text=None, sibling_names=None) -> dict:
+                changelog_text=None, sibling_names=None, mcp_servers=None) -> dict:
     """Generate situated eval prompts + near-miss negatives (P1.2).
 
     Grounds generation in the fetched substrate — `examples_text` (tutorial-style
     tasks), `changelog_text` (API-migration prompts) — and `sibling_names` (real
-    competitor libraries the near-miss negatives should name). All optional; missing
-    context degrades gracefully to "(none)". Returns {skill_name, prompts,
+    competitor libraries the near-miss negatives should name). `mcp_servers` (P3) are
+    the live-docs MCPs the skill declares; when non-empty the model is asked for a
+    beyond-references `mcp_fallback` test that only the MCP path can answer. All optional;
+    missing context degrades gracefully to "(none)". Returns {skill_name, prompts,
     negative_prompts, functional}: negative_prompts feed the bidirectional triggering
-    eval; functional (must_contain/must_not_contain/expected_citations test cases) feeds
-    the advisory with/without-skill functional A/B run in the `full` ship-gate.
+    eval; functional (must_contain/must_not_contain/expected_citations test cases, plus
+    any mcp_fallback firing tests) feeds the advisory with/without-skill functional A/B
+    run in the `full` ship-gate.
     """
     def _clip(v, n: int) -> str:
         if isinstance(v, list):
@@ -1223,6 +1226,7 @@ def write_evals(skill_name: str, skill_body: str, examples_text=None,
         examples_text=_clip(examples_text, 1500),
         changelog_text=_clip(changelog_text, 1200),
         sibling_names=", ".join(sibling_names or []) or "(none known)",
+        mcp_servers=", ".join(mcp_servers or []) or "(none)",
     )
     raw = _strip_fences(_llm_call(prompt, max_tokens=1400, temperature=0.5))
     match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -2465,14 +2469,27 @@ def _pipeline(
     _sibs = _load_sibling_descriptions(_sib_dir, exclude_name=skill_name)
     _sibling_names = [s["name"] for s in _sibs]
 
+    # MCP capability contract for this skill (declared in frontmatter below). Computed here
+    # (not at frontmatter-assembly time) so write_evals can request a P3 mcp_fallback test
+    # only when the skill actually declares a live-docs MCP.
+    mcps = _mcp_defaults_for(sources["repo"] or None, url)
+    _mcp_servers = []
+    for _key in ("preferred", "fallback", "required"):
+        for _entry in mcps.get(_key, []) or []:
+            _srv = _entry.split("/")[0] if "/" in _entry else _entry
+            if _srv and _srv not in _mcp_servers:
+                _mcp_servers.append(_srv)
+
     # P1.2: ground eval-prompt generation in the fetched substrate (examples +
     # changelog) and the real sibling names, so prompts are situated and the
     # near-miss negatives are genuinely tricky rather than obviously irrelevant.
+    # P3: pass declared MCP servers so a beyond-references mcp_fallback test is emitted.
     evals_doc = write_evals(
         skill_name, body,
         examples_text=sources.get("examples"),
         changelog_text=sources.get("changelog"),
         sibling_names=_sibling_names,
+        mcp_servers=_mcp_servers,
     ) if include_evals else None
 
     description = _extract_description(body)
@@ -2504,8 +2521,6 @@ def _pipeline(
         coverage.append("gh-issues-question-closed")
     if args.with_version_notes and sources.get("changelog"):
         coverage.append("changelog")
-
-    mcps = _mcp_defaults_for(sources["repo"] or None, url)
 
     frontmatter = assemble_frontmatter(
         skill_name=skill_name,
@@ -2823,8 +2838,8 @@ def run_ship_gate(staging_skill_dir: Path, result: dict, args: argparse.Namespac
     bundle, (b) calls `eval_core.run_gate` directly for the BEHAVIORAL verdict (triggering
     + organic activation + advisory functional A/B, scored vs pass_bar), and (c) folds in
     its own artifact-critic quality_gate. The only agent the eval spawns is the functional
-    EXECUTOR inside run_functional (`main`) — measuring agent behavior requires an agent;
-    orchestration itself is a plain call, not a skill-tester turn. Prompt-level only (no
+    EXECUTOR inside run_functional (`skill-eval-target`) — measuring agent behavior requires
+    an agent; orchestration itself is a plain call, not a skill-tester turn. Prompt-level only (no
     task execution / GPU). Never raises: eval_core.run_gate is best-effort per signal.
     """
     evals_doc = result.get("evals") or {}
@@ -3062,8 +3077,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="M5: build into a staging dir and only promote on eval pass. The builder "
                              "calls the eval directly (eval_core.run_gate). smoke=cheap (triggering, "
                              "runs=1; ~1 min, the DEFAULT). full adds organic activation + the advisory "
-                             "functional A/B (~20 min: fans out executor agent turns — run it as an "
-                             "explicit/owned op, not a per-build default). off writes straight through.")
+                             "functional A/B (~5 min: fans out parallel skill-eval-target executor turns — "
+                             "an explicit/owned op, not a per-build default). off writes straight through.")
         sp.add_argument("--ship-anyway", action="store_true",
                         help="on ship-gate FAIL, write anyway with a gate:failed warning (never silent)")
         sp.add_argument("--baseline-agent", default="main",

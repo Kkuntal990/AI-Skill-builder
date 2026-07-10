@@ -1,6 +1,7 @@
 # Sub-agent eval orchestration — parallel, background, script-orchestrated
 
-**Status:** design (2026-07-10). Prompted by the live full-gate failure on `peft-tuning`.
+**Status:** implemented (2026-07-10) — P1–P3 shipped; see the Phasing section. Prompted by the
+live full-gate failure on `peft-tuning`.
 Governs how the Stage-1 behavioral eval fans out sub-agents. Companion to
 [stage1.md](stage1.md) and the builder's [eval-gate-plan.md](../skill-builder/eval-gate-plan.md).
 
@@ -143,13 +144,19 @@ eval mode. Grade them on the `best_case`/`stealth_use` firing delta.
 
 ## Phasing (each independently shippable, low→high risk)
 
-1. **P1 — Parallelize `run_functional`** (concurrency cap + backoff). Biggest speed win.
-2. **P2 — `full` runs in-process from the builder** (script-orchestrated `eval_core.run_gate`,
-   no orchestrator agent). Detach (`setsid`→verdict-file→poll, MLEvolve pattern) only if P1's
-   parallelism doesn't make it short enough. *(Delegation to a skill-tester turn is removed.)*
-3. **P3 — single `skill-eval-target` executor** (minimal + `context7`) for the functional A/B,
-   replacing `main`; add a few beyond-`references/` tagged cases to exercise the fallback;
-   surface `mcp_metrics` (content-lift + MCP-firing delta) in the verdict.
+1. **P1 — Parallelize `run_functional`** ✅ **done** (2026-07-10) — `ThreadPoolExecutor`
+   at `EVAL_CONCURRENCY` (env `MLEVAL_EVAL_CONCURRENCY`, default 4), keyed by
+   `(test_idx, side, run)` + bounded retry-on-empty. Biggest speed win.
+2. **P2 — `full` runs in-process from the builder** ✅ **done** — `run_ship_gate` calls
+   `eval_core.run_gate` directly (no orchestrator agent). Detachment (`setsid`→verdict-file→poll)
+   proved unnecessary once P1 cut wall-clock. *(Delegation to a skill-tester turn is removed.)*
+3. **P3 — single `skill-eval-target` executor** ✅ **done** (2026-07-10) — minimal MCP-capable
+   agent (`agents/skill-eval-target/`, bare persona + `mcporter`/context7, no content skills),
+   registered in `openclaw.json`, is now the functional-A/B executor (`FUNCTIONAL_EXECUTOR`,
+   was `main`). `write_evals` emits a tagged beyond-`references/` `mcp_fallback` case whenever the
+   skill declares an MCP; `run_functional` splits content-lift (content tests only) from the
+   MCP-firing **delta** (with−without, both cells MCP-capable) and the fallback-subset firing;
+   `run_gate` surfaces all of it as `mcp_metrics`. Advisory (never blocks the ship).
 4. **P4 — (optional)** background-subagent framing + grader-revision loop ("Performance
    Outcomes").
 
@@ -158,8 +165,27 @@ eval mode. Grade them on the `best_case`/`stealth_use` firing delta.
 - **Session limits are the real ceiling** — the concurrency cap must stay conservative and
   retry on `FailoverError` (we hit rolling-window session limits during validation).
 - **Parallelizing changes trial order/RNG** — fine for independent trials; note it in results.
-- **`skill-eval-target` needs registering** (openclaw.json + a repo agent dir), like
-  `evaluate-skill`.
+- **`skill-eval-target` is registered** (openclaw.json `agents.list` + repo agent dir
+  `agents/skill-eval-target/`). It reaches context7 via the bundled `mcporter` skill (the
+  OpenClaw MCP config is global — there is no per-agent `mcpServers` field — so scoping is via
+  the agent's whitelisted skills/binaries, as the old `skill-tester` did). Override the executor
+  with `MLEVAL_FUNCTIONAL_EXECUTOR` (e.g. back to `main`) if it isn't registered.
+- **MCP-firing capture across the gateway.** `_run_agent` injects a sidecar `mcporter` PATH
+  wrapper, but agent turns run in the gateway daemon (not the client subprocess), so the
+  sidecar log stays empty; likewise the skill's SKILL.md tells the agent to call *native*
+  `context7__…` tools, but `skill-eval-target` reaches context7 via the `mcporter` **bash**
+  route — so `tool_summary.tools` is empty too. Net: the **reply-text / outcome** signal is
+  the only reliable ground truth for gateway-routed runs. Validated live on peft (2026-07-10):
+  the executor *did* query context7 ("Queried live PEFT docs (context7, `/huggingface/peft`)…
+  use_rslora default is False") and answered correctly, but the first run scored it
+  `clean_miss` because the narration patterns were too narrow. Fixed in `_extract_tool_signals`:
+  a resolved **library-id path** (`/org/project`, a resolve-library-id *return value*, gated on
+  a declared-server mention so local file paths can't spoof it) now counts as actual-call
+  ground truth, plus the realistic narration phrases. The with−without delta holds either way.
+- **`run_gate` doesn't persist per-test reply text** — only aggregate `mcp_metrics`. Debugging
+  a zero delta means re-running the functional A/B standalone (`eval_skill.py functional`) to
+  see replies. A cheap future win: dump the full functional result (with `reply_text`) into the
+  bundle's `evals/`.
 - **`full` stays opt-in.** Default is `smoke`; only an explicit `full` pays the fan-out cost.
 
 ## Sources
