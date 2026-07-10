@@ -3128,11 +3128,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="P0.3: probe the base model WITHOUT the skill on intent-derived "
                              "questions and steer the build toward observed gaps (makes live "
                              "agent calls; off by default)")
-        sp.add_argument("--ship-gate", choices=["off", "smoke", "full"], default="full",
+        sp.add_argument("--ship-gate", choices=["off", "smoke", "full"], default="smoke",
                         help="M5: build into a staging dir and only promote on eval pass — DELEGATED "
-                             "to the skill-tester agent. smoke=cheap (triggering, runs=1); "
-                             "full adds organic activation + the advisory functional A/B. "
-                             "Default full; use off to write straight through (legacy behavior).")
+                             "to the skill-tester agent. smoke=cheap (triggering, runs=1; ~1 min, the "
+                             "DEFAULT — reliable through the delegation). full adds organic activation + "
+                             "the advisory functional A/B (~23 min: 24 nested agent turns — run it as an "
+                             "explicit/owned op, not a per-build default). off writes straight through.")
         sp.add_argument("--ship-anyway", action="store_true",
                         help="on ship-gate FAIL, write anyway with a gate:failed warning (never silent)")
         sp.add_argument("--eval-agent", default="skill-tester",
