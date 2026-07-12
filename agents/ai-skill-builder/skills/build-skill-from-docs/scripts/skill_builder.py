@@ -176,6 +176,9 @@ _HF_DOCS_MAP = {
         "evaluate": "huggingface/evaluate",
         "safetensors": "huggingface/safetensors",
         "hub": "huggingface/huggingface_hub",
+        # Not under the huggingface/ org — the docs live on HF but the repo doesn't.
+        "bitsandbytes": "bitsandbytes-foundation/bitsandbytes",
+        "sentence_transformers": "UKPLab/sentence-transformers",
     },
 }
 
@@ -197,6 +200,7 @@ _DOCS_DOMAIN_MAP = {
     "docs.haystack.deepset.ai": "deepset-ai/haystack",
     "docs.guardrailsai.com": "guardrails-ai/guardrails",
     "docs.lmdeploy.com": "InternLM/lmdeploy",
+    "deepspeed.ai": "microsoft/DeepSpeed",
 }
 
 
@@ -2238,8 +2242,12 @@ def _gather_sources(
     with_version_notes: bool,
     with_troubleshooting: bool = False,
     with_community: bool = False,
+    repo_override: str = "",
 ) -> dict:
-    repo = resolve_repo(url)
+    # --repo override wins over URL-based detection (covers packages whose repo the
+    # docs-domain / HF-org heuristics can't derive, e.g. bitsandbytes-foundation, or a
+    # non-HF docs site). Enables clean library_version marking regardless of URL shape.
+    repo = (repo_override or "").strip() or resolve_repo(url)
     # Optimization: if the user passed a GitHub repo root, skip the HTML fetch
     # (which would pull mostly GitHub chrome) and use the README via `gh api`
     # as both the doc and readme source. Single fetch, clean markdown.
@@ -2307,6 +2315,7 @@ def _pipeline(
         with_version_notes,
         with_troubleshooting,
         with_community,
+        repo_override=getattr(args, "repo", "") or "",
     )
     include_evals = not args.no_evals
 
@@ -3110,6 +3119,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     def _add_build_flags(sp: argparse.ArgumentParser) -> "None":
         sp.add_argument("--name", default=None)
+        sp.add_argument("--repo", default="",
+                        help="owner/repo override for provenance/version detection when the docs "
+                             "URL doesn't resolve to a GitHub repo (e.g. bitsandbytes-foundation/bitsandbytes)")
         sp.add_argument("--with-pitfalls", action="store_true",
                         help="Closed bug issues distilled into pitfalls.md")
         sp.add_argument("--with-troubleshooting", action="store_true",
