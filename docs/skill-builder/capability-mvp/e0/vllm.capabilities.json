@@ -1,0 +1,213 @@
+{
+  "schema_version": "0.2",
+  "skill_name": "serving-llms-vllm",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/12-inference-serving/vllm",
+    "commit": "773a52944ba4747a18bd4ae9ade53fff041adcbc",
+    "fetched_at": "2026-07-15T00:00:00Z"
+  },
+  "capabilities": [
+    {
+      "id": "vllm-hardware-sizing",
+      "kind": "reference",
+      "title": "GPU sizing for vLLM by model scale",
+      "summary": "Hardware requirements table: which GPU count/class serves which model size, and when quantization becomes mandatory.",
+      "applicability": {
+        "when": [
+          "Sizing GPUs for a planned vLLM deployment.",
+          "Checking whether a model fits the available GPUs before serving it."
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "7B-13B models: 1x A10 (24GB) or A100 (40GB).",
+          "30B-40B models: 2x A100 (40GB) with tensor parallelism.",
+          "70B+ models: 4x A100 (40GB) or 2x A100 (80GB); use AWQ/GPTQ quantization.",
+          "Platforms: NVIDIA (primary), AMD ROCm, Intel GPUs, TPUs."
+        ]
+      },
+      "delivery": { "stages": ["generate"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#hardware-requirements" }
+      ]
+    },
+    {
+      "id": "vllm-production-api-deployment",
+      "kind": "workflow",
+      "title": "Deploy a production OpenAI-compatible vLLM endpoint with monitoring",
+      "summary": "Configure vllm serve by model size, load-test, enable Prometheus metrics, deploy via Docker, and verify latency/throughput targets.",
+      "applicability": {
+        "when": [
+          "Deploying a production LLM API (100+ req/sec).",
+          "Serving OpenAI-compatible endpoints for multi-user applications (chatbots, assistants).",
+          "Low latency with high throughput is required from a persistent service."
+        ],
+        "avoid_when": [
+          "CPU/edge or single-user inference — use llama.cpp.",
+          "Research, prototyping, or one-off generation — use HuggingFace transformers.",
+          "NVIDIA-only absolute-maximum performance — consider TensorRT-LLM.",
+          "Already committed to the HuggingFace serving ecosystem — consider Text-Generation-Inference.",
+          "One-shot processing of a fixed dataset — use offline batch inference instead of a server."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu", "network", "persistent-service"],
+        "hardware": { "min_gpu_count": 1 },
+        "artifacts": ["ml:model"]
+      },
+      "produces": ["vllm:serving-endpoint", "vllm:prometheus-metrics"],
+      "depends_on": ["vllm-hardware-sizing"],
+      "procedure": {
+        "steps": [
+          "Configure server flags by model size: 7B-13B single GPU with --gpu-memory-utilization 0.9 --max-model-len 8192; 30B-70B add --tensor-parallel-size 4 and --quantization awq; production adds --enable-prefix-caching --enable-metrics --metrics-port 9090 --host 0.0.0.0.",
+          "Load-test with limited traffic before production (locust) and check latency/throughput targets.",
+          "Enable monitoring: scrape Prometheus metrics on :9090 — vllm:time_to_first_token_seconds, vllm:num_requests_running, vllm:gpu_cache_usage_perc.",
+          "Deploy via Docker (vllm/vllm-openai image, --gpus all, port 8000) for consistent environments.",
+          "Verify performance: TTFT < 500ms for short prompts, throughput above target, GPU utilization > 80%, no OOM errors in logs."
+        ],
+        "reference_files": [
+          "references/server-deployment.md",
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "TTFT (time to first token) < 500ms for short prompts.",
+        "Throughput exceeds the target (reference: > 100 req/sec).",
+        "GPU utilization > 80% under load.",
+        "vllm:* Prometheus metrics are scrapeable on the metrics port."
+      ],
+      "recovery": [
+        "OOM during model loading: lower --gpu-memory-utilization to 0.7 and --max-model-len to 4096, or serve a quantized model (--quantization awq).",
+        "Slow first token (TTFT > 1s): --enable-prefix-caching for repeated prompts; --enable-chunked-prefill for long prompts.",
+        "Low throughput (<50 req/sec): raise --max-num-seqs to 512 and confirm GPU utilization > 80% via nvidia-smi.",
+        "Model not found: add --trust-remote-code for custom models.",
+        "Slower than expected with tensor parallelism: --tensor-parallel-size must be a power of 2."
+      ],
+      "delivery": { "stages": ["generate", "refine", "debug"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-1-production-api-deployment" },
+        { "kind": "skill-package", "locator": "SKILL.md#when-to-use-vs-alternatives" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues" }
+      ]
+    },
+    {
+      "id": "vllm-offline-batch-inference",
+      "kind": "procedure",
+      "title": "Offline batch inference without a server",
+      "summary": "Run the LLM engine in-process over a full prompt list in one generate call — vLLM batches internally; no server, no manual chunking.",
+      "applicability": {
+        "when": [
+          "Processing a large set of prompts offline (dataset scoring, generation for evaluation).",
+          "Batch generation inside a pipeline where a persistent server adds needless overhead."
+        ],
+        "avoid_when": [
+          "A persistent multi-user endpoint is needed — use the production deployment workflow.",
+          "CPU-only or single-prompt interactive use — use llama.cpp or HuggingFace transformers."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu"],
+        "artifacts": ["ml:model", "ml:dataset"]
+      },
+      "produces": ["ml:inference-outputs"],
+      "procedure": {
+        "steps": [
+          "Load all prompts into a list.",
+          "Construct the engine once: LLM(model=..., tensor_parallel_size=N, gpu_memory_utilization=0.9, max_model_len=...).",
+          "Define SamplingParams(temperature, top_p, max_tokens, stop=[...]).",
+          "Pass the FULL prompt list to a single llm.generate(prompts, sampling) call — vLLM handles batching internally; do not chunk manually.",
+          "Extract output.outputs[0].text (and token counts) per result and write JSONL."
+        ],
+        "reference_files": ["references/optimization.md"]
+      },
+      "validation": [
+        "One generated output per input prompt (results length equals prompts length).",
+        "No manual chunking loop wraps llm.generate."
+      ],
+      "recovery": [
+        "OOM: lower gpu_memory_utilization and/or max_model_len, or use a quantized model."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-2-offline-batch-inference" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues" }
+      ]
+    },
+    {
+      "id": "vllm-quantized-serving",
+      "kind": "procedure",
+      "title": "Serve a quantized model when the full-precision model exceeds VRAM",
+      "summary": "Pick AWQ/GPTQ/FP8, use a pre-quantized checkpoint, launch with --quantization, and verify accuracy against the unquantized baseline.",
+      "applicability": {
+        "when": [
+          "The full-precision model does not fit available GPU memory (e.g., 70B-class on limited VRAM).",
+          "A larger model is needed on fewer/smaller GPUs."
+        ],
+        "avoid_when": [
+          "The model already fits comfortably unquantized — quantization adds an accuracy-verification burden without a memory need."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu"],
+        "artifacts": ["ml:quantized-model"]
+      },
+      "produces": ["vllm:serving-endpoint"],
+      "expected_outcomes": [
+        "A 70B-class model serves in ~40GB VRAM with AWQ."
+      ],
+      "procedure": {
+        "steps": [
+          "Choose the method: AWQ (best for 70B, minimal accuracy loss), GPTQ (widest model support), FP8 (fastest on H100).",
+          "Use a pre-quantized checkpoint from HuggingFace (e.g., TheBloke/*-AWQ) rather than quantizing yourself.",
+          "Launch: vllm serve <quantized-model> --quantization awq --gpu-memory-utilization 0.95 (tensor-parallel as needed).",
+          "Verify accuracy: compare quantized vs non-quantized responses on task-representative samples."
+        ],
+        "reference_files": ["references/quantization.md"]
+      },
+      "validation": [
+        "The model loads within available VRAM.",
+        "Task-specific output quality is comparable to the non-quantized baseline on sampled prompts."
+      ],
+      "recovery": [
+        "Still OOM: lower --gpu-memory-utilization / --max-model-len or increase tensor parallelism."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["applicability.avoid_when"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-3-quantized-model-serving" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues" }
+      ]
+    },
+    {
+      "id": "vllm-serving-triage",
+      "kind": "diagnostic",
+      "title": "Triage an underperforming vLLM endpoint",
+      "summary": "Read-only checks — Prometheus metrics, GPU utilization, logs — that localize latency/throughput problems to a known remediation lever.",
+      "applicability": {
+        "when": [
+          "A running vLLM endpoint underperforms (TTFT > 1s or throughput < 50 req/sec) or errors under load."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"]
+      },
+      "produces": ["ml:diagnostic-report"],
+      "procedure": {
+        "steps": [
+          "Scrape :9090/metrics and read vllm:time_to_first_token_seconds (latency), vllm:num_requests_running (load), vllm:gpu_cache_usage_perc (KV-cache pressure).",
+          "Check GPU utilization with nvidia-smi — should be > 80% under load.",
+          "Check server logs for OOM errors.",
+          "Map symptom to lever: slow TTFT -> prefix caching / chunked prefill; low throughput -> --max-num-seqs, tensor-parallel power-of-2; slow generation -> speculative decoding (--speculative-model)."
+        ],
+        "reference_files": ["references/troubleshooting.md"]
+      },
+      "delivery": { "stages": ["debug"] },
+      "synthesized_fields": ["produces"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-1-production-api-deployment" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues" }
+      ]
+    }
+  ]
+}

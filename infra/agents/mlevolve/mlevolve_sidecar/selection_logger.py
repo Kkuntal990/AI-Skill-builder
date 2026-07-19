@@ -90,3 +90,26 @@ def log_node_selection(**fields) -> None:
     rec = {"ts": time.time(), "event": "node_selection", **_ctx()}
     rec.update(fields)
     _write(rec)
+
+
+def log_capability_node(**fields) -> None:
+    """One record per codegen node in the capability delivery modes (HLD §11).
+
+    The capability-linker analogue of ``log_node_selection`` — same append-only
+    file, same best-effort policy, same ``_ctx()`` stamp (which already carries
+    ``sidecar_version``) — but with ``event: "capability_node"`` so linker
+    telemetry is separable from legacy per-node selection in one ``grep``. Callers
+    pass the HLD §11 fields as kwargs: ``capability_schema_version``,
+    ``delivery_mode``, ``stage``, ``loaded_skill_count``,
+    ``loaded_capability_count``, node-profile facts (``hardware``,
+    ``runtime_capabilities`` — no secrets, no full source), ``candidate_ids``,
+    ``hard_filtered`` ([{id, reason}]), ``selector_selected_ids``,
+    ``decline_reason``, ``selector_error``, ``dep_added_ids``, ``dep_dropped_ids``,
+    ``rendered_order``, ``selected_reference_files``, ``injected_chars``,
+    ``truncated``, ``legacy_fallback`` (normally False). Unknown keys are recorded
+    verbatim — the schema is additive. A failed write is dropped silently;
+    telemetry must never break codegen.
+    """
+    rec = {"ts": time.time(), "event": "capability_node", **_ctx()}
+    rec.update(fields)
+    _write(rec)

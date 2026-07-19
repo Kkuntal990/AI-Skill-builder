@@ -1,0 +1,399 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "transformer-lens-interpretability",
+  "scores": {
+    "claims_audited": 74,
+    "label_histogram": {
+      "supported": 50,
+      "entailed": 23,
+      "unsupported": 1
+    },
+    "support_rate_all": 0.9865,
+    "support_rate_strict": 0.9818,
+    "strict_claims": 55,
+    "fabrications": [
+      {
+        "unit": "direct-logit-attribution-by-head",
+        "path": "recovery[0]",
+        "note": "The package's LayerNorm example (model.blocks[layer].ln2) fixes MLP pre-activation via W_in, an unrelated computation from this workflow's z @ W_O @ W_U head-to-logit path; applying that specific symbol as the fix here is a mismatched borrowing, not a direct inference \u2014 the package never shows ln2 correction applied to this workflow's computation."
+      }
+    ],
+    "flagged_but_unsupported": [],
+    "applicability_correct_rate": 1.0,
+    "validation_usable_rate": 1.0,
+    "units_with_bad_locators": []
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "select-transformerlens-vs-alternatives",
+        "claims": [
+          {
+            "path": "summary",
+            "label": "entailed",
+            "note": "package says 'GPT-style language models' / 'HookPoints on every activation'; 'decoder-transformer' is a synonym inference, not verbatim."
+          },
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "entailed",
+            "note": "'GPT-style / decoder transformer' paraphrases 'GPT-style' via synonym, not verbatim wording."
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "load-hooked-transformer",
+        "claims": [
+          {
+            "path": "summary",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "loading a model is the first step of any analysis; not stated as a rule verbatim."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "self-flagged in synthesized_fields; inverse of the supported-models table."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python is trivial; 'network' for downloading pretrained weights is inferred, not stated explicitly."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "'ml:model' is a taxonomy tag for the returned HookedTransformer, not a package term."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "entailed",
+            "note": "fold_ln/center_writing_weights/center_unembed=True is supported; 'changes weight semantics for downstream analysis' is an added interpretive consequence, not stated verbatim."
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "package states HF_TOKEN is needed for gated models but never describes a '401'/download-fails symptom."
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "cache-activations",
+        "claims": [
+          {
+            "path": "summary",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "'ml:model' artifact dependency is a categorization of the code's implicit prerequisite, not a stated requirement."
+          },
+          {
+            "path": "produces",
+            "label": "supported",
+            "note": "ActivationCache is a literal, documented class name."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "activation-patching-causal-tracing",
+        "claims": [
+          {
+            "path": "summary",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "inverse of the stated checklist requirement 'define minimally-differing clean/corrupted inputs'."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "model artifact dependency inferred from code order, not explicitly stated as a requirement."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "'ml:diagnostic-report' is a taxonomy tag for the heatmap output, not a package term."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "package prints baseline clean/corrupted metrics but never frames 'differ' as an explicit validation check."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "directional restoration toward clean value is the logical premise of the technique, not stated as a validation criterion."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "direct-logit-attribution-by-head",
+        "claims": [
+          {
+            "path": "summary",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "model artifact dependency inferred from code order."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "'ml:diagnostic-report' taxonomy tag, not a package term."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "'finite' sanity check is an added implementation detail, not stated."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "'align with observed prediction direction' is interpretive framing beyond the bare 'validate with ablation' checklist item."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "unsupported",
+            "note": "The package's LayerNorm example (model.blocks[layer].ln2) fixes MLP pre-activation via W_in, an unrelated computation from this workflow's z @ W_O @ W_U head-to-logit path; applying that specific symbol as the fix here is a mismatched borrowing, not a direct inference \u2014 the package never shows ln2 correction applied to this workflow's computation."
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "detect-induction-heads",
+        "claims": [
+          {
+            "path": "summary",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "'copy pattern' characterization of [A][B]...[A]->[B] is a reasonable gloss, not a term used in the package."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "model artifact dependency inferred from code order."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "'ml:diagnostic-report' taxonomy tag, not a package term."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "'concentrate on a few heads' and 'reproducible' are added interpretive criteria; package only computes topk without describing a distribution check or determinism claim."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "failure mode (sequence too short / not repeated) is inferred from the code's exact-repetition setup, not stated as an issue."
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}

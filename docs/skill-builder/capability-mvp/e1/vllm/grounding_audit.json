@@ -1,0 +1,571 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "serving-llms-vllm",
+  "scores": {
+    "claims_audited": 114,
+    "label_histogram": {
+      "supported": 89,
+      "entailed": 24,
+      "unsupported": 1
+    },
+    "support_rate_all": 0.9912,
+    "support_rate_strict": 0.9898,
+    "strict_claims": 98,
+    "fabrications": [
+      {
+        "unit": "offline-batch-inference",
+        "path": "applicability.when[2]",
+        "note": "'ML pipeline' is never mentioned anywhere in SKILL.md or references; this is an invented usage scenario."
+      }
+    ],
+    "flagged_but_unsupported": [],
+    "applicability_correct_rate": 1.0,
+    "validation_usable_rate": 0.8,
+    "units_with_bad_locators": [
+      "launch-vllm-openai-server",
+      "select-quantization-method",
+      "serve-quantized-model"
+    ]
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "choose-vllm-vs-alternatives",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[3]",
+            "label": "entailed",
+            "note": "Merges two separate stated bullets ('limited GPU memory but need large models' and 'need low latency with high throughput') into one conjunctive condition not phrased that way in the package."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[3]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "launch-vllm-openai-server",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Offline batch (Workflow 2) is presented as a distinct in-process alternative; the package never states it as a contraindication for the server workflow specifically."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "entailed",
+            "note": "Inferred from the 'HuggingFace transformers for research/one-off generation' alternative bullet, not stated as a reason to avoid the server workflow."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python/gpu/persistent-service are jointly implied by the CLI/server examples and hardware section but never listed together as requirements."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "'vllm:serving-endpoint' is an invented taxonomy tag standing in for the OpenAI-compatible server described in the text."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Package shows a chat-completion example printing content but never states a 'non-empty content' check as a validation step."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": false
+      },
+      {
+        "id": "offline-batch-inference",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "entailed",
+            "note": "'for evaluation' is an added framing; the package only says 'without server overhead', not specifically evaluation."
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "unsupported",
+            "note": "'ML pipeline' is never mentioned anywhere in SKILL.md or references; this is an invented usage scenario."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Reasonable contrast with the server workflow but not a stated contraindication for this workflow."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "entailed",
+            "note": "Not stated; inferred contrast with batch processing."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python/gpu are implied by the code sample (Python API, tensor_parallel_size) but never stated as requirements."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "'ml:inference-outputs' is an invented tag standing in for the results.jsonl file the workflow writes."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Follows logically from generate(prompts) producing one output per prompt, but the package never states this as a check."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Reasonable but not a stated validation check in the workflow text."
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "select-quantization-method",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": false
+      },
+      {
+        "id": "serve-quantized-model",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "Inferred from VRAM comparison tables (FP16 vs quantized sizes) rather than a directly stated condition."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Inverse of the stated FP16 'sufficient GPU memory / best accuracy' condition, not stated as an avoid-condition for this unit."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python/gpu/persistent-service jointly implied by the vllm serve examples, never stated as a requirements list."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "Invented taxonomy tag for the serving endpoint the workflow launches."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": false,
+        "source_locators_resolve": false
+      },
+      {
+        "id": "resolve-oom-errors",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Reasonable scope boundary but not stated verbatim as a contraindication."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU requirement obvious from context but never stated as a formal requirement."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Combines three separate ladder steps into one composite recovery action not stated as a combination in the package."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "tune-serving-throughput",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "entailed",
+            "note": "General framing of the tuning guide's context, not a stated applicability condition."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Reasonable prerequisite ordering vs. the OOM unit, not stated in the package."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "entailed",
+            "note": "Reasonable scope boundary, not stated verbatim."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU/persistent-service jointly implied by the serving context, never stated as a requirements list."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[2]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[6]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}

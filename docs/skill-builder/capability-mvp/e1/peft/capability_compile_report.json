@@ -1,0 +1,35 @@
+{
+  "skill_name": "peft-fine-tuning",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 29507,
+      "response_chars": 18103,
+      "units": 7,
+      "validator_errors": [],
+      "validator_warning_count": 0
+    }
+  ],
+  "validator_warnings": [],
+  "stats": {
+    "units": 7,
+    "kinds": {
+      "reference": 3,
+      "procedure": 3,
+      "diagnostic": 1
+    },
+    "units_with_avoid_when": 6,
+    "units_with_depends_on": 2,
+    "synthesized_field_instances": {
+      "delivery.stages": 7,
+      "applicability.avoid_when": 4,
+      "requires.runtime": 3,
+      "produces": 1
+    }
+  }
+}

@@ -1,0 +1,45 @@
+You are auditing whether a skill's COMPILED capability units cover the solvable
+issues its documentation teaches. For each issue below, decide whether a compiled
+unit would ACTUALLY be delivered to a per-node agent facing that issue.
+
+Skill: {{skill_name}}
+
+=== COMPILED CAPABILITY UNITS (the full inventory) ===
+{{units_catalog_json}}
+
+Each unit has: id, kind, title, summary, applicability.when / avoid_when, and
+delivery.stages (the pipeline stages at which the unit is even eligible).
+
+=== SOLVABLE ISSUES (extracted from the source, independently) ===
+{{issues_json}}
+
+For EACH issue, act as the per-node capability SELECTOR would: an issue is COVERED
+only if there is a unit that (a) semantically addresses THIS issue's fix — not just
+the same broad topic — AND (b) is actually eligible at one of the issue's stages
+(the unit's delivery.stages overlaps the issue's stages) AND (c) is not ruled out by
+its own applicability.avoid_when for this situation.
+
+Be STRICT and honest — this audit exists to FIND gaps:
+  - "same library / same broad area" is NOT coverage. A unit about multi-GPU
+    inference sharding does NOT cover a single-GPU training-OOM issue.
+  - A unit whose delivery.stages excludes every stage of the issue does NOT cover it
+    (it would be hard-filtered out before the selector ever sees it) — set
+    stage_gated=true in that case.
+  - If the only related unit exists but its applicability/stage scoping means a
+    selector could not surface it for this issue, covered=false.
+  - Prefer covered=false when genuinely unsure; a false "covered" hides a real gap.
+
+Return ONLY a single JSON object (no prose, no code fence):
+{
+  "mappings": [
+    {
+      "issue_id": "must exactly match an issue id above",
+      "covered": true | false,
+      "covered_by": "unit-id that a selector would deliver, or \"NONE\"",
+      "stage_gated": true | false,
+      "reason": "one line: why this unit covers it, or why nothing does"
+    }
+  ]
+}
+Every issue id must appear exactly once. Use "NONE" for covered_by whenever
+covered=false.

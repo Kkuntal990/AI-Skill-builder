@@ -4,9 +4,12 @@ Entry point for the **skill-builder** system: the OpenClaw agent that turns a Py
 package's documentation URL into an installable, progressive-disclosure `SKILL.md`.
 Start here, then follow the map into the detailed design and evaluation docs.
 
-**Current version:** builder `2.1.0` (Skills-3.0 — intent capture + contract-threaded
+**Current version:** builder `2.3.0` (Skills-3.0 — intent capture + contract-threaded
 references + P3 conditional-gating critic). Provenance is stamped into every generated
-skill's frontmatter (`metadata.openclaw.source.builder_version`).
+skill's frontmatter (`metadata.openclaw.source.builder_version`). Since then, `2.2.0` added
+library-docs version + `docs_sha256` to that provenance, and `2.3.0` added an **experimental,
+flag-gated capability compiler** (`--emit-capabilities` / `compile-existing`) — the mainline
+Skills-3.0 build behavior is unchanged and remains the default.
 
 ---
 
@@ -29,6 +32,8 @@ the skill artifact; MCP is a build-time fetcher and a runtime tail-coverage fall
 | Doc | What it covers |
 |---|---|
 | [hld.md](hld.md) | **High-level design.** Architecture, the full pipeline (RESOLVE → INTENT → PLAN → WRITE → CRITIC/REPAIR → BUILD CONTRACT → SYNTHESIZE → REFERENCE-SCAN → TRIGGERING → VALIDATE → WRITE), MCP seams, sources ingested, URL handling, generated-skill structure, subcommands, and the inlined eval-methodology spec. |
+| [capability-linker-mvp-hld.md](capability-linker-mvp-hld.md) | **Experimental MVP HLD.** Source-grounded capability artifact + MLEvolve node-linking path, with representation, build-fidelity, replay, and live-pilot gates. Behind flags and NOT part of the production builder contract; the build + runtime are now implemented (see the plan for status). |
+| [capability-linker-mvp-plan.md](capability-linker-mvp-plan.md) | **Refined MVP plan + build status.** Source-verified literature positioning (residual gap + mandatory narrowings; governance-not-delivery framing), AI-Research-SKILLs corpus feasibility, schema 0.2, and the E0–E2 → gated-pilot work plan. **Status (2026-07-18): W1–W6+ done** — E0/E1/deterministic-E2 pass, sidecar 1.1.0 capability runtime built (88 tests), and the `--with-selector` LLM pass measured an **82.37% per-node exposure reduction** (≥30% gate PASS, 0 masked failures, abstains on debug/explore); node-level gold precision/recall + the gated E3 pilot are pending. |
 | [plan.md](plan.md) | **Phase history + open items.** Phase 1.0 → 2.1 → 3.0 progression, verified-end-to-end table, deferred work (R1/R3/R4/R6/R7/R9), and the invocation cheat sheet. |
 | [skill-shape-principles.md](skill-shape-principles.md) | **What content a skill should carry** — required sections, inline per-workflow MCP triggers, "a precondition travels with its action", scripts-vs-templates, auto-ToC, anti-patterns. |
 | [skill-reliability-checklist.md](skill-reliability-checklist.md) | **The reliability bar the creator enforces** — P0 hard gates + P1–P4 quality checks, each tagged machine-enforceable (`det`) or LLM-checkable (`llm`), sourced to Anthropic-primary / peer-reviewed / derived. |
@@ -77,11 +82,13 @@ removed 2026-07-10 — see below). It also bundles operational skills beyond the
 agents/ai-skill-builder/skills/build-skill-from-docs/
 ├── SKILL.md                  the agent's tool definition (pipeline + flags)
 ├── scripts/
-│   ├── skill_builder.py      build pipeline (BUILDER_VERSION = 2.1.0); calls eval_core.run_gate directly
+│   ├── skill_builder.py      build pipeline (BUILDER_VERSION = 2.3.0); calls eval_core.run_gate directly
 │   ├── eval_core.py          self-contained eval harness (triggering judge, activation, functional,
 │   │                         optimize_description, run_gate, baseline_probe)
 │   ├── eval_skill.py         CLI over eval_core (triggering/functional/activation/all/gate/
 │   │                         baseline-probe/optimize-description/report/pass-bar)
+│   ├── capability_compiler.py   experimental capability compiler (skill -> capabilities.json, schema 0.2)
+│   ├── capability_grounding.py  experimental grounding critic for compiled capabilities
 │   └── prompts/*.txt         per-phase LLM prompts (intent_capture, plan_structure, write_skill_body,
 │                             critique_skill, repair_skill_body, write_reference, improve_description, …)
 └── references/               authoring rules the validator enforces

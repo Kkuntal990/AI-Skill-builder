@@ -1,0 +1,402 @@
+{
+  "capabilities": [
+    {
+      "id": "lora-fine-tune",
+      "kind": "procedure",
+      "title": "Fine-tune a model with plain LoRA",
+      "summary": "Train low-rank adapters on a frozen base model and save only the adapter weights (~MBs).",
+      "applicability": {
+        "when": [
+          "Parameter-efficiently fine-tuning an LLM or diffusion model on a downstream task without touching all weights",
+          "The bf16/fp16 base model fits in GPU memory (memory is not the binding constraint)",
+          "No PEFT method has been chosen, or LoRA is the chosen default"
+        ],
+        "avoid_when": [
+          "The bf16 base + LoRA + optimizer state does not fit in VRAM \u2014 use QLoRA instead",
+          "The task is the RL/preference-optimization loop itself (PPO, DPO, reward models) \u2014 use trl (PEFT only supplies the adapter trl trains)"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:adapter-checkpoint"
+      ],
+      "expected_outcomes": [
+        "Performance comparable to full fine-tuning at a fraction of the compute, memory, and storage cost",
+        "Adapter checkpoint is tiny (e.g. ~19MB vs ~11GB for the full base model)"
+      ],
+      "procedure": {
+        "steps": [
+          "Load the base model and tokenizer (e.g. AutoModelForCausalLM.from_pretrained).",
+          "Build a LoraConfig with task_type matching the head (e.g. TaskType.CAUSAL_LM), plus r, lora_alpha, and target_modules; wrap the base with get_peft_model.",
+          "Call model.print_trainable_parameters() to confirm the adapter wrapped \u2014 the trainable fraction should be small (often <1%).",
+          "Train with the Transformers Trainer (or TRL SFTTrainer) exactly as you would the base model.",
+          "Save the adapter with model.save_pretrained(out_dir) \u2014 only the adapter weights are written."
+        ],
+        "reference_files": [
+          "references/lora-methods.md"
+        ]
+      },
+      "validation": [
+        "print_trainable_parameters() reports a small trainable fraction (often <1%), not 0",
+        "save_pretrained writes an adapter directory that is only ~MBs, not the size of the full model",
+        "The adapter reloads onto the base with PeftModel.from_pretrained(base_model, out_dir)"
+      ],
+      "recovery": [
+        "print_trainable_parameters() reports 0 trainable params -> the LoraConfig target_modules or task_type is wrong for this architecture",
+        "The adapter underfits -> raise r (start low, e.g. 8 or 16, and increase only if needed)"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#fine-tune-a-model-with-lora"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/lora-methods.md"
+        }
+      ],
+      "synthesized_fields": [
+        "validation",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "loraconfig-core-parameters",
+      "kind": "reference",
+      "title": "LoraConfig core parameters (r, lora_alpha, target_modules, init)",
+      "summary": "The four knobs that govern every LoRA-family run \u2014 capacity, scaling, placement, initialization \u2014 and how to set them.",
+      "applicability": {
+        "when": [
+          "Building a LoraConfig for LoRA, DoRA, AdaLoRA, or a similar reparameterization adapter",
+          "Deciding rank, scaling factor, which modules to adapt, or weight initialization"
+        ],
+        "avoid_when": [
+          "Using a soft-prompt method (prompt/prefix/P-tuning) \u2014 those use their own config classes and num_virtual_tokens, not LoraConfig"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Set r, the rank of the update matrices A/B \u2014 common values 8/16/32/64; trainable-parameter count grows roughly linearly with r; start low and raise only if the adapter underfits.",
+          "Set lora_alpha, the scaling factor; the injected delta is scaled by lora_alpha/r; a common heuristic is lora_alpha = 2*r (e.g. r=16, lora_alpha=32).",
+          "Set target_modules to the module name suffixes to adapt (e.g. [\"q_proj\", \"v_proj\"]) or a regex string; if omitted, PEFT applies a model-type default (often the attention query/value projections).",
+          "Leave init_lora_weights=True for zero-init (B zeros, A Kaiming-uniform) so training starts from the unmodified base; use \"gaussian\" or PiSSA/OLoRA/LoftQ strings to initialize from a base-weight decomposition for faster convergence.",
+          "Optionally set task_type to match the head (CAUSAL_LM, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS, QUESTION_ANS, FEATURE_EXTRACTION), lora_dropout for regularization, use_rslora for rank-stabilized scaling (lora_alpha/sqrt(r)) at higher ranks, use_dora to enable DoRA, and modules_to_save to fully train and save extra modules such as a fresh classifier head."
+        ],
+        "reference_files": [
+          "references/lora-methods.md"
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "references/lora-methods.md"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "qlora-small-gpu",
+      "kind": "procedure",
+      "title": "Fit a large model on a small GPU with QLoRA (4-bit base + LoRA)",
+      "summary": "Load the frozen base in 4-bit, make it trainable, and train a full-precision LoRA adapter on top.",
+      "applicability": {
+        "when": [
+          "The full-precision/bf16 base + LoRA + optimizer state does not fit in GPU memory (e.g. a single <24GB GPU)",
+          "Training is memory-constrained and needs 4-bit/8-bit quantized base loading"
+        ],
+        "avoid_when": [
+          "Memory is not the constraint \u2014 use plain LoRA; 4-bit adds dequantization overhead and a more fragile k-bit grad path for no benefit",
+          "You will need to merge_and_unload the adapter into the base for inference \u2014 merging is not supported on a quantized base"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:adapter-checkpoint"
+      ],
+      "depends_on": [
+        "loraconfig-core-parameters"
+      ],
+      "procedure": {
+        "steps": [
+          "Confirm the precondition: the bf16 base + LoRA + optimizer state won't fit (otherwise use plain LoRA).",
+          "Build a BitsAndBytesConfig with load_in_4bit=True, bnb_4bit_quant_type=\"nf4\", bnb_4bit_use_double_quant=True, and bnb_4bit_compute_dtype=torch.bfloat16 (torch.float16 on pre-Ampere; never leave it float32, which silently slows training); pass it via quantization_config to from_pretrained with device_map=\"auto\".",
+          "Optionally call model.gradient_checkpointing_enable() for memory savings \u2014 do it BEFORE the next step.",
+          "Call model = prepare_model_for_kbit_training(model). This step is mandatory: skipping it is the most common QLoRA failure \u2014 the model 'trains' but loss stays flat because no gradient reaches the adapters.",
+          "Attach LoRA with get_peft_model(model, LoraConfig(...)) and call print_trainable_parameters().",
+          "Train, then save the adapter; keep the quantized base separate."
+        ],
+        "reference_files": [
+          "references/quantization.md"
+        ]
+      },
+      "validation": [
+        "print_trainable_parameters() reports well under 1% for a 7B base \u2014 not 0, and not an unexpectedly large count",
+        "Training loss decreases; a flat loss means prepare_model_for_kbit_training was skipped or was called after get_peft_model"
+      ],
+      "recovery": [
+        "Loss is flat / model 'trains' but does not learn -> prepare_model_for_kbit_training was skipped or run after get_peft_model; call it once right after loading the quantized base and before get_peft_model",
+        "0 trainable params or an unexpectedly large count -> the LoraConfig or preparation step is wrong",
+        "Training is unexpectedly slow -> bnb_4bit_compute_dtype was left at float32; set it to torch.bfloat16 (Ampere+) or torch.float16",
+        "prepare_model_for_int8_training is deprecated (0.4.0) -> use prepare_model_for_kbit_training; passing load_in_4bit/load_in_8bit directly to from_pretrained is deprecated (transformers 4.30) -> use BitsAndBytesConfig via quantization_config"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#fit-a-large-model-on-a-small-gpu-qlora"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/quantization.md#prepare_model_for_kbit_training"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/quantization.md#4-bit-base-loading-qlora"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#old-patterns"
+        }
+      ],
+      "synthesized_fields": [
+        "depends_on",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "choose-peft-method",
+      "kind": "reference",
+      "title": "Choose a PEFT method",
+      "summary": "Decision boundaries for picking LoRA vs DoRA/AdaLoRA vs IA3/soft prompts vs QLoRA vs multi-GPU sharding.",
+      "applicability": {
+        "when": [
+          "A PEFT method has not yet been chosen",
+          "Deciding between adapter families given quality, parameter-budget, memory, and hardware trade-offs"
+        ],
+        "avoid_when": [
+          "The task is the RL/preference-optimization loop itself (PPO/DPO/reward models) \u2014 use trl",
+          "The task is high-throughput production serving of the merged model \u2014 use a dedicated inference engine such as vLLM"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Default to plain LoRA when no method is picked.",
+          "Choose DoRA or AdaLoRA for higher quality at slightly more cost: DoRA improves over LoRA at low ranks but is slower and uses more memory; AdaLoRA allocates a rank budget and requires setting total_step to the true number of optimizer steps.",
+          "Choose IA3 or a soft-prompt method when you need the fewest trainable params: prompt tuning is fewest/fastest, prefix tuning touches every layer for more capacity, multitask prompt tuning reuses source-task prompts, IA3 gives LoRA-like quality with fewer params and no merge into weights, and OFT/BOFT preserve base behavior (good for generative image models).",
+          "Choose QLoRA when the base model does not fit in VRAM on a single GPU.",
+          "For a model too large for one GPU even quantized with multiple GPUs available, choose DeepSpeed ZeRO-3 for the largest models and FSDP for medium models."
+        ],
+        "reference_files": [
+          "references/lora-methods.md",
+          "references/prompt-and-other-methods.md",
+          "references/integrations-and-scaling.md"
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "generate",
+          "explore"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#decision-tree"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#when-to-use"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/prompt-and-other-methods.md"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "load-inference-adapter",
+      "kind": "procedure",
+      "title": "Load and run inference with a trained adapter",
+      "summary": "Attach a saved adapter to its base model, optionally merge, and generate.",
+      "applicability": {
+        "when": [
+          "Running inference or deploying a model from a trained adapter checkpoint",
+          "Serving multiple tasks from one base by swapping adapters"
+        ],
+        "avoid_when": [
+          "High-throughput production serving of the merged model \u2014 use a dedicated inference engine such as vLLM",
+          "Merging via merge_and_unload on a quantized base \u2014 not supported (LoRA-family, non-quantized bases only)"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ],
+        "artifacts": [
+          "ml:adapter-checkpoint",
+          "ml:model"
+        ]
+      },
+      "produces": [
+        "ml:inference-outputs"
+      ],
+      "expected_outcomes": [
+        "merge_and_unload folds the adapter into the base weights for zero inference overhead"
+      ],
+      "procedure": {
+        "steps": [
+          "Load the base model, or use AutoPeftModelForCausalLM.from_pretrained for one-call loading.",
+          "Attach the adapter with PeftModel.from_pretrained(base, adapter_path).",
+          "Optionally call merge_and_unload() to fold the adapter in for zero inference overhead \u2014 LoRA-family only, not on a quantized base.",
+          "To serve multiple tasks from one base, keep adapters separate and swap them with set_adapter instead of merging.",
+          "Run generate()."
+        ],
+        "reference_files": [
+          "references/integrations-and-scaling.md"
+        ]
+      },
+      "validation": [
+        "generate() returns output on the adapter-attached model",
+        "If merged, the merged model produces the same outputs as the adapter-attached model before it is served"
+      ],
+      "recovery": [
+        "merge_and_unload fails on a quantized base -> do not merge; keep the adapter attached, or swap adapters with set_adapter"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#load-and-run-inference-with-a-trained-adapter"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#decision-tree"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/integrations-and-scaling.md"
+        }
+      ],
+      "synthesized_fields": [
+        "validation",
+        "requires.artifacts",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "multi-gpu-peft-scaling",
+      "kind": "workflow",
+      "title": "Scale PEFT training across multiple GPUs (DeepSpeed ZeRO-3 / FSDP)",
+      "summary": "Drive sharded multi-GPU LoRA training through Accelerate plus a launch config.",
+      "applicability": {
+        "when": [
+          "The model is too large for one GPU even quantized and multiple GPUs are available",
+          "Training a large base (e.g. Llama-2-70B) with LoRA across GPUs"
+        ],
+        "avoid_when": [
+          "The model fits on one GPU (with or without QLoRA) \u2014 the sharding overhead is unnecessary"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "multi-gpu"
+        ]
+      },
+      "produces": [
+        "ml:adapter-checkpoint"
+      ],
+      "depends_on": [
+        "lora-fine-tune"
+      ],
+      "procedure": {
+        "steps": [
+          "Generate an Accelerate config with `accelerate config --config_file <name>.yaml`; pick ZeRO-3 (largest models) or FSDP (medium models) when prompted, and set zero_stage: 3 with zero3_save_16bit_model: true.",
+          "Launch with `accelerate launch --config_file <config> train.py --use_peft_lora True --lora_r 8 --lora_alpha 16 --lora_target_modules all-linear` plus standard SFT flags; SFTTrainer builds the PeftModel from peft_config and Accelerate wraps it into the DeepSpeed/FSDP engine on trainer.train().",
+          "For ZeRO-3 + QLoRA (e.g. 70B on 2x40GB), set num_processes: 2, drop gradient_accumulation_steps from the DeepSpeed block, add bnb_4bit_quant_storage to BitsAndBytesConfig matching the model load dtype, and pass --use_4bit_quantization True --use_nested_quant True --bnb_4bit_compute_dtype bfloat16 --bnb_4bit_quant_storage_dtype bfloat16; requires bitsandbytes>=0.43.3, accelerate>=1.0.1, transformers>4.44.2, trl>0.11.4, peft>0.13.0, and zero3_init_flag: true.",
+          "To train a large model on a single GPU, use ZeRO-3 CPU offload (offload_optimizer_device: cpu, offload_param_device: cpu, num_processes: 1).",
+          "Save the final model with trainer.save_model()."
+        ],
+        "reference_files": [
+          "references/integrations-and-scaling.md"
+        ]
+      },
+      "validation": [
+        "zero3_save_16bit_model: true is set so the saved adapter weights are 16-bit and reloadable with from_pretrained",
+        "In a custom (non-Trainer) loop, ZeRO-3 is detected via accelerator.state.deepspeed_plugin.zero_stage == 3 before calling generate()"
+      ],
+      "recovery": [
+        "Saved adapter cannot be reloaded with from_pretrained -> confirm zero3_save_16bit_model: true in the config",
+        "ZeRO-3 + QLoRA version conflicts -> pin bitsandbytes>=0.43.3, accelerate>=1.0.1, transformers>4.44.2, trl>0.11.4, peft>0.13.0"
+      ],
+      "delivery": {
+        "stages": [
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#decision-tree"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/integrations-and-scaling.md"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "depends_on",
+        "delivery.stages"
+      ]
+    }
+  ],
+  "schema_version": "0.2",
+  "skill_name": "peft-tuning",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "file:///Users/kuntalkokate/pengtao-lab/ai-builds-ai-project/AI-Skill-builder/infra/skills/peft-tuning",
+    "content_sha256": "8569de908cc94dd527dc74ee93889cf2835037472ddff16fd2677899d9c31998",
+    "fetched_at": "2026-07-17T23:22:20Z"
+  }
+}

@@ -1,0 +1,576 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "peft-fine-tuning",
+  "scores": {
+    "claims_audited": 114,
+    "label_histogram": {
+      "supported": 85,
+      "entailed": 27,
+      "unsupported": 2
+    },
+    "support_rate_all": 0.9825,
+    "support_rate_strict": 0.981,
+    "strict_claims": 105,
+    "fabrications": [
+      {
+        "unit": "select-peft-method",
+        "path": "procedure.steps[0]",
+        "note": "'14-16GB full model' fabricates a 16GB upper bound; the package states only '6MB adapters vs 14GB full model' \u2014 16GB elsewhere in the doc is IA3's GPU training memory, unrelated to full-model size."
+      },
+      {
+        "unit": "qlora-fine-tune",
+        "path": "procedure.steps[2]",
+        "note": "'cast layers for stable k-bit training' is not stated; the package only describes prepare_model_for_kbit_training as 'enables gradient checkpointing'."
+      }
+    ],
+    "flagged_but_unsupported": [],
+    "applicability_correct_rate": 1.0,
+    "validation_usable_rate": 1.0,
+    "units_with_bad_locators": []
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "select-peft-method",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "unsupported",
+            "note": "'14-16GB full model' fabricates a 16GB upper bound; the package states only '6MB adapters vs 14GB full model' \u2014 16GB elsewhere in the doc is IA3's GPU training memory, unrelated to full-model size."
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "select-lora-hyperparameters",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Not stated verbatim; inferred because IA3Config/PrefixTuningConfig in the package use different fields (target_modules/feedforward_modules; num_virtual_tokens/prefix_projection) than LoraConfig."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "entailed",
+            "note": "'0.05 dropout / bias=none as defaults' is not stated as an explicit recommendation; inferred from the example LoraConfig values used in the standard LoRA sample."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "lora-fine-tune",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "'fits in fp16' is not stated; the example loads with torch_dtype='auto' and only TrainingArguments sets fp16=True \u2014 conflates training precision with model-loading dtype."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "entailed",
+            "note": "Not stated directly; inferred as the inverse of QLoRA's stated trigger ('memory is the primary constraint')."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Inverse of LoRA's stated when-to-use condition, with QLoRA offered as the documented alternative."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python/gpu are not declared as a requires field in the package; inferred from CUDA-dependent code (device_map='auto', fp16=True)."
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "'Training loss decreases' is not stated as a positive expectation; inferred as the inverse of the documented 'Loss Not Decreasing' problem."
+          },
+          {
+            "path": "validation[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[3]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "qlora-fine-tune",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Inferred as the inverse of QLoRA's stated trigger condition; the ~0.84x speed cost is stated in the benchmark table but the 'avoid when' framing is synthesized."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "entailed",
+            "note": "Inferred from the full-fine-tuning 'maximum quality' condition and the stated MMLU quality gap; not a QLoRA-specific avoid-condition in the text."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python/gpu inferred from CUDA-dependent quantized-loading code, not a declared field."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "The QLoRA section never shows a save_pretrained call; inferred by analogy to the standard LoRA flow referenced in procedure.steps[4]."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "unsupported",
+            "note": "'cast layers for stable k-bit training' is not stated; the package only describes prepare_model_for_kbit_training as 'enables gradient checkpointing'."
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "entailed",
+            "note": "'same Trainer/TrainingArguments flow as standard LoRA' is not stated explicitly for QLoRA; inferred since no distinct training code is shown in that section."
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Not stated as a validation check; inferred from the bitsandbytes CUDA-error troubleshooting content."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Inferred by analogy with the standard LoRA section's use of print_trainable_parameters(); not restated in the QLoRA section."
+          },
+          {
+            "path": "validation[2]",
+            "label": "entailed",
+            "note": "Inferred as the inverse of the documented 'Loss Not Decreasing' problem."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "load-merge-serve-adapter",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Not stated; inferred from merge_and_unload's documented behavior of baking a single adapter into the base, which conflicts with the separately documented multi-adapter set_adapter switching."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "python/gpu/adapter-checkpoint are not declared as a requires field; inferred from the code loading a GPU model and an existing adapter directory."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "Only the merge sub-path (merged_model.save_pretrained) produces a model checkpoint; the multi-adapter-serving sub-path produces no new persisted artifact, so this applies to part of the unit only."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[2]",
+            "label": "entailed",
+            "note": "'Generates correctly' is not a concretely stated check; inferred from the 'no adapter overhead' merge rationale."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[3]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "diagnose-adapter-not-training",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "entailed",
+            "note": "Not stated as a proactive use case; the package frames these checks only as reactive troubleshooting steps after a problem is observed."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "Flagged as synthesized; the package shows print/inspection statements, not a persisted 'report' artifact, though this is a reasonable framing."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Combines two individually-stated checks (trainable count, active_adapters) into one pass/fail statement not phrased that way in the package."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "entailed",
+            "note": "'Re-apply get_peft_model / reload the adapter' is not stated verbatim for empty active adapters; a reasonable direct consequence of the diagnostic."
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "choose-advanced-lora-variant",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "Not stated verbatim; inferred from DoRA's description as 'often achieving better results than standard LoRA'."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "entailed",
+            "note": "General framing synthesized from the file covering several higher-quality/adaptive variants rather than a single stated trigger sentence."
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[3]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Not stated; inferred from DoRA's ~10% extra memory cost and the added config complexity of these variants relative to standard LoRA."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "entailed",
+            "note": "Synthesized overview of the whole reference file's variants; not a verbatim statement in the package."
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}

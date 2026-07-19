@@ -1,0 +1,50 @@
+{
+  "skill_name": "ray-data",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 16059,
+      "response_chars": 10559,
+      "units": 6,
+      "validator_errors": [
+        "capabilities[0] (choose-ray-data-vs-alternatives): needs inline 'procedure.steps' or a 'procedure.reference_files' pointer"
+      ],
+      "validator_warning_count": 5
+    },
+    {
+      "attempt": 2,
+      "prompt_chars": 28404,
+      "response_chars": 12311,
+      "units": 6,
+      "validator_errors": [],
+      "validator_warning_count": 5
+    }
+  ],
+  "validator_warnings": [
+    "capabilities[1] (vectorized-map-batches): no recovery guidance",
+    "capabilities[2] (gpu-accelerated-transforms): no recovery guidance",
+    "capabilities[3] (distributed-batch-inference): no recovery guidance",
+    "capabilities[4] (ray-train-dataset-streaming): no recovery guidance",
+    "capabilities[5] (stream-and-tune-large-datasets): no recovery guidance"
+  ],
+  "stats": {
+    "units": 6,
+    "kinds": {
+      "reference": 1,
+      "procedure": 3,
+      "workflow": 2
+    },
+    "units_with_avoid_when": 6,
+    "units_with_depends_on": 0,
+    "synthesized_field_instances": {
+      "delivery.stages": 6,
+      "validation": 5,
+      "applicability.avoid_when": 4
+    }
+  }
+}

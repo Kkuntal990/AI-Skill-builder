@@ -1,0 +1,36 @@
+{
+  "skill_name": "verl-rl-training",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 27085,
+      "response_chars": 15559,
+      "units": 6,
+      "validator_errors": [],
+      "validator_warning_count": 0
+    }
+  ],
+  "validator_warnings": [],
+  "stats": {
+    "units": 6,
+    "kinds": {
+      "reference": 2,
+      "workflow": 2,
+      "procedure": 2
+    },
+    "units_with_avoid_when": 6,
+    "units_with_depends_on": 1,
+    "synthesized_field_instances": {
+      "delivery.stages": 6,
+      "depends_on": 1,
+      "validation": 3,
+      "recovery": 2,
+      "applicability.avoid_when": 3
+    }
+  }
+}

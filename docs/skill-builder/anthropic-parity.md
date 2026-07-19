@@ -1,6 +1,6 @@
 # Anthropic skill-creator parity — comparison & replication plan
 
-How our `build-skill-from-docs` (builder 2.1.0) setup compares to Anthropic's official
+How our `build-skill-from-docs` (builder 2.3.0) setup compares to Anthropic's official
 skill-creation and evaluation workflow, and a concrete plan to replicate the parts we're
 missing. Companion to [README.md](README.md), [hld.md](hld.md),
 [skill-reliability-checklist.md](skill-reliability-checklist.md), and the eval docs under
@@ -117,7 +117,7 @@ build.
 16. **Iterate to convergence, then scale; watch saturation** (all-pass = refresh; 0%
     pass@100 = broken task). [SC][E]
 
-## 3. Our method — how `build-skill-from-docs` (2.1.0) creates & evals
+## 3. Our method — how `build-skill-from-docs` (2.3.0) creates & evals
 
 **Creation pipeline** (`skill_builder.py`, one autonomous run, no user in the loop):
 RESOLVE → FETCH(doc/README/examples/[issues/changelog/SE]) → **INTENT** (inferred from doc

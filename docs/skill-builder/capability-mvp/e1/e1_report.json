@@ -1,0 +1,64 @@
+{
+  "experiment": "E1 — automated compiler fidelity gate (compile + grounding audit phases)",
+  "plan": "docs/skill-builder/capability-linker-mvp-plan.md §5/E1′",
+  "date": "2026-07-17",
+  "setup": {
+    "compiler": "skill_builder.py compile-existing (builder 2.3.0, capability_compiler 0.1.0, prompts/compile_capabilities.txt)",
+    "compiler_model": "claude CLI default (subscription transport)",
+    "grounding_critic": "capability_grounding.py 0.1.0 + prompts/critique_capabilities.txt",
+    "critic_model": "sonnet via MLEVAL_LLM_MODEL (different model from compiler — no self-grading)",
+    "corpus": "AI-Research-SKILLs @773a52944ba4747a18bd4ae9ade53fff041adcbc (5 skills) + infra/skills peft-tuning & vllm-inference (2 built skills)",
+    "reference_standard": "E0 agent-authored manifests in ../e0/ (comparison basis)"
+  },
+  "per_skill": {
+    "peft":                 {"units": 7, "compile_attempts": 1, "claims": 114, "support_strict": 0.981,  "applicability": 1.0,    "validation_usable": 1.0, "fabrications": 2},
+    "vllm":                 {"units": 7, "compile_attempts": 1, "claims": 114, "support_strict": 0.9898, "applicability": 1.0,    "validation_usable": 0.8, "fabrications": 1},
+    "transformer-lens":     {"units": 6, "compile_attempts": 2, "claims": 74,  "support_strict": 0.9818, "applicability": 1.0,    "validation_usable": 1.0, "fabrications": 1},
+    "ray-data":             {"units": 6, "compile_attempts": 2, "claims": 74,  "support_strict": 0.9833, "applicability": 0.8333, "validation_usable": 1.0, "fabrications": 1},
+    "verl":                 {"units": 6, "compile_attempts": 1, "claims": 95,  "support_strict": 1.0,    "applicability": 1.0,    "validation_usable": 1.0, "fabrications": 0},
+    "peft-tuning-built":    {"units": 6, "compile_attempts": 1, "claims": 89,  "support_strict": 0.9877, "applicability": 0.8333, "validation_usable": 1.0, "fabrications": 1},
+    "vllm-inference-built": {"units": 7, "compile_attempts": 1, "claims": 97,  "support_strict": 1.0,    "applicability": 1.0,    "validation_usable": 1.0, "fabrications": 0}
+  },
+  "aggregate": {
+    "skills": 7, "units": 45, "claims_audited": 657,
+    "support_rate_all": 0.9863,
+    "support_rate_strict": 0.9894,
+    "fabrication_rate_strict": 0.0106,
+    "applicability_correct_rate": 0.9556,
+    "validation_usable_rate": 0.9688,
+    "first_attempt_valid": "5/7",
+    "repair_rounds_used": 2,
+    "material_correction_proxy": 0.0444
+  },
+  "gates": {
+    "support>=0.90 (strict, w.r.t. skill-package source)": "PASS (0.9894)",
+    "applicability>=0.85": "PASS (0.9556 aggregate; ray-data and peft-tuning-built dip to 0.8333 individually)",
+    "validation_usable>=0.80 (executable units)": "PASS (0.9688; vllm exactly 0.8)",
+    "material_correction<=0.20 (repair-loop convergence proxy)": "PASS (0.0444 — 2 validator errors fixed across 45 units)",
+    "deterministic_validation_clean (no dead refs / cycles)": "PASS (all 7 manifests VALID)",
+    "verdict": "E1 grounding gates PASS — proceed to W5 (linker) with the two pending components below folded into W5/W6"
+  },
+  "fabrications_caught": [
+    {"skill": "peft", "unit": "select-peft-method", "class": "numeric-overreach", "note": "'14-16GB full model' invents a 16GB bound; package says 14GB (16GB is IA3 training memory elsewhere)"},
+    {"skill": "peft", "unit": "qlora-fine-tune", "class": "mechanism-overreach", "note": "'cast layers for stable k-bit training' — true of the real API but NOT stated in the package; correctly flagged under package-grounding"},
+    {"skill": "vllm", "unit": "offline-batch-inference", "class": "invented-scenario-term", "note": "'ML pipeline' appears nowhere in the package"},
+    {"skill": "transformer-lens", "unit": "direct-logit-attribution-by-head", "class": "cross-context-borrowing", "note": "ln2 LayerNorm fix borrowed from an unrelated computation path"},
+    {"skill": "ray-data", "unit": "distributed-batch-inference", "class": "cross-context-borrowing", "note": "multi-modal/tabular grafted from unrelated doc sections"},
+    {"skill": "peft-tuning-built", "unit": "loraconfig-core-parameters", "class": "cross-api-conflation", "note": "AdaLoRA uses AdaloraConfig, not LoraConfig"}
+  ],
+  "findings": [
+    "Fabrication is rare (1.06%) and concentrated in cross-context borrowing — content true elsewhere in the package (or in reality) grafted onto the wrong unit. This is the failure class the per-unit source-locator discipline exists to catch.",
+    "Recurring compile error (both repair rounds): a 'choose-X-vs-alternatives' reference unit emitted without steps/reference pointer. Prompt fix: tell the compiler reference units must carry their facts AS steps.",
+    "delivery.stages was flagged synthesized on ~100% of units — honest (the packages never state stages) but noisy; consider exempting stages from the flag or accepting the noise.",
+    "4 units have imprecise source locators (audit: 'do not plausibly resolve') — anchor-precision needs a compiler-prompt nudge, though claims themselves were supported.",
+    "Compiler units track the E0 reference decomposition closely (peft: 7 vs 5 units, same core operations plus a diagnose unit and method-selection split) — no systematic representation drift.",
+    "The compiled peft QLoRA unit independently generated the inverted-conditional avoid_when (the mvp-029 RCA fix) and flagged it synthesized."
+  ],
+  "pending": [
+    "Upstream spot-check (~20 numeric claims vs upstream docs) — automated via web fetch; quantifies corpus trustworthiness as a limitation. Not a gate.",
+    "Behavioral analogs (linking eval on NodeProfile fixtures + functional A/B via eval_core) — depend on the W5 linker; folded into W5/W6.",
+    "run_gate wiring: fold compile+grounding metrics into the builder ship-gate consumption path (currently standalone reports under evals/)."
+  ],
+  "artifacts": "per-skill dirs here contain capabilities.json + capability_compile_report.json + grounding_audit.json",
+  "reproduce": "python3 skill_builder.py compile-existing <skill-dir> --out <dir>; then capability_grounding.run_audit(<skill-dir>, <manifest>, llm) with MLEVAL_LLM_MODEL=sonnet. Sequential claude-CLI calls only — rapid succession and background shells cause transient CLI failures that silently fall back to OpenRouter (stale key, 401)."
+}

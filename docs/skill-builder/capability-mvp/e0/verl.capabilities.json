@@ -1,0 +1,203 @@
+{
+  "schema_version": "0.2",
+  "skill_name": "verl-rl-training",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/06-post-training/verl",
+    "commit": "773a52944ba4747a18bd4ae9ade53fff041adcbc",
+    "fetched_at": "2026-07-15T00:00:00Z"
+  },
+  "capabilities": [
+    {
+      "id": "verl-algorithm-backend-selection",
+      "kind": "reference",
+      "title": "Choose the RL algorithm, training backend, and compatible versions",
+      "summary": "Algorithm-to-adv_estimator mapping (GRPO/GAE/RLOO/ReMax/...), backend options (FSDP/FSDP2/Megatron x vLLM/SGLang), key hyperparameter defaults, and version constraints.",
+      "applicability": {
+        "when": [
+          "Choosing an RL algorithm for LLM post-training (critic-free vs value-based).",
+          "Selecting training and rollout backends for a verl run.",
+          "Setting rollout/training/KL hyperparameters for a new config."
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Algorithm selection by adv_estimator: grpo (critic-free, math/reasoning), gae (PPO, dense rewards, needs critic), reinforce_plus_plus (variance reduction), rloo (leave-one-out baseline), remax, opo.",
+          "Backends: training FSDP / FSDP2 / Megatron-LM; rollout engines vLLM, SGLang, HuggingFace Transformers; models 0.5B-671B (Qwen-3, Llama-3.1, DeepSeek, Gemma-2).",
+          "Key defaults: rollout.n=8 samples/prompt, temperature 0.7, top_p 0.95; actor.lr 1e-6, ppo_mini_batch_size 64, clip_ratio 0.2; use_kl_loss true with kl_loss_coef 0.001 (GRPO) / 0.02 (PPO), adaptive target_kl 0.1.",
+          "Version constraint: vllm>=0.8.5,<=0.12.0 — avoid vLLM 0.7.x (known bugs).",
+          "Alternatives routing: Megatron-native training -> slime or miles; PyTorch-native Monarch abstractions -> torchforge; simple SFT/DPO only -> TRL or Axolotl."
+        ],
+        "reference_files": ["references/api-reference.md"]
+      },
+      "delivery": { "stages": ["generate", "refine"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#configuration-reference" },
+        { "kind": "skill-package", "locator": "SKILL.md#when-to-use-verl" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues-and-solutions" }
+      ]
+    },
+    {
+      "id": "verl-grpo-math-training",
+      "kind": "workflow",
+      "title": "Train a math-reasoning model with critic-free GRPO",
+      "summary": "Prepare a parquet dataset with prompt/reward_model columns, define a rule-based reward, configure GRPO, and launch verl.trainer.main_ppo across the GPU cluster.",
+      "applicability": {
+        "when": [
+          "RL post-training a reasoning model on math-style tasks (GSM8K, MATH) with verifiable answers.",
+          "A critic-free RL algorithm is preferred (no value model to train)."
+        ],
+        "avoid_when": [
+          "Only simple SFT/DPO is needed — use TRL or Axolotl instead of an RL training stack.",
+          "Dense rewards need value-based advantage estimation — use the PPO/GAE workflow with a critic."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu", "multi-gpu"],
+        "hardware": { "min_gpu_count": 8 },
+        "artifacts": ["ml:model", "ml:training-dataset", "ml:reward-function"]
+      },
+      "produces": ["ml:model-checkpoint", "ml:training-metrics"],
+      "depends_on": ["verl-algorithm-backend-selection"],
+      "procedure": {
+        "steps": [
+          "Prepare the dataset as parquet with a 'prompt' column (chat-message list) and a 'reward_model' column carrying ground_truth.",
+          "Define a rule-based reward function mapping (responses, ground_truths) -> rewards (e.g., extract \\boxed{...} and compare to ground truth).",
+          "Write the GRPO config: algorithm.adv_estimator=grpo; data.train_batch_size, max_prompt_length, max_response_length; actor.use_kl_loss=true with kl_loss_coef=0.001; rollout.name=vllm with n=8 samples/prompt.",
+          "Launch: python3 -m verl.trainer.main_ppo --config-path config --config-name <name> trainer.n_gpus_per_node=8.",
+          "Monitor WandB/TensorBoard loss curves and verify reward increases over steps; evaluate on a held-out test set."
+        ],
+        "reference_files": ["references/troubleshooting.md"]
+      },
+      "validation": [
+        "Reward is increasing over training steps.",
+        "Loss curves are visible and stable in WandB/TensorBoard.",
+        "Held-out evaluation is run after training."
+      ],
+      "recovery": [
+        "OOM during rollout: set rollout.log_prob_micro_batch_size=4, enable model.enable_gradient_checkpointing, or use strategy=fsdp2 with fsdp_config.offload_policy=true.",
+        "Training instability (loss spikes, reward collapse): lower actor.lr to 5e-7, raise kl_loss_coef to 0.01, set max_grad_norm=1.0."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-1-math-reasoning-with-grpo" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues-and-solutions" }
+      ]
+    },
+    {
+      "id": "verl-ppo-critic-training",
+      "kind": "workflow",
+      "title": "PPO with a critic model (GAE advantage estimation)",
+      "summary": "Add a critic model and switch to GAE when the task has dense rewards that benefit from value estimation.",
+      "applicability": {
+        "when": [
+          "The task has dense rewards where value-based advantage estimation (GAE) helps.",
+          "A separate critic/value model is acceptable overhead."
+        ],
+        "avoid_when": [
+          "Critic-free training suffices (math/reasoning with verifiable rewards) — use GRPO."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu", "multi-gpu"],
+        "artifacts": ["ml:model", "ml:training-dataset", "ml:reward-function"]
+      },
+      "produces": ["ml:model-checkpoint", "ml:training-metrics"],
+      "depends_on": ["verl-algorithm-backend-selection"],
+      "procedure": {
+        "steps": [
+          "Set algorithm.adv_estimator=gae with gamma=0.99, lam=0.95.",
+          "Configure the critic: critic.model.path (same or different from the actor), critic.ppo_mini_batch_size=64.",
+          "Set PPO actor knobs: use_kl_loss=true, kl_loss_coef=0.02, clip_ratio=0.2.",
+          "Launch: python3 -m verl.trainer.main_ppo algorithm.adv_estimator=gae critic.model.path=<model> trainer.n_gpus_per_node=8.",
+          "Monitor reward and loss as in the GRPO workflow."
+        ],
+        "reference_files": ["references/troubleshooting.md"]
+      },
+      "validation": [
+        "Reward increases without collapse and loss shows no sustained spikes."
+      ],
+      "recovery": [
+        "Training instability: lower actor.lr to 5e-7, raise kl_loss_coef, enable max_grad_norm=1.0."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["validation"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-2-ppo-with-critic-model" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues-and-solutions" }
+      ]
+    },
+    {
+      "id": "verl-megatron-multinode-training",
+      "kind": "workflow",
+      "title": "Large-scale RL training (>70B) with Megatron and a multi-node Ray cluster",
+      "summary": "Convert the model to Megatron format, configure tensor/pipeline parallelism, start the Ray cluster across nodes, and launch multi-node training.",
+      "applicability": {
+        "when": [
+          "The model exceeds ~70B parameters or needs expert parallelism.",
+          "A multi-node GPU cluster with NVLink/InfiniBand is available."
+        ],
+        "avoid_when": [
+          "The model trains on a single node — FSDP/FSDP2 avoids the Megatron conversion step."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu", "multi-gpu", "multi-node"],
+        "artifacts": ["ml:megatron-checkpoint", "ml:training-dataset"]
+      },
+      "produces": ["ml:model-checkpoint"],
+      "depends_on": ["verl-algorithm-backend-selection"],
+      "procedure": {
+        "steps": [
+          "Install the Megatron-LM bridge: pip install mbridge; convert the model to Megatron checkpoint format.",
+          "Configure: model.backend=megatron, actor.strategy=megatron, tensor_model_parallel_size=8, pipeline_model_parallel_size=2; rollout.name=vllm with tensor_parallel_size=8.",
+          "Start the Ray cluster: ray start --head --port=6379 on the head node; ray start --address='head_ip:6379' on each worker node.",
+          "Launch: python3 -m verl.trainer.main_ppo trainer.nnodes=4 trainer.n_gpus_per_node=8."
+        ],
+        "reference_files": ["references/api-reference.md"]
+      },
+      "validation": [
+        "All worker nodes joined the Ray cluster before launch.",
+        "Training steps proceed without persistent weight-sync stalls."
+      ],
+      "recovery": [
+        "Slow weight sync (long pauses between rollout and training): use strategy=fsdp2 for faster resharding or set trainer.async_weight_update=true."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["validation", "applicability.avoid_when"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-3-large-scale-training-with-megatron" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues-and-solutions" }
+      ]
+    },
+    {
+      "id": "verl-training-failure-triage",
+      "kind": "diagnostic",
+      "title": "Triage verl training failures by symptom",
+      "summary": "Symptom-to-remedy map for the four documented failure classes: rollout OOM, training instability, slow weight sync, and vLLM version mismatch.",
+      "applicability": {
+        "when": [
+          "A verl run crashes, stalls between rollout and training, or shows loss spikes / reward collapse."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"]
+      },
+      "produces": ["ml:diagnostic-report"],
+      "procedure": {
+        "steps": [
+          "CUDA OOM during the generation phase -> rollout OOM: reduce log_prob_micro_batch_size, enable gradient checkpointing, or FSDP2 CPU offloading.",
+          "Loss spikes / reward collapse -> instability: reduce lr to 5e-7, raise kl_loss_coef to 0.01, clip gradients (max_grad_norm=1.0).",
+          "Long pauses between rollout and training -> slow weight sync: strategy=fsdp2 or trainer.async_weight_update=true.",
+          "Import errors or generation failures -> vLLM version mismatch: pin vllm>=0.8.5,<=0.12.0 and avoid 0.7.x."
+        ],
+        "reference_files": ["references/troubleshooting.md"]
+      },
+      "delivery": { "stages": ["debug"] },
+      "synthesized_fields": ["produces"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues-and-solutions" }
+      ]
+    }
+  ]
+}

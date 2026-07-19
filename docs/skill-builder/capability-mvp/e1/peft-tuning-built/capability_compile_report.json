@@ -1,0 +1,36 @@
+{
+  "skill_name": "peft-tuning",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 39881,
+      "response_chars": 16509,
+      "units": 6,
+      "validator_errors": [],
+      "validator_warning_count": 0
+    }
+  ],
+  "validator_warnings": [],
+  "stats": {
+    "units": 6,
+    "kinds": {
+      "procedure": 3,
+      "reference": 2,
+      "workflow": 1
+    },
+    "units_with_avoid_when": 6,
+    "units_with_depends_on": 2,
+    "synthesized_field_instances": {
+      "validation": 2,
+      "delivery.stages": 6,
+      "applicability.avoid_when": 2,
+      "depends_on": 2,
+      "requires.artifacts": 1
+    }
+  }
+}

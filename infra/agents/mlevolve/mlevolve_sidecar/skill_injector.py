@@ -40,6 +40,21 @@ references) if the library is small (<= _FALLBACK_ALL_MAX_SKILLS), else fall bac
 to catalog-only — dumping every body is only safe for a tiny library. A selector
 that succeeds but returns ``[]`` is a genuine decline → catalog only. Every path
 records a ``fallback_mode`` to selection_events.jsonl (see selection_logger.py).
+
+Delivery-mode dispatch (capability-linker MVP, HLD §10):
+  ``MLEVAL_SKILL_DELIVERY_MODE`` (read at call time, default ``legacy``) selects
+  the implementation-guideline path. ``legacy`` is the byte-identical control
+  described above. ``capability_task`` / ``capability_node`` route through
+  ``capability_linker`` instead: the linker builds a compact "## Linked ML
+  Capabilities" brief from the skills that carry a validated ``capabilities.json``
+  and the current node's search state. The MLEvolve-specific glue is ONLY the
+  NodeProfile adapter (``_build_node_profile``) and the ``llm.query`` closure
+  (``_make_llm_query``); the linker core is agent-generic. ``capability_task``
+  links once at the first (draft/generate) node and reuses the rendered brief
+  verbatim thereafter; ``capability_node`` re-links every node. A capability arm
+  NEVER silently emits legacy content — on an empty capability library or any
+  error it injects nothing (``legacy_fallback`` stays False). The legacy selector
+  functions, ``_wrap_run``, and the ``sys.meta_path`` hook are untouched.
 """
 from __future__ import annotations
 
@@ -101,6 +116,32 @@ def _caps() -> tuple[float, float]:
             return _UNCAPPED
         return v if v >= 0 else _UNCAPPED
     return _cap("MLEVAL_SKILL_MAX_PER_NODE"), _cap("MLEVAL_SKILL_MAX_REFS_PER_NODE")
+
+
+# Capability delivery modes (capability-linker MVP). Any other value — including
+# unset / empty / a typo — falls to the legacy control path (the production
+# default). Only these two explicit strings enter the capability linker.
+_CAPABILITY_MODES = ("capability_task", "capability_node")
+_WARNED_MODES: set = set()  # unrecognized delivery-mode values already warned about
+
+
+def _capability_mode() -> str:
+    """The active skill-delivery mode, read at CALL TIME (never cached at import).
+
+    ``MLEVAL_SKILL_DELIVERY_MODE`` ∈ {legacy, capability_task, capability_node};
+    unset / empty → ``legacy`` (the production default and A/B control). An
+    unrecognised value is NOT treated as a capability mode (see ``_CAPABILITY_MODES``)
+    — it stays on the byte-identical legacy path so a config typo never silently
+    ships an untested treatment. Because that means a mistyped 'capability' cell
+    would run as legacy, we WARN loudly (once per value) on an unrecognized mode.
+    """
+    mode = os.environ.get("MLEVAL_SKILL_DELIVERY_MODE", "legacy").strip() or "legacy"
+    if mode != "legacy" and mode not in _CAPABILITY_MODES and mode not in _WARNED_MODES:
+        _WARNED_MODES.add(mode)
+        logger.warning(
+            "[skill_injector] unrecognized MLEVAL_SKILL_DELIVERY_MODE=%r → running "
+            "LEGACY path (valid: legacy, %s)", mode, ", ".join(_CAPABILITY_MODES))
+    return mode
 
 
 # ---------------------------------------------------------------------------
@@ -438,8 +479,196 @@ def _log_node_selection(agent, meta, stats, max_skills, max_refs) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Capability delivery (capability-linker MVP — HLD §9-11). The ONLY MLEvolve-
+# specific glue for the linker: NodeProfile construction, the llm.query closure,
+# and the impl_guideline landing site. The linker core is agent-generic.
+# ---------------------------------------------------------------------------
+
+def _build_node_profile(agent):
+    """MLEvolve agent state -> agent-generic ``capability_linker.NodeProfile``.
+
+    This adapter is the whole MLEvolve coupling: it maps the native stage vocab
+    (draft/improve/debug/evolution) onto the schema's canonical classes via
+    STAGE_MAP, reuses ``_task_for_routing`` for the harness-stripped task text,
+    reads the parent SearchNode's code/error/analysis defensively, parses the
+    factual hardware line, and derives runtime capabilities CONSERVATIVELY —
+    ``python`` always, ``gpu`` / ``multi-gpu`` only when the GPU count is KNOWN
+    (>0 / >1). Everything else (network, persistent-service, credentials,
+    multi-node) is left UNKNOWN (absent from the set), so the linker's hard filter
+    reasons three-valued and never claims a capability the sidecar can't verify.
+    """
+    from . import capability_linker
+    raw_stage = getattr(agent, "_mleval_stage", None)
+    stage = capability_linker.STAGE_MAP.get(raw_stage, raw_stage)
+    task_text = _task_for_routing(getattr(agent, "task_desc", "") or "")
+    parent = getattr(agent, "_mleval_parent", None)
+    parent_code = getattr(parent, "code", None) if parent is not None else None
+    parent_error = getattr(parent, "term_out", None) if parent is not None else None
+    parent_analysis = getattr(parent, "analysis", None) if parent is not None else None
+    hardware = capability_linker.parse_hardware(_detect_hardware())
+    runtime_caps = {"python"}
+    gpu_count = hardware.get("gpu_count")
+    if gpu_count and gpu_count > 0:
+        runtime_caps.add("gpu")
+    if gpu_count and gpu_count > 1:
+        runtime_caps.add("multi-gpu")
+    return capability_linker.NodeProfile(
+        stage=stage,
+        task_text=task_text,
+        parent_code=parent_code,
+        parent_error=parent_error,
+        parent_analysis=parent_analysis,
+        hardware=hardware,
+        runtime_capabilities=runtime_caps,
+    )
+
+
+def _make_llm_query(agent):
+    """Closure the linker calls as ``llm_query(system, user, func_spec)``.
+
+    Routes to MLEvolve's stock ``llm.query`` at temperature 0 with the agent's
+    feedback model + cfg — the same call the legacy selector makes. A raise here
+    (transport error / missing attr) propagates into the linker's retry-once →
+    decline ladder, so the arm degrades to "inject nothing", never to legacy."""
+    import llm
+
+    def _llm_query(system_message, user_message, func_spec):
+        return llm.query(
+            system_message=system_message,
+            user_message=user_message,
+            func_spec=func_spec,
+            model=agent.acfg.feedback.model,
+            temperature=0.0,
+            cfg=agent.cfg,
+        )
+
+    return _llm_query
+
+
+def _log_capability_node(agent, link_result, mode, cache_reused, cap_skill_count) -> None:
+    """Emit one ``capability_node`` telemetry record (HLD §11). Best-effort.
+
+    Ships the linker's telemetry verbatim plus the delivery mode, the live node
+    stage (a cached ``capability_task`` result carries the FIRST node's stage in
+    ``telemetry['stage']``, so record the current one separately), and whether the
+    brief was reused from cache. ``legacy_fallback`` is forced present and False —
+    a capability arm must never report legacy content.
+    """
+    try:
+        telem = dict(getattr(link_result, "telemetry", None) or {})
+        telem["delivery_mode"] = mode
+        telem["cache_reused"] = bool(cache_reused)
+        telem.setdefault("loaded_skill_count", cap_skill_count)
+        telem.setdefault("legacy_fallback", False)
+        from . import capability_linker
+        raw_stage = getattr(agent, "_mleval_stage", None)
+        telem["node_stage"] = capability_linker.STAGE_MAP.get(raw_stage, raw_stage)
+        selection_logger.log_capability_node(**telem)
+    except Exception:  # noqa: BLE001 — telemetry must never break codegen
+        pass
+
+
+def _inject_capability(agent, result, mode) -> None:
+    """Capability delivery path (HLD §10). Appends the linker's rendered brief to
+    the Implementation guideline. NEVER breaks codegen and NEVER falls back to
+    legacy content: an empty capability library (the no-skill baseline for these
+    modes) or ANY exception injects nothing.
+
+    ``capability_task`` links once at the first (draft/generate) node and caches
+    the LinkResult on the shared search agent (``agent._mleval_cap_brief``,
+    NOT reset by ``_wrap_run``), reusing the rendered brief at every later node.
+    ``capability_node`` re-links fresh for every node using its current state.
+    """
+    try:
+        from . import capability_linker
+        cap_skills = skill_retriever.loaded_capability_skills()
+        if not cap_skills:
+            # An empty capability library is the no-skill baseline (inject nothing) —
+            # but record it explicitly so an empty capability TREATMENT is visible in
+            # selection_events.jsonl rather than an absence of evidence (spike-023).
+            try:
+                selection_logger.log_capability_node(
+                    delivery_mode=mode,
+                    node_stage=capability_linker.STAGE_MAP.get(
+                        getattr(agent, "_mleval_stage", None),
+                        getattr(agent, "_mleval_stage", None)),
+                    loaded_skill_count=len(skill_retriever.loaded_skills()),
+                    loaded_capability_count=0,
+                    reason="no_valid_manifests",
+                    legacy_fallback=False,
+                )
+            except Exception:  # noqa: BLE001 — telemetry must never break codegen
+                pass
+            return
+        gl = result.get("Implementation guideline")
+        if not isinstance(gl, list):
+            return
+
+        if mode == "capability_task":
+            cached = getattr(agent, "_mleval_cap_brief", _UNSET)
+            if cached is not _UNSET:
+                link_result, cache_reused = cached, True
+            else:
+                link_result = capability_linker.link(
+                    _build_node_profile(agent), cap_skills, _make_llm_query(agent)
+                )
+                cache_reused = False
+                try:
+                    agent._mleval_cap_brief = link_result
+                except Exception:  # noqa: BLE001 — agent may reject attrs (defensive)
+                    pass
+        else:  # capability_node — recompute fresh every node
+            link_result = capability_linker.link(
+                _build_node_profile(agent), cap_skills, _make_llm_query(agent)
+            )
+            cache_reused = False
+
+        if link_result.rendered:
+            gl.append("")
+            gl.append(link_result.rendered)
+        _log_capability_node(agent, link_result, mode, cache_reused, len(cap_skills))
+    except Exception as e:  # noqa: BLE001 — never break codegen, never fall back to legacy
+        logger.warning("[skill_injector] capability injection failed: %s", e)
+
+
+def _inject_legacy(agent, result) -> None:
+    """LEGACY delivery — Tier-0 catalog (always) + per-node selected bodies/refs.
+
+    Byte-for-byte the pre-capability behavior; this is the A/B control and the
+    production default. UNCHANGED — do not alter.
+    """
+    try:
+        skills = skill_retriever.loaded_skills()
+        if skills:
+            gl = result.get("Implementation guideline")
+            if isinstance(gl, list):
+                gl.append("")
+                gl.append("## Available Skills (catalog)")
+                gl.append(skill_retriever.catalog_text())
+                selection, meta = _ensure_selection(agent, skills)
+                max_skills, max_refs = _caps()
+                bodies, stats = _render_selected_bodies(
+                    selection, skills, max_skills, max_refs
+                )
+                if bodies:
+                    gl.append("")
+                    gl.append("## Loaded Skill Content")
+                    gl.extend(bodies)
+                _log_node_selection(agent, meta, stats, max_skills, max_refs)
+    except Exception as e:  # noqa: BLE001 — never break codegen
+        logger.warning("[skill_injector] guideline injection failed: %s", e)
+
+
 def _wrap_impl_guideline(orig_fn):
-    """Append Tier-0 catalog (always) + Tier-1/2 selected bodies to the guideline."""
+    """Dispatch the impl_guideline seam on the delivery mode (read at call time).
+
+    ``legacy`` runs the unchanged catalog + per-node body/reference selector;
+    ``capability_task`` / ``capability_node`` route through the capability linker.
+    Both paths run AFTER the benchmark-harness append (which reaches both A/B
+    cells identically). The mode is read per call so it can be flipped via env
+    without a rebuild and so legacy stays the byte-identical default.
+    """
     if getattr(orig_fn, "_mleval_patched", False):
         return orig_fn
 
@@ -447,26 +676,11 @@ def _wrap_impl_guideline(orig_fn):
         result = orig_fn(agent)
         # Benchmark harness (both cells) — see eval_harness.py, not skill content.
         apply_impl_guideline_harness(result)
-        try:
-            skills = skill_retriever.loaded_skills()
-            if skills:
-                gl = result.get("Implementation guideline")
-                if isinstance(gl, list):
-                    gl.append("")
-                    gl.append("## Available Skills (catalog)")
-                    gl.append(skill_retriever.catalog_text())
-                    selection, meta = _ensure_selection(agent, skills)
-                    max_skills, max_refs = _caps()
-                    bodies, stats = _render_selected_bodies(
-                        selection, skills, max_skills, max_refs
-                    )
-                    if bodies:
-                        gl.append("")
-                        gl.append("## Loaded Skill Content")
-                        gl.extend(bodies)
-                    _log_node_selection(agent, meta, stats, max_skills, max_refs)
-        except Exception as e:  # noqa: BLE001 — never break codegen
-            logger.warning("[skill_injector] guideline injection failed: %s", e)
+        mode = _capability_mode()
+        if mode in _CAPABILITY_MODES:
+            _inject_capability(agent, result, mode)
+        else:
+            _inject_legacy(agent, result)
         return result
 
     wrapper._mleval_patched = True

@@ -1,0 +1,54 @@
+You are auditing a skill package for COVERAGE. Your job is to enumerate every
+distinct SOLVABLE ISSUE the skill's own documentation teaches how to handle — so
+we can later check whether the compiled capability units actually capture each one.
+
+You are given ONLY the source (SKILL.md + reference files). You are deliberately
+NOT shown the compiled units — enumerate issues from the source alone. Do not
+tailor the list to any unit inventory.
+
+Skill: {{skill_name}}
+
+=== SKILL.md ===
+{{skill_md}}
+
+=== reference files ===
+{{references_block}}
+
+A SOLVABLE ISSUE is a place where the source gives ACTIONABLE guidance for a
+concrete situation an ML engineer could hit while using this library. Include:
+  - diagnostic situations: an error / failure / crash / OOM / mismatch and its fix
+    ("if you see X, do Y");
+  - operational pitfalls / gotchas: ordering constraints, "must do X before Y",
+    silent-corruption traps, "avoid Z because ...";
+  - hard preconditions / constraints: memory / hardware / version requirements that
+    gate whether an approach works;
+  - method/decision points where the source says which option to pick and when.
+EXCLUDE pure conceptual background that carries no action, and marketing/summary text.
+
+Be thorough but STRICT: every issue you list MUST be backed by a verbatim quote from
+the source. If you cannot quote it, do not list it. Prefer splitting distinct fixes
+into separate issues over lumping them (a coverage audit needs granularity — e.g. a
+training-time OOM fix and a serving-time OOM fix are DIFFERENT issues).
+
+Return ONLY a single JSON object (no prose, no code fence):
+{
+  "issues": [
+    {
+      "id": "kebab-case-slug",
+      "statement": "the situation / problem / decision, in the engineer's terms (one line)",
+      "source_fix": "what the source says to DO about it (one line)",
+      "quote": "a VERBATIM span copied from the source, <=160 chars, that proves the fix is present",
+      "source_file": "SKILL.md | references/<name>.md",
+      "stages": ["generate" | "refine" | "debug" | "explore", ...],
+      "severity": "high" | "medium" | "low"
+    }
+  ]
+}
+
+STAGES = the pipeline stage(s) at which a per-node agent would face this issue:
+  generate = writing fresh code from scratch; refine = improving working code;
+  debug = fixing a failing/erroring run; explore = choosing an approach / planning.
+A training-OOM traceback is a `debug` issue; "which PEFT method should I use" is
+`explore`/`generate`; an ordering gotcha in setup is `generate`/`debug`.
+SEVERITY = how likely this issue is to BLOCK or silently corrupt a real run if
+unaddressed (high = blocks/corrupts; low = minor optimization).

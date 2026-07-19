@@ -1,0 +1,492 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "vllm-inference",
+  "scores": {
+    "claims_audited": 97,
+    "label_histogram": {
+      "supported": 80,
+      "entailed": 16,
+      "unsupported": 1
+    },
+    "support_rate_all": 0.9897,
+    "support_rate_strict": 1.0,
+    "strict_claims": 90,
+    "fabrications": [],
+    "flagged_but_unsupported": [
+      {
+        "unit": "structured-output-decoding",
+        "path": "applicability.avoid_when[0]",
+        "note": "The package never states guided decoding adds constraint 'overhead' or any cost; this rationale appears invented, echoing the unrelated dequantization-overhead claim from the quantization section."
+      }
+    ],
+    "applicability_correct_rate": 1.0,
+    "validation_usable_rate": 1.0,
+    "units_with_bad_locators": []
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "offline-batch-inference",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "entailed",
+            "note": "SKILL.md states 'evaluates' and 'one step of a larger task', but 'labeling, dataset construction' are invented specific examples not in the text."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU is presented as a blanket requirement, but the package's own decision tree lists GGUF as an option 'for CPU/edge', which is not accounted for."
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "The doc only states one RequestOutput per prompt in order; the 'non-empty text' guarantee is a synthesized addition."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "serve-openai-compatible-api",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU/network/persistent-service are reasonable inferences from 'vllm serve' launching a foreground HTTP server, but not literally stated as requirements; the package also allows a GGUF/CPU path elsewhere."
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "'non-empty content' is a synthesized concreteness addition, not stated in the package."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "vram-preflight-check",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "entailed",
+            "note": "check_vram.sh itself only warns on a threshold; using it to choose between full-precision/quantize/shard is inferred from the decision-tree table, not documented as something the script does."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Flagged in synthesized_fields; the CUDA_VISIBLE_DEVICES fix is pulled from a different reference file (parallelism-scaling.md), not stated in connection with this script."
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "quantization-method-selection",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "quantize-to-fit-vram",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "entailed",
+            "note": "Package never states full precision/FP8/INT8 'outperforms' weight-only 4-bit at throughput; inferred from the VRAM-bound vs throughput-bound framing."
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Re-running check_vram.sh to confirm a fit post-quantization is a reasonable inference, not stated as a verification step."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "entailed",
+            "note": "'use AWQ/GPTQ INT4 instead' is a synthesized fallback suggestion for FP8 failure, not stated as such in the package."
+          },
+          {
+            "path": "recovery[2]",
+            "label": "entailed",
+            "note": "Combines AWQ's 'under-optimized' note with a re-quantize suggestion stated elsewhere for BitsAndBytes, not stated together for AWQ."
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "multi-gpu-parallelism",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Flagged in synthesized_fields; matching visible GPU count to --tensor-parallel-size is a reasonable but uncited troubleshooting inference."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "entailed",
+            "note": "Flagged in synthesized_fields; 'may need multiple nodes' as the OOM diagnosis is inferred, not stated as a failure/recovery mapping."
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "structured-output-decoding",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "entailed",
+            "note": "'Classification' is directly shown via the sentiment/choice example; 'extraction' is not in the package and is an inferred generalization."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "unsupported",
+            "note": "The package never states guided decoding adds constraint 'overhead' or any cost; this rationale appears invented, echoing the unrelated dequantization-overhead claim from the quantization section."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU is not stated specifically for guided decoding; inferred from the package's general GPU-serving context."
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported",
+            "note": "Online 'Structured Outputs' section is listed in the reference file's Contents even though its body is truncated in the provided package excerpt."
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Flagged in synthesized_fields; a reasonable troubleshooting inference, not stated in the package."
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}

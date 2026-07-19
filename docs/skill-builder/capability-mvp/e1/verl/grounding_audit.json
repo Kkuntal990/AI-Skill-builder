@@ -1,0 +1,469 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "verl-rl-training",
+  "scores": {
+    "claims_audited": 95,
+    "label_histogram": {
+      "supported": 74,
+      "entailed": 21,
+      "unsupported": 0
+    },
+    "support_rate_all": 1.0,
+    "support_rate_strict": 1.0,
+    "strict_claims": 78,
+    "fabrications": [],
+    "flagged_but_unsupported": [],
+    "applicability_correct_rate": 1.0,
+    "validation_usable_rate": 1.0,
+    "units_with_bad_locators": [
+      "grpo-math-reasoning-training"
+    ]
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "verl-algorithm-backend-selection",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "grpo-math-reasoning-training",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "entailed",
+            "note": "Workflow's own example reward is rule-based/exact-match, but the package never states a rule-based reward as a precondition for using this workflow."
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Inferred from Workflow 2's stated GAE use-case; not itself stated as an avoid-condition for the GRPO workflow."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[2]",
+            "label": "entailed",
+            "note": "\"stable\" loss curves isn't stated as a check for this workflow; inferred from the separate instability-troubleshooting framing."
+          },
+          {
+            "path": "validation[3]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[3]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": false
+      },
+      {
+        "id": "custom-reward-function",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Exact length-match check isn't stated; inferred from the batch-return docstring and per-response loop structure."
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Failure mode inferred from the path/name config fields; no troubleshooting text ties this specifically to this procedure."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "entailed",
+            "note": "\"normalization/whitespace\" is inferred from the .strip() calls in the example; not a stated instruction."
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "stabilize-verl-training",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[3]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized inverse of the four listed symptoms; not literal package text."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "\"gpu\" runtime isn't explicitly declared; inferred from the CUDA-OOM/GPU-specific nature of all listed symptoms."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "entailed",
+            "note": "Synthesized restatement of the fixes' intended effect, not a stated outcome."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "entailed",
+            "note": "\"Re-launch and re-check\" is not stated anywhere; a generic inferred closing step."
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed"
+          },
+          {
+            "path": "validation[2]",
+            "label": "entailed"
+          },
+          {
+            "path": "validation[3]",
+            "label": "entailed"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "\"Combine ... escalate\" is an inferred escalation strategy, not stated as a combined step."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "large-scale-megatron-training",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized inference; package states no explicit single-node-FSDP contraindication for choosing Megatron."
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "entailed",
+            "note": "\"Would not fit FSDP\" is an inferred causal claim; package only states this workflow is for >70B/expert-parallelism cases."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Package only instructs running `ray status`; that it must show all head/worker nodes connected is inferred."
+          },
+          {
+            "path": "validation[2]",
+            "label": "entailed"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[3]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "vllm-backend-version-compatibility",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized inverse; package doesn't explicitly say to skip this guidance for SGLang/HF backends."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}

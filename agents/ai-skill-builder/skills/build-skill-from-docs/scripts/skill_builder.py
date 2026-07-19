@@ -94,7 +94,7 @@ OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6"
 HTTP_TIMEOUT = 30
 LLM_TIMEOUT = 120
 USER_AGENT = "ai-skill-builder/1.0 (+https://github.com/Kkuntal990/AI-Skill-builder)"
-BUILDER_VERSION = "2.2.0"  # 2.2.0: capture library-docs version + docs_sha256 in provenance
+BUILDER_VERSION = "2.3.0"  # 2.3.0: experimental capability compiler (--emit-capabilities + compile-existing)
 
 # Runtime MCP declarations (capability contract). Skills *declare* expected MCPs in
 # frontmatter; they don't auto-install. The agent runtime decides whether to invoke them.
@@ -2636,6 +2636,34 @@ def _pipeline(
                 "message": f["message"] + note,
             })
 
+    # Experimental capability manifest (capability-linker MVP W3, plan §4.1).
+    # Runs after body+references+provenance exist. Failure must NOT fail an
+    # otherwise valid build (HLD §8.1): outcomes are recorded separately and
+    # cmd_build writes the manifest beside SKILL.md only on success.
+    capabilities_manifest = None
+    capability_report = None
+    if getattr(args, "emit_capabilities", False):
+        try:
+            import capability_compiler as _cc
+            _bundle = {
+                "skill_name": skill_name,
+                "skill_md": body,
+                "references": {f"references/{k}": v for k, v in refs_content.items()},
+                "scripts": [f"scripts/{k}" for k in (scripts_content or {})],
+            }
+            _snapshot = {
+                "kind": "upstream-doc",
+                "url": url,
+                "content_sha256": provenance["docs_sha256"],
+                "fetched_at": provenance["fetched_at"],
+            }
+            capabilities_manifest, capability_report = _cc.compile_capabilities(
+                _bundle, _snapshot, llm=_llm_call,
+                max_repair_rounds=int(getattr(args, "max_repair_eval_rounds", 2)),
+            )
+        except Exception as e:  # noqa: BLE001 — experiment must not break the build
+            capability_report = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
     return {
         "skill_name": skill_name,
         "plan": plan,
@@ -2643,6 +2671,8 @@ def _pipeline(
         "references": refs_content,
         "templates": templates_content,
         "scripts": scripts_content,
+        "capabilities": capabilities_manifest,
+        "capability_report": capability_report,
         "evals": evals_doc,
         "triggering_report": triggering_report,
         "critic": critic_report,
@@ -3029,6 +3059,23 @@ def cmd_build(args: argparse.Namespace) -> dict:
         scripts=result.get("scripts"),
         force=args.force,
     )
+    # Capability manifest (experimental): capabilities.json beside SKILL.md on
+    # compile success; the compile report always lands under evals/. A failed
+    # compile is recorded, never a build error (plan §4.1).
+    capability_files: list[str] = []
+    if result.get("capability_report") is not None:
+        try:
+            if result.get("capabilities") is not None:
+                (target / "capabilities.json").write_text(
+                    json.dumps(result["capabilities"], indent=2) + "\n")
+                capability_files.append("capabilities.json")
+            (target / "evals").mkdir(parents=True, exist_ok=True)
+            (target / "evals" / "capability_compile_report.json").write_text(
+                json.dumps(result["capability_report"], indent=2) + "\n")
+            capability_files.append("evals/capability_compile_report.json")
+        except OSError as e:
+            result["capability_report"]["write_error"] = str(e)
+
     ok, check_out = openclaw_skills_check(target)
     update_lockfile(result["skill_name"], url, result["skill_md"], target)
     _audit("build.completed", {
@@ -3048,7 +3095,9 @@ def cmd_build(args: argparse.Namespace) -> dict:
             *(f"templates/{k}" for k in (result.get("templates") or {})),
             *(f"scripts/{k}" for k in (result.get("scripts") or {})),
             *(["evals/evals.json"] if result["evals"] else []),
+            *capability_files,
         ],
+        "capability_report": result.get("capability_report"),
         "validation_warnings": [i for i in result["validation"] if i["severity"] == "warning"],
         "ship_gate": gate_result,
         "quality_gate": result.get("quality_gate"),
@@ -3059,6 +3108,40 @@ def cmd_build(args: argparse.Namespace) -> dict:
         "quality_gate": result.get("quality_gate", "skipped"),
         "critic_rounds": (result.get("critic") or {}).get("rounds", 0),
         "hardware_hints_used": result.get("hardware_hints_used", False),
+    }
+
+
+def cmd_compile_existing(args: argparse.Namespace) -> dict:
+    """EXPERIMENTAL (capability-linker MVP W3): compile an existing skill package
+    (SKILL.md + references/) into capabilities.json — the entry for packages this
+    builder did not write (e.g. third-party corpus skills). Provenance grounds in
+    the package snapshot (sources.kind=skill-package), never fabricated upstream
+    anchors."""
+    import capability_compiler as cc
+
+    skill_dir = Path(args.skill_dir).expanduser()
+    bundle = cc.load_skill_bundle(skill_dir)
+    snapshot = cc.build_source_snapshot(skill_dir, url=args.url or "")
+    manifest, report = cc.compile_capabilities(
+        bundle,
+        snapshot,
+        llm=_llm_call,
+        skill_dir=skill_dir,
+        max_repair_rounds=max(0, int(args.max_repair_rounds)),
+    )
+    out_dir = Path(args.out).expanduser() if args.out else skill_dir
+    written = cc.write_outputs(out_dir, manifest, report)
+    _audit("compile_existing." + ("completed" if manifest else "failed"), {
+        "skill_dir": str(skill_dir), "skill_name": bundle["skill_name"],
+        "out": str(out_dir), "attempts": len(report.get("attempts", [])),
+    })
+    return {
+        "status": "ok" if manifest is not None else "failed",
+        "skill_name": bundle["skill_name"],
+        "out": str(out_dir),
+        "files_written": written,
+        "units": len((manifest or {}).get("capabilities", [])),
+        "report": report,
     }
 
 
@@ -3169,6 +3252,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="base executor for --baseline-probe (default main; never skill-tester)")
         sp.add_argument("--max-repair-eval-rounds", type=int, default=2,
                         help="M6: max behavior-repair rounds when the ship-gate fails (default 2)")
+        sp.add_argument("--emit-capabilities", action="store_true",
+                        help="EXPERIMENTAL (capability-linker MVP): also compile the built skill "
+                             "into capabilities.json (schema 0.2). Compile failure never fails "
+                             "the build; the compile report lands in evals/.")
         sp.add_argument("--force", action="store_true")
         sp.add_argument("--out", default=None)
 
@@ -3197,6 +3284,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     built = sub.add_parser("built", help="List skills this agent has generated")
     built.set_defaults(func=cmd_built)
+
+    compile_existing = sub.add_parser(
+        "compile-existing",
+        help="EXPERIMENTAL: compile an existing skill package (SKILL.md + references/) "
+             "into capabilities.json (capability-linker MVP; schema 0.2)")
+    compile_existing.add_argument("skill_dir", help="Path to a skill directory containing SKILL.md")
+    compile_existing.add_argument("--url", default="",
+                                  help="source URL recorded in source_snapshot "
+                                       "(default: file:// path of the skill dir)")
+    compile_existing.add_argument("--out", default=None,
+                                  help="output directory (default: the skill dir itself)")
+    compile_existing.add_argument("--max-repair-rounds", type=int, default=2,
+                                  help="validator-driven repair rounds after the first attempt (default 2)")
+    compile_existing.set_defaults(func=cmd_compile_existing)
 
     freshness = sub.add_parser(
         "freshness", help="Re-fetch source + diff API symbols vs the installed skill (P1.7 / R4)")

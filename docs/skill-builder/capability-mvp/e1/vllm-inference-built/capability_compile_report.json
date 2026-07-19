@@ -1,0 +1,36 @@
+{
+  "skill_name": "vllm-inference",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 46832,
+      "response_chars": 17680,
+      "units": 7,
+      "validator_errors": [],
+      "validator_warning_count": 0
+    }
+  ],
+  "validator_warnings": [],
+  "stats": {
+    "units": 7,
+    "kinds": {
+      "procedure": 4,
+      "workflow": 1,
+      "diagnostic": 1,
+      "reference": 1
+    },
+    "units_with_avoid_when": 6,
+    "units_with_depends_on": 2,
+    "synthesized_field_instances": {
+      "delivery.stages": 7,
+      "recovery": 3,
+      "applicability.avoid_when": 2,
+      "depends_on": 2
+    }
+  }
+}

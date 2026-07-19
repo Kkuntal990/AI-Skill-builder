@@ -1,0 +1,263 @@
+{
+  "setup": {
+    "harness": "replay_capability_linker",
+    "source_dir": "pulled-results/spike-018",
+    "deterministic": true,
+    "llm_calls": true,
+    "budget": {
+      "max_units": 3,
+      "max_reference_files": 1,
+      "max_chars": null
+    },
+    "capability_schema_version": "0.2"
+  },
+  "library": {
+    "skills": [
+      {
+        "name": "peft-tuning",
+        "units": 6,
+        "has_references": true
+      },
+      {
+        "name": "vllm-inference",
+        "units": 7,
+        "has_references": true
+      }
+    ],
+    "total_units": 13,
+    "units_by_skill": {
+      "peft-tuning": 6,
+      "vllm-inference": 7
+    }
+  },
+  "trajectories": [
+    {
+      "dir": "spike-018-samsum-with-skill-s0",
+      "nodes": 60
+    },
+    {
+      "dir": "spike-018-samsum-with-skill-s1",
+      "nodes": 20
+    }
+  ],
+  "total_nodes": 80,
+  "per_stage": {
+    "generate": {
+      "node_count": 8,
+      "candidates_survivors": {
+        "n": 8,
+        "sum": 104,
+        "mean": 13,
+        "median": 13.0,
+        "min": 13,
+        "max": 13
+      },
+      "hard_filtered_by_reason": {},
+      "legacy_exposure_units": {
+        "n": 8,
+        "sum": 52,
+        "mean": 6.5,
+        "median": 6.5,
+        "min": 0,
+        "max": 13
+      },
+      "capability_upper_bound_units": {
+        "n": 8,
+        "sum": 24,
+        "mean": 3,
+        "median": 3.0,
+        "min": 3,
+        "max": 3
+      },
+      "dep_added_total": 0,
+      "dep_dropped_total": 0,
+      "recorded_declined": 4,
+      "capability_actual_exposure_units": {
+        "n": 8,
+        "sum": 16,
+        "mean": 2,
+        "median": 3.0,
+        "min": 0,
+        "max": 3
+      }
+    },
+    "refine": {
+      "node_count": 21,
+      "candidates_survivors": {
+        "n": 21,
+        "sum": 63,
+        "mean": 3,
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "hard_filtered_by_reason": {
+        "stage_excluded": 210
+      },
+      "legacy_exposure_units": {
+        "n": 21,
+        "sum": 91,
+        "mean": 4.3333,
+        "median": 6,
+        "min": 0,
+        "max": 13
+      },
+      "capability_upper_bound_units": {
+        "n": 21,
+        "sum": 63,
+        "mean": 3,
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "dep_added_total": 0,
+      "dep_dropped_total": 0,
+      "recorded_declined": 7,
+      "capability_actual_exposure_units": {
+        "n": 21,
+        "sum": 35,
+        "mean": 1.6667,
+        "median": 2,
+        "min": 0,
+        "max": 3
+      }
+    },
+    "debug": {
+      "node_count": 45,
+      "candidates_survivors": {
+        "n": 45,
+        "sum": 135,
+        "mean": 3,
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "hard_filtered_by_reason": {
+        "stage_excluded": 360,
+        "dep_incompatible": 90
+      },
+      "legacy_exposure_units": {
+        "n": 45,
+        "sum": 140,
+        "mean": 3.1111,
+        "median": 0,
+        "min": 0,
+        "max": 13
+      },
+      "capability_upper_bound_units": {
+        "n": 45,
+        "sum": 135,
+        "mean": 3,
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "dep_added_total": 0,
+      "dep_dropped_total": 0,
+      "recorded_declined": 24,
+      "capability_actual_exposure_units": {
+        "n": 45,
+        "sum": 0,
+        "mean": 0,
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    "explore": {
+      "node_count": 6,
+      "candidates_survivors": {
+        "n": 6,
+        "sum": 18,
+        "mean": 3,
+        "median": 3.0,
+        "min": 3,
+        "max": 3
+      },
+      "hard_filtered_by_reason": {
+        "stage_excluded": 60
+      },
+      "legacy_exposure_units": {
+        "n": 6,
+        "sum": 12,
+        "mean": 2,
+        "median": 0.0,
+        "min": 0,
+        "max": 6
+      },
+      "capability_upper_bound_units": {
+        "n": 6,
+        "sum": 18,
+        "mean": 3,
+        "median": 3.0,
+        "min": 3,
+        "max": 3
+      },
+      "dep_added_total": 0,
+      "dep_dropped_total": 0,
+      "recorded_declined": 4,
+      "capability_actual_exposure_units": {
+        "n": 6,
+        "sum": 1,
+        "mean": 0.1667,
+        "median": 0.0,
+        "min": 0,
+        "max": 1
+      }
+    }
+  },
+  "other_stage_nodes": 0,
+  "exposure": {
+    "legacy_all_units": {
+      "n": 80,
+      "sum": 295,
+      "mean": 3.6875,
+      "median": 6.0,
+      "min": 0,
+      "max": 13
+    },
+    "capability_upper_bound": {
+      "n": 80,
+      "sum": 240,
+      "mean": 3,
+      "median": 3.0,
+      "min": 3,
+      "max": 3
+    },
+    "caveat": "capability_upper_bound is survivors capped by budget.max_units + dependency closure with the LLM selector STUBBED to admit-all \u2014 an UPPER BOUND, not the injected set. On nodes where the legacy selector declined (legacy exposure 0), the upper bound is >0 because the semantic selector that would also likely decline is not run. The real relative-reduction number (plan gate >=30%) needs the LLM pass (--with-selector); it is a documented follow-up, not computed here.",
+    "capability_actual": {
+      "n": 80,
+      "sum": 52,
+      "mean": 0.65,
+      "median": 0.0,
+      "min": 0,
+      "max": 3
+    },
+    "actual_reduction_vs_legacy_pct": 82.37
+  },
+  "hard_constraint_violation": {
+    "nodes": 80,
+    "nodes_with_violation": 0,
+    "total_violating_units": 0,
+    "rate": 0.0,
+    "note": "Assertion check: every admitted unit re-passes its intrinsic hard constraints against the node profile. 0 by construction validates the three-valued filter; any non-zero value is a filter defect."
+  },
+  "recorded_legacy_selection": {
+    "nonempty_nodes": 41,
+    "declined_nodes": 39,
+    "picks_by_skill": {
+      "peft-tuning": 41,
+      "vllm-inference": 7
+    }
+  },
+  "selector_health": {
+    "selected": 20,
+    "genuine_decline": 60,
+    "no_candidates": 0,
+    "transport_error": 0,
+    "parse_failure": 0,
+    "masked_failure": 0,
+    "trustworthy": true,
+    "note": "masked_failure (transport_error + parse_failure) counts nodes whose 0-unit exposure is a FAILURE, not a real abstention. The exposure-reduction number is only valid when masked_failure == 0; any non-zero value means some 'reduction' is a silent claude-CLI failure and the run must be redone."
+  }
+}

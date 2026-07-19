@@ -13,6 +13,22 @@ codegen trajectories, and the roadmap for hardening that selection.
 > build-time smoke green). **M3 (ablation arms) and M4 remain unbuilt** and M3 is
 > the first step that spends a live GPU Job — gated on explicit approval.
 
+> **Experimental delivery path (2026-07-18):** an **alternative** to the legacy
+> per-node LLM-selector described in this doc now exists — the **capability linker**
+> (`MLEVAL_SKILL_DELIVERY_MODE ∈ {legacy (default), capability_task, capability_node}`).
+> Instead of injecting whole `SKILL.md` bodies + `references/*.md`, it links
+> source-grounded **capability units** (compiled at build time into a per-skill
+> `capabilities.json`) through the same `get_impl_guideline_from_agent` seam, behind a
+> deterministic hard compatibility filter (hardware/artifact/runtime/stage) → LLM
+> selector → dependency closure → budgeted rendering. **`legacy` remains the default
+> and the A/B control** — everything below is unchanged for it. Sidecar is now **1.1.0**
+> (was 1.0.0; the legacy path is byte-identical, so legacy-cell comparisons across the
+> version boundary stay valid). Runtime + offline deterministic E2 are DONE and passing;
+> the `--with-selector` LLM replay pass and the gated live E3 pilot are pending. Full
+> design: [capability-linker HLD](../skill-builder/capability-linker-mvp-hld.md) +
+> [plan](../skill-builder/capability-linker-mvp-plan.md); tracked as an experimental
+> track in the [Implementation roadmap](#implementation-roadmap) below.
+
 ## Core thesis
 
 For a non-tool-using codegen agent, "skill retrieval" means exactly one thing:
@@ -253,6 +269,44 @@ M3–M4 unbuilt.**
 - Embedding pre-shortlist → library **≥ 30** or replay shows wrong-family picks.
 - Rich catalog → replay shows description-level confusion *after* builder-side repair.
 - Reference summaries → token telemetry shows ref bloat.
+
+### Experimental track — capability linker (alternative delivery path; does NOT renumber M0–M4)
+
+A separate, **opt-in** delivery path that swaps whole-body injection for
+source-grounded **capability-unit linking**. It sits *alongside* M0–M4 — it does not
+renumber or replace them, and the legacy per-node selector above remains the default
+and the A/B control. Selected via `MLEVAL_SKILL_DELIVERY_MODE`:
+
+| Mode | Behavior |
+|---|---|
+| `legacy` (default) | per-node LLM-selector of `SKILL.md` bodies + `references/*.md` — everything above this section |
+| `capability_task` | link capability units **once** at the draft node, reuse the rendered bundle for the whole trajectory |
+| `capability_node` | re-link compatible capability units **independently at every codegen node** |
+
+Pipeline (capability modes): deterministic **hard compatibility filter**
+(hardware/artifact/runtime/stage; three-valued — known-false rejects, `unknown` passes
+through to the selector) → temp-0 **LLM selection** over compact catalog entries →
+deterministic **dependency closure** → **budgeted rendering** of a compact execution
+brief (no raw `SKILL.md` body; ≤1 full reference). Same `get_impl_guideline_from_agent`
+seam and same append-only selection log (extended with filter/closure/fallback fields);
+capability-mode → legacy silent fallback is **prohibited** so a treatment arm stays clean.
+
+- **Sidecar 1.1.0** (was 1.0.0). The legacy path is byte-identical, so 1.0.0-vs-1.1.0
+  comparisons across the legacy cell remain valid.
+- **Status:** runtime (W5) + offline deterministic E2 (W6) **DONE and passing** — 88
+  tests; deterministic E2 replay on spike-018 = 80 nodes, **0 hard-constraint
+  violations**; perturbation gates **100% expected-response + 100% invariance** (report:
+  `docs/skill-builder/capability-mvp/e2/e2_report.json`). **Pending:** the
+  `--with-selector` LLM replay pass for semantic selected-unit precision/recall, and the
+  gated live **E3** pilot.
+- **E3 arms** (the live MLEvolve A/B for this method): `no_skill` / `legacy_node` /
+  `capability_task` / `capability_node`. Per a user decision, the **first live run is
+  simplified to `capability_node` only**, reusing the existing mvp-032 legacy / `no_skill`
+  baselines after a one-trajectory reproduction check on the rebuilt image — the full
+  four-arm matrix is **not** run from the start.
+- Full design + gates E0–E3:
+  [capability-linker HLD](../skill-builder/capability-linker-mvp-hld.md) +
+  [plan](../skill-builder/capability-linker-mvp-plan.md).
 
 ### Parallel track — not this harness's code
 

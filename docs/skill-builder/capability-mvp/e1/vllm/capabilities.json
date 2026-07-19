@@ -1,0 +1,455 @@
+{
+  "capabilities": [
+    {
+      "id": "choose-vllm-vs-alternatives",
+      "kind": "reference",
+      "title": "Choose vLLM vs alternative inference runtimes",
+      "summary": "Decide whether vLLM fits the serving scenario or an alternative runtime is a better match.",
+      "applicability": {
+        "when": [
+          "selecting an inference/serving runtime for an LLM",
+          "deploying a production LLM API needing high throughput (100+ req/sec)",
+          "serving OpenAI-compatible endpoints or multi-user apps (chatbots, assistants)",
+          "serving a large model under limited GPU memory while needing low latency + high throughput"
+        ],
+        "avoid_when": [
+          "CPU/edge, single-user inference (prefer llama.cpp)",
+          "research, prototyping, or one-off generation (prefer HuggingFace transformers)",
+          "NVIDIA-only deployment needing absolute maximum performance (consider TensorRT-LLM)",
+          "already standardized on the HuggingFace ecosystem (consider Text-Generation-Inference)"
+        ]
+      },
+      "expected_outcomes": [
+        "vLLM delivers up to ~24x higher throughput than standard transformers via PagedAttention (block-based KV cache) and continuous batching",
+        "vs TensorRT-LLM on 70B, TRT is ~12% faster but vLLM is far easier to set up and is multi-platform"
+      ],
+      "procedure": {
+        "steps": [
+          "Use vLLM for production LLM APIs (100+ req/sec), OpenAI-compatible endpoints, multi-user apps, or fitting large models in limited GPU memory with low latency.",
+          "Prefer llama.cpp for CPU/edge, single-user inference.",
+          "Prefer HuggingFace transformers for research, prototyping, and one-off generation.",
+          "Consider TensorRT-LLM only when NVIDIA-only and absolute maximum performance is required.",
+          "Consider Text-Generation-Inference when already embedded in the HuggingFace ecosystem."
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "explore",
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#when-to-use-vs-alternatives"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/optimization.md#benchmark-results"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "launch-vllm-openai-server",
+      "kind": "procedure",
+      "title": "Launch an OpenAI-compatible vLLM server sized to the model",
+      "summary": "Start `vllm serve` with flags chosen by model size, then verify readiness before use.",
+      "applicability": {
+        "when": [
+          "serving an LLM behind an OpenAI-compatible HTTP endpoint",
+          "deploying a chat/completions API for multiple clients"
+        ],
+        "avoid_when": [
+          "doing offline batch generation where no server is needed (use the in-process LLM engine)",
+          "a single interactive research generation"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "persistent-service"
+        ]
+      },
+      "produces": [
+        "vllm:serving-endpoint"
+      ],
+      "procedure": {
+        "steps": [
+          "Install vLLM: `pip install vllm`.",
+          "Choose flags by model size: 7B-13B on one GPU -> `--gpu-memory-utilization 0.9 --max-model-len 8192`; 30B-70B -> add `--tensor-parallel-size <power-of-2>` and `--quantization awq`.",
+          "For production add `--enable-prefix-caching --enable-metrics --metrics-port 9090 --host 0.0.0.0`.",
+          "Start the server, e.g. `vllm serve meta-llama/Llama-3-8B-Instruct --port 8000`.",
+          "For gated/private models run `huggingface-cli login` first; for custom architectures add `--trust-remote-code`.",
+          "Query via the OpenAI SDK against base_url `http://localhost:8000/v1` with api_key `EMPTY`."
+        ],
+        "reference_files": [
+          "references/server-deployment.md"
+        ]
+      },
+      "validation": [
+        "`curl http://localhost:8000/health` returns `{\"status\": \"ok\"}`",
+        "A test chat completion via the OpenAI SDK returns non-empty content"
+      ],
+      "recovery": [
+        "`OSError: MODEL not found` -> verify exact HuggingFace model name/capitalization; run `huggingface-cli login` for gated models; add `--trust-remote-code` for custom models",
+        "`Connection refused` when querying -> bind `--host 0.0.0.0`, confirm the port is free with `lsof -i :8000`, and open the firewall",
+        "`ImportError: No module named 'flash_attn'` -> `pip install flash-attn --no-build-isolation` or launch with `--disable-flash-attn`"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#quick-start"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#workflow-1-production-api-deployment"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/server-deployment.md#health-checks-and-monitoring"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#model-loading-errors"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "produces",
+        "requires.runtime",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "offline-batch-inference",
+      "kind": "procedure",
+      "title": "Run offline batch inference with the vLLM engine",
+      "summary": "Generate over many prompts in-process (no HTTP server), letting vLLM batch internally.",
+      "applicability": {
+        "when": [
+          "processing a large dataset of prompts offline",
+          "generating outputs for evaluation without server overhead",
+          "batch generation inside an ML pipeline"
+        ],
+        "avoid_when": [
+          "serving live multi-user traffic (use the OpenAI-compatible server)",
+          "single interactive requests"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:inference-outputs"
+      ],
+      "procedure": {
+        "steps": [
+          "Load prompts (e.g. one per line from a file) into a list.",
+          "Construct `LLM(model=..., tensor_parallel_size=N, gpu_memory_utilization=0.9, max_model_len=...)`.",
+          "Define `SamplingParams(temperature, top_p, max_tokens, stop=[...])`.",
+          "Call `llm.generate(prompts, sampling)` ONCE for all prompts \u2014 vLLM batches internally; do not manually chunk.",
+          "Extract `output.outputs[0].text` and token_ids per result and write to a JSONL file."
+        ]
+      },
+      "validation": [
+        "Number of output records equals the number of input prompts",
+        "Each result contains non-empty generated text"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#workflow-2-offline-batch-inference"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "validation",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "select-quantization-method",
+      "kind": "reference",
+      "title": "Select a quantization method (AWQ / GPTQ / FP8)",
+      "summary": "Pick a quantization scheme by GPU type, model size, and accuracy budget.",
+      "applicability": {
+        "when": [
+          "choosing quantization to fit a large model in limited VRAM",
+          "deciding between AWQ, GPTQ, and FP8 for serving"
+        ],
+        "avoid_when": [
+          "sufficient GPU memory is available and best accuracy is required (serve FP16)",
+          "model is under 13B parameters with memory to spare"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "AWQ: 4-bit (~75% compression), <1% accuracy loss, fast \u2014 best for 70B production models.",
+          "GPTQ: 4-bit, 1-2% loss \u2014 widest model support / best compatibility; use when not on H100.",
+          "FP8: 8-bit, <0.5% loss, fastest \u2014 H100/H800 only (CUDA 12.3+); supports runtime/dynamic quantization with no pre-quantized model.",
+          "SqueezeLLM: 3-4 bit extreme compression, 2-3% loss (~96% MMLU on 70B) \u2014 verify accuracy before use.",
+          "VRAM reference (Llama 2 70B): FP16 ~140GB, FP8 ~70GB, AWQ/GPTQ ~35GB, SqueezeLLM ~26GB.",
+          "Prefer pre-quantized HuggingFace models (e.g. `TheBloke/...-AWQ`); quantizing your own needs an 80GB+ GPU and 128-512 diverse calibration samples from the target domain."
+        ],
+        "reference_files": [
+          "references/quantization.md"
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "explore",
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "references/quantization.md#quantization-methods-comparison"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#workflow-3-quantized-model-serving"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "serve-quantized-model",
+      "kind": "procedure",
+      "title": "Serve a quantized model to fit limited GPU memory",
+      "summary": "Launch vLLM with a `--quantization` flag matching the model format and verify output quality.",
+      "applicability": {
+        "when": [
+          "a model does not fit in available VRAM at FP16",
+          "need to run a 70B model on a single 40GB GPU"
+        ],
+        "avoid_when": [
+          "adequate VRAM is available and best accuracy is required (serve unquantized)",
+          "FP8 is chosen but no H100/H800 GPU is available"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "persistent-service"
+        ]
+      },
+      "produces": [
+        "vllm:serving-endpoint"
+      ],
+      "depends_on": [
+        "select-quantization-method"
+      ],
+      "procedure": {
+        "steps": [
+          "Pick a method (see select-quantization-method) and obtain a pre-quantized HF model or use dynamic FP8.",
+          "Launch with the matching flag, e.g. `vllm serve TheBloke/Llama-2-70B-AWQ --quantization awq --tensor-parallel-size 1 --gpu-memory-utilization 0.95` (fits a 70B model in ~35-40GB VRAM).",
+          "The `--quantization` value MUST match the model's format (awq / gptq / fp8).",
+          "For FP8 dynamic quantization no pre-quantized model is needed: `vllm serve MODEL --quantization fp8` (H100/H800 only).",
+          "Compare quantized outputs against the unquantized model on task-specific prompts to confirm quality."
+        ],
+        "reference_files": [
+          "references/quantization.md"
+        ]
+      },
+      "validation": [
+        "Server loads without OOM and `curl /health` returns ok",
+        "Sampled outputs match expected task quality vs FP16 on representative prompts"
+      ],
+      "recovery": [
+        "`RuntimeError: Quantization format not supported` -> set `--quantization` to match the model card (awq/gptq)",
+        "Poor quality after quantization -> verify config.json quantization_config, try a different method (e.g. FP8 on H100), or serve unquantized",
+        "OOM with a quantized model -> ensure the `--quantization` flag is set and try `--dtype float16`"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#workflow-3-quantized-model-serving"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/quantization.md#awq-setup-and-usage"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#quantization-problems"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "produces",
+        "requires.runtime",
+        "depends_on",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "resolve-oom-errors",
+      "kind": "procedure",
+      "title": "Resolve vLLM out-of-memory errors",
+      "summary": "Apply the OOM mitigation ladder for model-loading and inference-time CUDA OOM.",
+      "applicability": {
+        "when": [
+          "`torch.cuda.OutOfMemoryError` during model loading",
+          "OOM during inference as the KV cache fills up",
+          "model + KV cache exceeds available VRAM"
+        ],
+        "avoid_when": [
+          "the failure is a correctness/accuracy or connectivity issue rather than memory pressure"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "gpu"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Reduce GPU memory utilization: `--gpu-memory-utilization 0.7` (try 0.7 / 0.75 / 0.8).",
+          "Reduce max sequence length: `--max-model-len 4096` instead of 8192.",
+          "Enable quantization for ~4x memory reduction: `--quantization awq`.",
+          "Split across GPUs with tensor parallelism (power of 2): `--tensor-parallel-size 2`.",
+          "Reduce concurrent sequences: `--max-num-seqs 128` (or 64), and cap per-request `max_tokens` on the client.",
+          "For OOM with a quantized model, confirm the `--quantization` flag matches and try `--dtype float16`."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "Server loads and serves with no OOM errors in the logs"
+      ],
+      "recovery": [
+        "OOM persists after lowering utilization -> combine quantization + tensor parallelism + reduced max-model-len",
+        "OOM only during inference -> lower `--gpu-memory-utilization` (e.g. 0.85), reduce `--max-num-seqs`, and cap client `max_tokens`"
+      ],
+      "delivery": {
+        "stages": [
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#common-issues"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#out-of-memory-oom-errors"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "tune-serving-throughput",
+      "kind": "procedure",
+      "title": "Tune vLLM throughput and latency",
+      "summary": "Benchmark, then adjust concurrency, caching, and memory utilization to hit throughput/TTFT targets.",
+      "applicability": {
+        "when": [
+          "throughput is below target (<50-100 req/sec) on a working server",
+          "TTFT is above target (>1s)",
+          "optimizing an already-running vLLM deployment"
+        ],
+        "avoid_when": [
+          "the server does not yet start or OOMs at load (resolve memory first)",
+          "the problem is output correctness/accuracy rather than performance"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "gpu",
+          "persistent-service"
+        ]
+      },
+      "expected_outcomes": [
+        "Throughput improvement of +30-100%",
+        "TTFT reduction of -20-50%",
+        "GPU utilization >85%",
+        "Prefix caching can cut TTFT substantially for repeated prompt prefixes; speculative decoding yields ~2-3x faster generation for outputs >100 tokens"
+      ],
+      "procedure": {
+        "steps": [
+          "Measure a baseline: `vllm bench throughput --model MODEL --input-tokens 128 --output-tokens 256 --num-prompts 1000`; record throughput, TTFT, tokens/sec.",
+          "Diagnose with `nvidia-smi` (target GPU util >80%) and Prometheus metrics (`curl :9090/metrics | grep vllm`): low GPU util -> under-batched; memory ~100% but GPU <80% -> memory-bound.",
+          "For low throughput: raise `--max-num-seqs` (128 -> 256 -> 512) and enable `--enable-prefix-caching`.",
+          "For high TTFT: enable `--enable-chunked-prefill`, reduce `--max-model-len`; for long generations use speculative decoding (`--speculative-model DRAFT` or `--speculative-method ngram`).",
+          "Tune `--gpu-memory-utilization` (0.7 / 0.85 / 0.9 / 0.95): higher = more batch capacity but higher OOM risk.",
+          "Ensure `--tensor-parallel-size` is a power of 2 (4, not 3).",
+          "Re-benchmark and compare against targets."
+        ],
+        "reference_files": [
+          "references/optimization.md"
+        ]
+      },
+      "validation": [
+        "Re-benchmark shows throughput/TTFT moving toward targets (throughput +30-100%, GPU utilization >85%)"
+      ],
+      "recovery": [
+        "Still <50 req/sec -> increase `--max-num-seqs`, enable prefix caching, confirm GPU util >80%",
+        "TTFT still >1s -> enable chunked prefill, reduce `--max-model-len`, or add tensor parallelism to parallelize prefill",
+        "OOM after raising utilization/seqs -> lower `--gpu-memory-utilization` to 0.7, reduce `--max-model-len`, or quantize"
+      ],
+      "delivery": {
+        "stages": [
+          "refine",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "references/optimization.md#performance-tuning-guide"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#common-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "requires.runtime",
+        "delivery.stages"
+      ]
+    }
+  ],
+  "schema_version": "0.2",
+  "skill_name": "serving-llms-vllm",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/12-inference-serving/vllm",
+    "content_sha256": "a784b349aa3b54356505fdfab466fe50bd823af474db687143d8641785f86f63",
+    "fetched_at": "2026-07-17T23:02:38Z"
+  }
+}

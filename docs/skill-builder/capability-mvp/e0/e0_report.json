@@ -1,0 +1,134 @@
+{
+  "experiment": "E0 — schema capacity probe (agent-authored)",
+  "plan": "docs/skill-builder/capability-linker-mvp-plan.md §5/E0′",
+  "date": "2026-07-17",
+  "schema": {
+    "version": "0.2",
+    "module": "infra/agents/mlevolve/mlevolve_sidecar/capability_schema.py",
+    "sha256": "3edd5ef26c4e1c4c908edf92a8b7a1cd9e1fb93e83d955960de37c0f4dff662c",
+    "frozen_before_held_out": true,
+    "validator_tests": "tests/test_capability_schema.py (17 passed)"
+  },
+  "corpus": {
+    "repo": "https://github.com/Orchestra-Research/AI-Research-SKILLs",
+    "commit": "773a52944ba4747a18bd4ae9ade53fff041adcbc",
+    "cloned": "2026-07-15",
+    "note": "validation ran with --skill-dir against this clone; reference_files existence verified against the pinned snapshot"
+  },
+  "libraries": {
+    "dev": [
+      {
+        "skill": "peft-fine-tuning", "path": "03-fine-tuning/peft",
+        "manifest": "peft.capabilities.json", "valid": true, "units": 5,
+        "kinds": {"reference": 2, "procedure": 3},
+        "synthesized": {"validation": 1, "applicability.avoid_when": 1},
+        "includes_mvp029_rca_unit": "qlora-memory-constrained-finetuning avoid_when inverts the memory-conditional (VRAM >= 40GB for <=8B -> prefer fp16 LoRA)"
+      },
+      {
+        "skill": "serving-llms-vllm", "path": "12-inference-serving/vllm",
+        "manifest": "vllm.capabilities.json", "valid": true, "units": 5,
+        "kinds": {"reference": 1, "workflow": 1, "procedure": 2, "diagnostic": 1},
+        "synthesized": {"applicability.avoid_when": 1, "produces": 1}
+      },
+      {
+        "skill": "transformer-lens-interpretability", "path": "04-mechanistic-interpretability/transformer-lens",
+        "manifest": "transformer-lens.capabilities.json", "valid": true, "units": 5,
+        "kinds": {"diagnostic": 4, "reference": 1},
+        "synthesized": {"validation": 1},
+        "note": "read-only library fits the diagnostic kind naturally; no forcing into procedure shape"
+      },
+      {
+        "skill": "ray-data", "path": "05-data-processing/ray-data",
+        "manifest": "ray-data.capabilities.json", "valid": true, "units": 4,
+        "kinds": {"procedure": 2, "reference": 1, "workflow": 1},
+        "synthesized": {"validation": 2, "applicability.avoid_when": 1},
+        "warnings": "3 units without recovery — the source skill has no Common Issues/troubleshooting content at all (weakest sample, as predicted by the feasibility scan); absence honestly represented rather than fabricated"
+      }
+    ],
+    "held_out": {
+      "skill": "verl-rl-training", "path": "06-post-training/verl",
+      "manifest": "verl.capabilities.json", "valid": true, "units": 5,
+      "kinds": {"reference": 1, "workflow": 3, "diagnostic": 1},
+      "synthesized": {"validation": 2, "applicability.avoid_when": 1, "produces": 1},
+      "new_top_level_fields_needed": 0,
+      "new_runtime_vocab_needed": 0,
+      "new_artifact_names": ["ml:reward-function", "ml:megatron-checkpoint"],
+      "note": "orchestration pressure (multi-node Ray cluster, Megatron TP/PP, backend swapping) encoded with existing fields; multi-node runtime vocab sufficed; min_gpu_count=8 on the GRPO workflow is the first natural hard-filter test case (correctly rejects on our 1x A6000)"
+    }
+  },
+  "aggregates": {
+    "total_units": 24,
+    "kinds": {"reference": 6, "procedure": 7, "diagnostic": 6, "workflow": 5},
+    "all_four_kinds_used_naturally": true,
+    "units_with_avoid_when": 12,
+    "synthesized_field_instances": {"validation": 6, "applicability.avoid_when": 4, "produces": 2},
+    "validation_synthesis_rate_executable_units": "5/12 (42%) of procedure/workflow units needed synthesized validation",
+    "avoid_when_synthesis_rate": "4/12 (33%) of avoid_when-bearing units are inverted-conditional (synthesized)",
+    "feasibility_scan_prediction": "~1/3 synthesis for validation/avoid_when — measured 42%/33%, consistent, validation slightly above prediction"
+  },
+  "gates": {
+    "sampled_workflow_retention": {
+      "bar": ">=80% of sampled workflows retain applicability, procedure, requirements, validation, and failure information",
+      "measured": "24/24 encoded units retain all required information classes (synthesis flagged, never silent)",
+      "pass": true
+    },
+    "held_out_no_new_top_level_field": {
+      "bar": "held-out library (verl) encodes with no new top-level schema field",
+      "measured": "0 new fields, 0 runtime vocab additions; 2 new namespaced artifact names (explicitly not a schema change per HLD §7.4)",
+      "pass": true
+    },
+    "residual_loss_representable": {
+      "bar": "remaining loss representable via namespaced artifacts or optional prose fields",
+      "measured": "true — see findings F1/F2",
+      "pass": true
+    },
+    "verdict": "E0 PASS — proceed to W3 (builder compiler stage) and E1"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "finding": "Per-model-size hardware tables (peft memory table, vllm sizing table) cannot be encoded as a scalar unit-level requires.hardware.vram_gb without mis-gating — the number is conditional on model size.",
+      "resolution": "Hardware tables live in reference units; requires carries only unconditional gates (min_gpu_count, runtime, stage).",
+      "implication": "Linker design: the deterministic hard filter fires on runtime/min_gpu_count/stage; vram_gb hard-gates only when a unit has an unconditional VRAM floor. Model-size-conditional VRAM reasoning is the temp-0 selector's job, fed by reference units."
+    },
+    {
+      "id": "F2",
+      "finding": "Conditional runtime requirements (HF_TOKEN only for gated models; network only for cloud storage; multi-gpu only above a scale) are inexpressible in the flat requires vocabulary.",
+      "resolution": "requires holds only unconditional needs; conditions stay in procedure steps. No new field needed.",
+      "implication": "Hard filter stays conservative (three-valued logic: unknown never rejects)."
+    },
+    {
+      "id": "F3",
+      "finding": "synthesized_fields is field-granular: one synthesized item among three supported validation items marks the whole field.",
+      "resolution": "Conservative over-flagging accepted for the MVP (E1 audits flagged fields at the stricter bar).",
+      "implication": "Post-MVP candidate: per-item derivation annotation. Not needed to test H1-H4."
+    },
+    {
+      "id": "F4",
+      "finding": "Artifact naming drifts without a convention (ml:dataset vs ml:training-dataset used variably across manifests).",
+      "resolution": "E1 compiler prompt should carry a canonical starter list of ml:* names; library-specific namespaces stay open.",
+      "implication": "Not a schema change; matters once artifact hints participate in linking."
+    },
+    {
+      "id": "F5",
+      "finding": "Corpus quality evidence: verl SKILL.md links references/multi-turn.md which does not exist in the bundle (dead link shipped in the corpus); ray-data ships zero failure/recovery content.",
+      "resolution": "Dead-reference validation (already in the validator) is demonstrably necessary; recovery-absence surfaces as warnings, not fabrication.",
+      "implication": "E1's grounding critic must treat the skill package itself as fallible input."
+    },
+    {
+      "id": "F6",
+      "finding": "The canonical stage 'explore' (MLEvolve: evolution) attracted no unit in any manifest — no doc content is evolution-specific.",
+      "resolution": "Stage hints omitted default to all stages at link time; explore nodes will draw from generate/refine-tagged units.",
+      "implication": "Watch in E2 whether explore-stage selections differ from refine; if never, delivery.stages may simplify."
+    }
+  ],
+  "not_encoded_by_budget": {
+    "note": "out of the 3-5 unit budget per skill; all encodable without schema change",
+    "peft": ["IA3/prefix/prompt config detail (facts folded into method-selection reference)", "TRL/Axolotl integration snippets", "DoRA/LoftQ (pointed via references/advanced-usage.md)"],
+    "vllm": ["speculative decoding as a standalone unit (present in triage recovery map)", "platform support matrix"],
+    "transformer-lens": ["SAELens integration snippet", "FactoredMatrix utilities"],
+    "ray-data": ["groupby/aggregation detail", "format support matrix"],
+    "verl": ["multi-turn tool calling (its reference file is missing in the corpus)", "vision-language RL", "LoRA-RL config"]
+  },
+  "reproduce": "python3 infra/agents/mlevolve/mlevolve_sidecar/capability_schema.py docs/skill-builder/capability-mvp/e0/<skill>.capabilities.json --skill-dir <corpus-clone>/<category>/<skill>; python3 -m pytest tests/test_capability_schema.py"
+}

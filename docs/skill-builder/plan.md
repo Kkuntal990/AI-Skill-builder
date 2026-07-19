@@ -2,7 +2,7 @@
 
 > For the design overview, see **[hld.md](hld.md)**.
 
-**Status:** 2.1.0 — Skills-3.0 intent capture + contract-threaded references + conditional-gating critic (see Phase 3.0)
+**Status:** 2.3.0 — Skills-3.0 intent capture + contract-threaded references + conditional-gating critic (see Phase 3.0); since 2.1.0, `2.2.0` added library-docs version provenance and `2.3.0` added an experimental flag-gated capability compiler (`--emit-capabilities` / `compile-existing`)
 **Date:** 2026-06-28
 **Scope:** An OpenClaw agent that turns a Python package's docs URL into a progressive-disclosure SKILL.md + references + templates + evals, optionally augmented with curated community gotchas and runtime MCP fallback.
 

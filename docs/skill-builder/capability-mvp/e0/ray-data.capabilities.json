@@ -1,0 +1,157 @@
+{
+  "schema_version": "0.2",
+  "skill_name": "ray-data",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/05-data-processing/ray-data",
+    "commit": "773a52944ba4747a18bd4ae9ade53fff041adcbc",
+    "fetched_at": "2026-07-15T00:00:00Z"
+  },
+  "capabilities": [
+    {
+      "id": "ray-data-pipeline-construction",
+      "kind": "procedure",
+      "title": "Build a distributed data pipeline: read, transform, write/stream",
+      "summary": "Read Parquet/CSV/JSON/images into a Ray Dataset, transform with vectorized map_batches, and write out or stream batches larger than memory.",
+      "applicability": {
+        "when": [
+          "Processing large datasets (>100GB) for ML training.",
+          "Distributed data preprocessing across a cluster is needed.",
+          "Loading multi-modal data (images, audio, video).",
+          "Data is larger than memory and needs streaming execution."
+        ],
+        "avoid_when": [
+          "Small data (<1GB) on a single machine — use pandas.",
+          "Tabular data with SQL-like operations — use Dask.",
+          "Enterprise ETL and SQL queries — use Spark."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"],
+        "artifacts": ["ml:dataset"]
+      },
+      "produces": ["ray:dataset", "ml:processed-dataset"],
+      "procedure": {
+        "steps": [
+          "Read data: ray.data.read_parquet/read_csv/read_json/read_images from s3://, gs://, or local paths (Parquet recommended for ML), or from_items/from_pandas for in-memory objects.",
+          "Transform with vectorized ds.map_batches(fn, batch_size=...) — prefer it over row-wise ds.map, which is slower.",
+          "Filter with ds.filter and aggregate with ds.groupby(...).count()/map_groups as needed (execution is lazy).",
+          "Consume: ds.write_parquet/write_csv/write_json for outputs, or stream with ds.iter_batches(batch_size=...) to process data larger than memory."
+        ],
+        "reference_files": ["references/transformations.md"]
+      },
+      "validation": [
+        "Output row counts and schema match expectations after transforms.",
+        "Bulk transforms use vectorized map_batches, not row-wise map."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["validation"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#when-to-use-ray-data" },
+        { "kind": "skill-package", "locator": "SKILL.md#reading-data" },
+        { "kind": "skill-package", "locator": "SKILL.md#transformations" },
+        { "kind": "skill-package", "locator": "SKILL.md#writing-data" }
+      ]
+    },
+    {
+      "id": "ray-data-gpu-batch-inference",
+      "kind": "procedure",
+      "title": "Distributed GPU batch inference with a per-worker model",
+      "summary": "Wrap the model in a callable class that loads once per worker, then map_batches with num_gpus to run inference across the dataset.",
+      "applicability": {
+        "when": [
+          "Running batch inference with a GPU model over a large dataset.",
+          "Building offline scoring/prediction pipelines."
+        ],
+        "avoid_when": [
+          "Interactive or low-latency online serving — Ray Data is a batch system."
+        ]
+      },
+      "requires": {
+        "runtime": ["python", "gpu"],
+        "artifacts": ["ml:model", "ml:dataset"]
+      },
+      "produces": ["ml:inference-outputs"],
+      "procedure": {
+        "steps": [
+          "Define a callable class whose __init__ loads the model (once per worker) and whose __call__ maps a batch to predictions.",
+          "Run predictions = ds.map_batches(BatchInference, batch_size=32, num_gpus=1) to request a GPU per worker.",
+          "Write results with predictions.write_parquet(output_path)."
+        ]
+      },
+      "validation": [
+        "The model is constructed in __init__ (once per worker), not per batch.",
+        "The output dataset contains the prediction column for every input row."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["applicability.avoid_when"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#common-patterns" },
+        { "kind": "skill-package", "locator": "SKILL.md#gpu-accelerated-transforms" }
+      ]
+    },
+    {
+      "id": "ray-data-performance-tuning",
+      "kind": "reference",
+      "title": "Ray Data performance levers and scaling reference",
+      "summary": "Repartitioning, batch-size tuning, streaming execution, and GPU acceleration numbers for sizing a pipeline.",
+      "applicability": {
+        "when": [
+          "A Ray Data pipeline is slower than expected.",
+          "Tuning parallelism or batch size for a cluster.",
+          "Memory pressure during dataset processing."
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Repartition to match the cluster: ds.repartition(100) for a 100-core cluster.",
+          "Prefer large map_batches batch_size (e.g., 10000 vs 100) — vectorized ops dominate.",
+          "Stream with iter_batches instead of materializing when data exceeds memory.",
+          "GPU transforms: pass num_gpus=1 to map_batches with a CUDA-using function.",
+          "Scaling reference (100GB job): 1 node/16 cores ~30 min; 4 nodes/64 cores ~8 min; 16 nodes/256 cores ~2 min.",
+          "GPU image preprocessing reference: ~1,000 img/s CPU-only; ~5,000 img/s 1 GPU; ~18,000 img/s 4 GPUs."
+        ]
+      },
+      "delivery": { "stages": ["refine", "debug"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#performance-optimization" },
+        { "kind": "skill-package", "locator": "SKILL.md#performance-benchmarks" }
+      ]
+    },
+    {
+      "id": "ray-train-dataset-integration",
+      "kind": "workflow",
+      "title": "Feed Ray Data into Ray Train (or PyTorch/TensorFlow loops)",
+      "summary": "Pass datasets into TorchTrainer, shard them to workers via get_dataset_shard, or convert with to_torch/to_tf for framework-native loops.",
+      "applicability": {
+        "when": [
+          "Feeding a Ray Dataset into Ray Train distributed training.",
+          "Converting a Ray Dataset into PyTorch or TensorFlow batch iterators."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"],
+        "artifacts": ["ml:dataset"]
+      },
+      "produces": ["ray:dataset-shard"],
+      "procedure": {
+        "steps": [
+          "Pass datasets={'train': ds} to TorchTrainer(train_func, datasets=..., scaling_config=ScalingConfig(num_workers=N, use_gpu=True)).",
+          "Inside train_func, obtain the worker's shard: train_ds = ray.train.get_dataset_shard('train').",
+          "Iterate per epoch with train_ds.iter_batches(batch_size=...).",
+          "Alternatively convert directly: ds.to_torch(label_column, batch_size) or ds.to_tf(feature_columns, label_column, batch_size)."
+        ],
+        "reference_files": ["references/integration.md"]
+      },
+      "validation": [
+        "train_func receives a dataset shard and yields batches of the expected size."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["validation"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#integration-with-ray-train" },
+        { "kind": "skill-package", "locator": "SKILL.md#integration-with-ml-frameworks" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,190 @@
+{
+  "schema_version": "0.2",
+  "skill_name": "transformer-lens-interpretability",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/04-mechanistic-interpretability/transformer-lens",
+    "commit": "773a52944ba4747a18bd4ae9ade53fff041adcbc",
+    "fetched_at": "2026-07-15T00:00:00Z"
+  },
+  "capabilities": [
+    {
+      "id": "activation-caching-inspection",
+      "kind": "diagnostic",
+      "title": "Cache and inspect intermediate activations with run_with_cache",
+      "summary": "Wrap a supported model in HookedTransformer and capture residual-stream, attention, and MLP activations by documented cache key and shape.",
+      "applicability": {
+        "when": [
+          "Intermediate activations (residual stream, attention patterns, MLP outputs) are needed for analysis.",
+          "Studying attention patterns or information flow in a GPT-style transformer."
+        ],
+        "avoid_when": [
+          "Non-transformer architectures — use nnsight or pyvene.",
+          "Training or analyzing Sparse Autoencoders — use SAELens.",
+          "Remote execution on massive models — use nnsight with NDIF.",
+          "Higher-level causal-intervention abstractions are wanted — use pyvene."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"],
+        "artifacts": ["ml:model"]
+      },
+      "produces": ["transformer-lens:activation-cache"],
+      "procedure": {
+        "steps": [
+          "Load a supported model (50+ families: GPT-2, LLaMA, Pythia, Mistral, ...) with HookedTransformer.from_pretrained; gated models (LLaMA, Mistral) need HF_TOKEN set in the environment.",
+          "Tokenize with model.to_tokens(prompt).",
+          "Run logits, cache = model.run_with_cache(tokens).",
+          "Index the cache by documented key and shape: cache['resid_post', L] [batch,pos,d_model]; cache['pattern', L] [batch,head,q_pos,k_pos]; cache['mlp_out', L]; q/k/v per head.",
+          "Bound memory on large models with names_filter=lambda n: ... and device='cpu'."
+        ],
+        "reference_files": ["references/api.md"]
+      },
+      "recovery": [
+        "Memory explosion with large models: cache selectively via names_filter and cache on CPU."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#activation-caching" },
+        { "kind": "skill-package", "locator": "SKILL.md#activationcache-keys" },
+        { "kind": "skill-package", "locator": "SKILL.md#when-to-use-transformerlens" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues--solutions" }
+      ]
+    },
+    {
+      "id": "activation-patching-causal-tracing",
+      "kind": "diagnostic",
+      "title": "Activation patching (causal tracing) over layer x position",
+      "summary": "Patch clean-run activations into corrupted runs at each (layer, position) and measure a behavior metric to localize which activations causally drive the output.",
+      "applicability": {
+        "when": [
+          "Identifying which layers/positions causally affect a model behavior.",
+          "Running causal-tracing experiments between minimal-pair prompts."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"],
+        "artifacts": ["ml:model"]
+      },
+      "produces": ["transformer-lens:patching-heatmap"],
+      "depends_on": ["activation-caching-inspection"],
+      "procedure": {
+        "steps": [
+          "Define clean and corrupted prompts that differ minimally (e.g., 'The Eiffel Tower...' vs 'The Colosseum...').",
+          "Cache clean activations with run_with_cache.",
+          "Define a metric capturing the behavior difference (e.g., logit difference between the two candidate answer tokens).",
+          "For each (layer, position): run model.run_with_hooks on corrupted tokens with a hook that copies the clean activation into blocks.{layer}.hook_resid_post at that position; record the metric.",
+          "Visualize the layer x position result matrix as a heatmap and identify causal hotspots."
+        ],
+        "reference_files": ["references/tutorials.md"]
+      },
+      "validation": [
+        "The metric separates clean vs corrupted baselines before any patching.",
+        "Hooks are reset between runs (model.reset_hooks())."
+      ],
+      "recovery": [
+        "Stale hooks corrupting results: always model.reset_hooks() before re-running.",
+        "Unexpected token positions: verify tokenization with model.to_str_tokens and check prepend_bos — multi-token words shift positions."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "synthesized_fields": ["validation"],
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-1-activation-patching-causal-tracing" },
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues--solutions" }
+      ]
+    },
+    {
+      "id": "head-attribution-circuit-analysis",
+      "kind": "diagnostic",
+      "title": "Direct logit attribution by attention head (IOI-style circuit analysis)",
+      "summary": "Decompose a prediction into per-head contributions by projecting each head's output through W_O and W_U, then rank heads and confirm with ablation.",
+      "applicability": {
+        "when": [
+          "Decomposing which attention heads drive a specific prediction.",
+          "Identifying circuit components (e.g., name movers, S-inhibition, induction heads) for a task like IOI."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"],
+        "artifacts": ["ml:model"]
+      },
+      "produces": ["transformer-lens:head-attribution-map"],
+      "depends_on": ["activation-caching-inspection"],
+      "procedure": {
+        "steps": [
+          "Set up the task with clear target tokens (IOI: logit difference between indirect object ' John' and subject ' Mary').",
+          "Compute the baseline logit difference from a cached run.",
+          "Per (layer, head): contribution = cache['z', layer][0, :, head, :][-1] @ model.W_O[layer, head] @ model.W_U, read off the target-token difference.",
+          "Map contributions across all heads and rank the top contributors.",
+          "Validate the identified components with ablation experiments."
+        ],
+        "reference_files": ["references/tutorials.md"]
+      },
+      "validation": [
+        "Ablating the top-attributed heads moves the logit difference in the expected direction."
+      ],
+      "delivery": { "stages": ["generate", "refine"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-2-circuit-analysis-indirect-object-identification" }
+      ]
+    },
+    {
+      "id": "induction-head-detection",
+      "kind": "diagnostic",
+      "title": "Detect induction heads via repeated-token attention",
+      "summary": "Score every head's attention from the repeated token back to its successor on an [A][B]...[A] sequence; high scorers are induction-head candidates.",
+      "applicability": {
+        "when": [
+          "Locating induction heads implementing the [A][B]...[A] -> [B] pattern.",
+          "Checking a model's in-context copying machinery."
+        ]
+      },
+      "requires": {
+        "runtime": ["python"],
+        "artifacts": ["ml:model"]
+      },
+      "produces": ["transformer-lens:induction-head-scores"],
+      "depends_on": ["activation-caching-inspection"],
+      "procedure": {
+        "steps": [
+          "Build a repeated-token sequence (e.g., tokens [A, B, A]).",
+          "Run run_with_cache and read cache['pattern', layer] per layer.",
+          "Score attention from the second [A] position back to the [B] position for every head.",
+          "Take the top-k scores across (layer, head) as induction-head candidates."
+        ]
+      },
+      "delivery": { "stages": ["generate"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#workflow-3-induction-head-detection" }
+      ]
+    },
+    {
+      "id": "transformer-lens-analysis-pitfalls",
+      "kind": "reference",
+      "title": "TransformerLens analysis pitfalls and version constraints",
+      "summary": "The recurring correctness traps — stale hooks, tokenization surprises, skipped LayerNorm, memory blowups — plus supported-model and version facts.",
+      "applicability": {
+        "when": [
+          "Writing or reviewing any TransformerLens analysis code."
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Always model.reset_hooks() after run_with_hooks debugging — old hooks persist silently otherwise.",
+          "Never assume tokenization: check model.to_str_tokens explicitly ('Neel' -> ['Ne','el']) and mind prepend_bos.",
+          "Include LayerNorm when reading pre-activations: use blocks[layer].ln2(residual) before multiplying by W_in, not the raw residual.",
+          "Bound memory on large models: names_filter + device='cpu' in run_with_cache.",
+          "Model support: 50+ families (GPT-2, LLaMA, Pythia, GPT-J, Mistral, Phi, Qwen, OPT, Gemma).",
+          "Version notes: v2.0 removed HookedSAE (moved to SAELens); v3.0-alpha adds TransformerBridge for arbitrary nn.Modules."
+        ],
+        "reference_files": ["references/README.md"]
+      },
+      "delivery": { "stages": ["generate", "refine", "debug"] },
+      "sources": [
+        { "kind": "skill-package", "locator": "SKILL.md#common-issues--solutions" },
+        { "kind": "skill-package", "locator": "SKILL.md#supported-models-50" },
+        { "kind": "skill-package", "locator": "SKILL.md#version-notes" }
+      ]
+    }
+  ]
+}

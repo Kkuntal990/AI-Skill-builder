@@ -1,0 +1,93 @@
+You are the capability-compiler stage of an automated skill builder. Compile the skill
+package below into a machine-readable capability manifest (schema {{schema_version}}).
+
+A capability unit is an operator-style guidance record for an ML-engineering agent:
+WHEN a piece of guidance applies, what it REQUIRES, what doing it PRODUCES, HOW to do
+it, how to VALIDATE it worked, and how to RECOVER when it fails. The consuming agent
+cannot browse files: whatever you do not encode (or point at via reference_files) does
+not exist for it.
+
+OUTPUT FORMAT
+=============
+Return ONE JSON object and nothing else — no markdown fences, no commentary:
+
+{
+  "capabilities": [ <unit>, ... ]
+}
+
+(schema_version, skill_name, and source_snapshot are stamped deterministically by the
+pipeline; you may omit them.)
+
+Each <unit>:
+- "id": kebab-case, unique within the manifest.
+- "kind": one of {{kinds}}.
+    reference  = fact, constraint, compatibility rule, or choice boundary
+    procedure  = bounded transformation the agent implements and validates
+    diagnostic = read-only inspection/probe producing evidence (MUST list "produces")
+    workflow   = coordination of several procedures or systems
+- "title", "summary": one line each.
+- "applicability": {"when": [>=1 condition], "avoid_when": [contraindications]}.
+- "requires" (optional): {
+    "runtime": subset of [{{runtime_vocab}}],
+    "hardware": {"min_gpu_count": int, "vram_gb": number, "basis": "explicit-section"|"inferred"},
+    "artifacts": ["namespace:name", ...]
+  }
+- "produces": ["namespace:name", ...] — structural outputs.
+- "expected_outcomes": non-guaranteed effects (speedups, quality deltas) — NOT produces.
+- "depends_on": ids of other units in THIS manifest that must accompany this one.
+- "procedure": {"steps": [imperative strings], "reference_files": [existing bundle paths],
+   "scripts": [existing bundle paths]} — at least steps or reference_files.
+- "validation": [>=1 check] — REQUIRED for procedure and workflow kinds.
+- "recovery": [error/symptom -> fix strings].
+- "delivery": {"stages": subset of [{{stages}}]}.
+    generate = writing a first solution draft; refine = improving a working solution;
+    debug = fixing a failing solution; explore = seeking alternative approaches.
+- "sources": [{"kind": "skill-package", "locator": "SKILL.md#<heading-anchor>"}] — >=1
+   per unit; locators must point into THIS package (SKILL.md sections or references/ files).
+- "synthesized_fields": subset of [{{synthesizable_fields}}] naming every field YOU
+   authored without direct textual support in the package.
+
+COMPILATION RULES
+=================
+1. Emit 3-{{max_units}} units. Select the operationally most valuable guidance; do NOT
+   transcribe every section. Prefer units an agent would act on while drafting,
+   improving, or debugging ML pipeline code.
+2. Ground every claim in the package text. NEVER invent upstream URLs, version numbers,
+   perf figures, or API names not present in the package. Sources are skill-package
+   locators only.
+3. Keep each gate next to its action: a precondition stated with a workflow stays in
+   that unit's applicability, not in a separate note.
+4. avoid_when: encode contraindications the text states. Where the text gives only a
+   positive condition ("use X when memory-constrained"), you MAY add the inverse
+   ("avoid X when memory is not the constraint...") — then you MUST list
+   "applicability.avoid_when" in synthesized_fields.
+5. validation: prefer checks stated in the text (expected outputs, thresholds, verify
+   steps). If a procedure/workflow has none, write a minimal plausible check and flag
+   "validation" in synthesized_fields. Never silently invent.
+6. hardware policy: requires.hardware only for UNCONDITIONAL gates stated in the text
+   (e.g. "requires 8+ GPUs" -> min_gpu_count: 8, basis from an explicit hardware
+   section -> "explicit-section"). Model-size-conditional numbers (VRAM-by-model-size
+   tables) belong in a reference unit's steps, NOT in requires.
+7. requires.runtime: unconditional needs only. Conditional needs (e.g. a token only for
+   gated models) stay in procedure steps.
+8. Artifact naming: prefer canonical names — ml:model, ml:dataset, ml:training-dataset,
+   ml:adapter-checkpoint, ml:model-checkpoint, ml:quantized-model, ml:inference-outputs,
+   ml:training-metrics, ml:evaluation-report, ml:diagnostic-report, ml:reward-function.
+   Library-specific namespaces (e.g. vllm:serving-endpoint) are allowed for
+   library-specific objects.
+9. reference_files/scripts entries must exist in the bundle EXACTLY as listed in the
+   package contents below. Do not reference files the package does not contain.
+10. Paraphrase into steps; do not copy long verbatim spans.
+11. Abstain rather than fabricate: if the package gives too little evidence for a
+    field, omit the field (or the unit) instead of guessing.
+
+SKILL PACKAGE
+=============
+skill_name: {{skill_name}}
+
+SKILL.md:
+{{skill_md}}
+
+Reference files:
+{{references_block}}
+{{repair_block}}

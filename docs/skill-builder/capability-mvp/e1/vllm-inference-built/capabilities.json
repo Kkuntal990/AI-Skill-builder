@@ -1,0 +1,459 @@
+{
+  "capabilities": [
+    {
+      "id": "offline-batch-inference",
+      "kind": "procedure",
+      "title": "Run offline batch generation with the vLLM LLM class",
+      "summary": "Instantiate LLM once, configure SamplingParams, and batch-generate from many prompts in a single script.",
+      "applicability": {
+        "when": [
+          "Running high-throughput batch generation from an open-weights / Hugging Face LLM in a single script with no server",
+          "Generating from many prompts or several independent conversations at once",
+          "Producing generations as one step of a larger task (evaluation, labeling, dataset construction)"
+        ],
+        "avoid_when": [
+          "The model must be called from app code or multiple clients \u2014 run a persistent server instead",
+          "The task is to fine-tune / compute gradient updates on the weights (including training LoRA adapters) \u2014 use a trainer (transformers Trainer, peft, trl), then load the trained model back into vLLM to serve/evaluate it"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:inference-outputs"
+      ],
+      "expected_outcomes": [
+        "Submitting many prompts in one generate() call is far faster than looping one prompt at a time, thanks to continuous batching"
+      ],
+      "procedure": {
+        "steps": [
+          "Instantiate the engine once: llm = LLM(model=<hf-repo-id-or-local-path>); reuse it for every batch \u2014 re-instantiating reloads weights and re-allocates the KV cache. Add trust_remote_code=True for models with custom modeling code; set max_model_len to cap the KV cache and dtype/quantization as needed.",
+          "Build a list of prompt strings, or use llm.chat(messages) for instruction-tuned/chat models so the model's chat template is applied; pass a list of message-lists to batch multiple conversations.",
+          "Configure SamplingParams (temperature, top_p, max_tokens, n): temperature=0 gives greedy deterministic decoding; n>1 returns several candidates per prompt.",
+          "Call llm.generate(prompts, sampling_params) (pass use_tqdm=False in scripted runs); it returns one RequestOutput per input prompt in input order.",
+          "Read each result's generated text at output.outputs[0].text."
+        ],
+        "reference_files": [
+          "references/offline-inference.md"
+        ]
+      },
+      "validation": [
+        "generate() returns exactly one RequestOutput per input prompt, in the same order, and output.outputs[0].text is non-empty for each"
+      ],
+      "recovery": [
+        "OOM at load or during generation -> lower gpu_memory_utilization or set max_model_len to shrink the KV cache; if it still doesn't fit, quantize (see quantize-to-fit-vram)",
+        "Model fails to load because it ships custom modeling code -> pass trust_remote_code=True"
+      ],
+      "delivery": {
+        "stages": [
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#run-offline-batch-inference"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/offline-inference.md"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "serve-openai-compatible-api",
+      "kind": "workflow",
+      "title": "Serve a model over an OpenAI-compatible API with vllm serve",
+      "summary": "Launch a persistent vllm server, wait until it is healthy, confirm the model, and smoke-test a chat completion.",
+      "applicability": {
+        "when": [
+          "The model must be called from app code or by multiple clients over a persistent HTTP API",
+          "OpenAI-compatible /v1/completions, /v1/chat/completions, or /v1/embeddings endpoints are needed"
+        ],
+        "avoid_when": [
+          "The task is a one-shot batch job in a single script \u2014 use offline LLM-class inference instead",
+          "The task is to fine-tune the weights \u2014 train first, then serve the result"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "network",
+          "persistent-service"
+        ]
+      },
+      "produces": [
+        "vllm:serving-endpoint"
+      ],
+      "procedure": {
+        "steps": [
+          "Run vllm serve <model>, setting --max-model-len and --gpu-memory-utilization as needed; optionally --served-model-name <alias> and --host/--port (default 0.0.0.0:8000). The process stays in the foreground until killed.",
+          "Wait until the server reports healthy on /health, then confirm the model appears at GET /v1/models \u2014 run scripts/wait_for_server.sh.",
+          "Send a request to /v1/chat/completions (messages list, reply at choices[0].message.content) or /v1/completions (raw prompt, reply at choices[0].text); the openai Python client works by pointing base_url at http://localhost:8000/v1.",
+          "Verify end-to-end with scripts/smoke_completion.py.",
+          "MCP fallback: if a serve flag or endpoint you need is not in references/online-serving.md, resolve the libraryId via context7 (libraryName=\"vllm\") and query the docs."
+        ],
+        "reference_files": [
+          "references/online-serving.md"
+        ],
+        "scripts": [
+          "scripts/wait_for_server.sh",
+          "scripts/smoke_completion.py"
+        ]
+      },
+      "validation": [
+        "/health reports healthy and GET /v1/models lists the served model id (scripts/wait_for_server.sh passes)",
+        "A /v1/chat/completions request returns a non-empty choices[0].message.content (scripts/smoke_completion.py prints a response)"
+      ],
+      "recovery": [
+        "KV-cache allocation OOMs at startup -> lower --max-model-len and/or --gpu-memory-utilization",
+        "Model's tokenizer has no chat template -> pass --chat-template (path or inline Jinja)",
+        "Model ships custom modeling code -> add --trust-remote-code"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#serve-a-model-over-an-openai-compatible-api"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/online-serving.md"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "vram-preflight-check",
+      "kind": "diagnostic",
+      "title": "Probe free VRAM before loading or serving a model",
+      "summary": "Run check_vram.sh to read per-GPU free VRAM from nvidia-smi and decide whether a model fits.",
+      "applicability": {
+        "when": [
+          "Before launching vllm serve or instantiating LLM, to catch OOM early",
+          "Deciding whether a model fits at full precision \u2014 the precondition for quantization or multi-GPU parallelism"
+        ],
+        "avoid_when": []
+      },
+      "requires": {
+        "runtime": [
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:diagnostic-report"
+      ],
+      "procedure": {
+        "steps": [
+          "Run bash scripts/check_vram.sh to probe nvidia-smi for free VRAM per GPU; it warns when free VRAM falls below a threshold.",
+          "Compare reported free VRAM against the model's full-precision footprint to decide: load at full precision, quantize to fit, or shard across GPUs."
+        ],
+        "scripts": [
+          "scripts/check_vram.sh"
+        ]
+      },
+      "recovery": [
+        "nvidia-smi missing or no GPU visible -> the run has no usable GPU; fix GPU allocation / CUDA_VISIBLE_DEVICES before loading a model"
+      ],
+      "delivery": {
+        "stages": [
+          "explore",
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#scripts"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#fit-a-large-model-on-a-small-gpu-quantization"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "recovery"
+      ]
+    },
+    {
+      "id": "quantization-method-selection",
+      "kind": "reference",
+      "title": "Choose a vLLM quantization method by GPU support and goal",
+      "summary": "Map VRAM-bound vs throughput-bound goals and checkpoint availability onto AWQ/GPTQ/FP8/BitsAndBytes/GGUF.",
+      "applicability": {
+        "when": [
+          "Deciding which quantization method to use for a model that does not fit at full precision",
+          "Choosing between a pre-quantized checkpoint and on-the-fly quantization"
+        ],
+        "avoid_when": [
+          "The model fits in available VRAM at full precision \u2014 quantization adds dequantization overhead and can cost quality for no benefit"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Weight-only 4-bit (AWQ, GPTQ, W4A16) shrinks weights ~4x \u2014 best when VRAM-bound and you want a larger model on one card.",
+          "Weight+activation 8-bit (FP8, INT8 W8A8) keeps more accuracy \u2014 best when throughput-bound on a card with FP8 tensor cores (Ada/Hopper, compute capability 8.9+) or INT8 (Ampere+).",
+          "BitsAndBytes quantizes in-flight with no pre-quantized checkpoint (set quantization=\"bitsandbytes\" and load_format=\"bitsandbytes\") \u2014 fastest path to any 4-bit run, but slower at serve time.",
+          "GGUF imports llama.cpp checkpoints (experimental); supply the matching HF tokenizer because GGUF files carry no vLLM-compatible one, and merge sharded GGUF files first.",
+          "AWQ is under-optimized vs FP8/INT8 in vLLM \u2014 prefer it for VRAM savings, not peak throughput.",
+          "For most pre-quantized Hub checkpoints vLLM auto-detects the format, so you need not pass quantization at all; pass it (or --quantization) only to force a specific method/kernel, e.g. awq vs awq_marlin."
+        ],
+        "reference_files": [
+          "references/quantization.md"
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "explore",
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "references/quantization.md"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#decision-tree"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "quantize-to-fit-vram",
+      "kind": "procedure",
+      "title": "Quantize a model to fit it on a smaller GPU",
+      "summary": "After confirming full precision does not fit, pick a method and load/serve with the quantization flag, tuning memory if it still OOMs.",
+      "applicability": {
+        "when": [
+          "A model does not fit in available VRAM at full precision and must run on the available GPU(s)"
+        ],
+        "avoid_when": [
+          "Memory is not the constraint \u2014 load/serve at full precision; quantization adds dequantization overhead and can cost quality for no benefit",
+          "You need peak throughput and have VRAM headroom \u2014 full precision or FP8/INT8 outperforms weight-only 4-bit methods"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:quantized-model"
+      ],
+      "expected_outcomes": [
+        "Weight-only 4-bit shrinks weights ~4x and FP8 reclaims ~half the weight memory, freeing VRAM to fit the model or enlarge the KV cache",
+        "Quantization always costs some accuracy"
+      ],
+      "depends_on": [
+        "vram-preflight-check",
+        "quantization-method-selection"
+      ],
+      "procedure": {
+        "steps": [
+          "Confirm the precondition: run scripts/check_vram.sh and verify the full-precision weights genuinely don't fit; otherwise load at full precision.",
+          "Pick a method by checkpoint availability and goal (see quantization-method-selection): pre-quantized AWQ/GPTQ/FP8/GGUF, or on-the-fly BitsAndBytes when no quantized checkpoint exists.",
+          "If no pre-quantized checkpoint exists and you want a durable one, quantize your own with AutoAWQ / GPTQModel / LLM Compressor and point vLLM at the output dir.",
+          "Load/serve with --quantization <method> (or quantization= in the LLM constructor), or load a pre-quantized checkpoint that vLLM auto-detects; for BitsAndBytes also set --load-format bitsandbytes.",
+          "Optionally enable a quantized KV cache to free more VRAM.",
+          "If it still OOMs, lower --gpu-memory-utilization / --max-model-len."
+        ],
+        "reference_files": [
+          "references/quantization.md"
+        ],
+        "scripts": [
+          "scripts/check_vram.sh"
+        ]
+      },
+      "validation": [
+        "The startup log reports the quantization method/kernel actually selected",
+        "The model loads/serves without OOM and check_vram.sh confirms it now fits"
+      ],
+      "recovery": [
+        "Still OOM after quantizing -> lower --gpu-memory-utilization and --max-model-len, or enable a quantized KV cache",
+        "FP8 fails on the GPU -> the card lacks FP8 tensor cores (needs Hopper/Ada, compute capability 8.9+); use AWQ/GPTQ INT4 instead",
+        "Throughput too low with AWQ -> AWQ is under-optimized in vLLM; re-quantize to FP8/INT8 if the GPU supports it"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#fit-a-large-model-on-a-small-gpu-quantization"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/quantization.md"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "applicability.avoid_when",
+        "depends_on"
+      ]
+    },
+    {
+      "id": "multi-gpu-parallelism",
+      "kind": "procedure",
+      "title": "Scale a model across multiple GPUs with tensor/pipeline parallelism",
+      "summary": "When a model is too large for one GPU, shard with tensor parallelism within a node and add pipeline parallelism only across nodes.",
+      "applicability": {
+        "when": [
+          "A model is too large to fit on a single GPU",
+          "Reducing memory pressure within a layer to leave more room for the KV cache"
+        ],
+        "avoid_when": [
+          "The model already fits on one GPU \u2014 parallelism adds cross-GPU communication overhead that buys nothing"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "multi-gpu"
+        ]
+      },
+      "depends_on": [
+        "vram-preflight-check"
+      ],
+      "procedure": {
+        "steps": [
+          "Confirm the precondition: the model doesn't fit on one GPU (scripts/check_vram.sh); otherwise keep the single-GPU path.",
+          "Set --tensor-parallel-size (CLI) or tensor_parallel_size=N (LLM) to the number of GPUs on one node \u2014 TP shards parameters within each layer.",
+          "Add --pipeline-parallel-size only when spanning multiple nodes; rule of thumb: TP = GPUs per node, PP = number of nodes.",
+          "For multi-node, launch a Ray cluster first, then serve across it.",
+          "Control which physical devices are used via CUDA_VISIBLE_DEVICES; do NOT call torch.accelerator.set_device_index() before vLLM initializes.",
+          "Verify all shards loaded and the server reports healthy (scripts/wait_for_server.sh)."
+        ],
+        "reference_files": [
+          "references/parallelism-scaling.md"
+        ],
+        "scripts": [
+          "scripts/check_vram.sh",
+          "scripts/wait_for_server.sh"
+        ]
+      },
+      "validation": [
+        "All shards load and the server reports healthy on /health with the model listed at GET /v1/models (scripts/wait_for_server.sh passes)"
+      ],
+      "recovery": [
+        "A shard fails to load or the server hangs -> ensure the visible GPU count matches --tensor-parallel-size and devices are exposed via CUDA_VISIBLE_DEVICES",
+        "Single-node multi-GPU still OOMs -> the model may need multiple nodes; add pipeline parallelism across a Ray cluster"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#scale-across-multiple-gpus-tensorpipeline-parallelism"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/parallelism-scaling.md"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "recovery",
+        "depends_on"
+      ]
+    },
+    {
+      "id": "structured-output-decoding",
+      "kind": "procedure",
+      "title": "Constrain generation to JSON, a choice set, regex, or grammar (guided decoding)",
+      "summary": "Attach a guided-decoding spec to SamplingParams (offline) or the request (online) to force schema-valid output.",
+      "applicability": {
+        "when": [
+          "The task needs machine-parseable output: valid JSON, a fixed choice set, a regex, or a grammar",
+          "Doing classification or extraction where the answer must conform to a schema"
+        ],
+        "avoid_when": [
+          "Free-form natural-language output is acceptable \u2014 guided decoding adds constraint overhead for no benefit"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:inference-outputs"
+      ],
+      "procedure": {
+        "steps": [
+          "Offline: build a GuidedDecodingParams (choice=[...], a JSON schema, a regex, or a grammar) and pass it as SamplingParams(guided_decoding=...).",
+          "For a fixed label set use GuidedDecodingParams(choice=[...]); for structured records use a JSON schema.",
+          "Online: send the equivalent guided-decoding field on the /v1/chat/completions or /v1/completions request.",
+          "Call generate() (or hit the endpoint) and read the constrained text from output.outputs[0].text, then parse the JSON/choice."
+        ],
+        "reference_files": [
+          "references/advanced-features.md"
+        ]
+      },
+      "validation": [
+        "The returned text parses as the requested type: valid JSON against the schema, or exactly one of the allowed choices"
+      ],
+      "recovery": [
+        "Output does not conform -> confirm guided_decoding is actually attached to the SamplingParams/request rather than only described in the prompt"
+      ],
+      "delivery": {
+        "stages": [
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "references/advanced-features.md"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#decision-tree"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "applicability.avoid_when",
+        "recovery"
+      ]
+    }
+  ],
+  "schema_version": "0.2",
+  "skill_name": "vllm-inference",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "file:///Users/kuntalkokate/pengtao-lab/ai-builds-ai-project/AI-Skill-builder/infra/skills/vllm-inference",
+    "content_sha256": "769c5543778ad2df578ec504a3a8e449d9e080732c9a52f56684b67c56968f53",
+    "fetched_at": "2026-07-17T23:27:11Z"
+  }
+}

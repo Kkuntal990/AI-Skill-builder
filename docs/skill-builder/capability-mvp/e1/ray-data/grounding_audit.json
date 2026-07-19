@@ -1,0 +1,409 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "ray-data",
+  "scores": {
+    "claims_audited": 74,
+    "label_histogram": {
+      "supported": 51,
+      "entailed": 20,
+      "unsupported": 3
+    },
+    "support_rate_all": 0.9595,
+    "support_rate_strict": 0.9833,
+    "strict_claims": 60,
+    "fabrications": [
+      {
+        "unit": "distributed-batch-inference",
+        "path": "applicability.when[1]",
+        "note": "The Common patterns > Batch inference section never mentions multi-modal or tabular inputs; those terms are pulled from unrelated parts of the doc and grafted onto this specific procedure."
+      }
+    ],
+    "flagged_but_unsupported": [
+      {
+        "unit": "gpu-accelerated-transforms",
+        "path": "validation[0]",
+        "note": "Invents specific behavior (errors on missing GPU, or silently falls back to CPU) never discussed in the package."
+      },
+      {
+        "unit": "ray-train-dataset-streaming",
+        "path": "validation[0]",
+        "note": "Invents a specific exception type (KeyError) never mentioned in the package."
+      }
+    ],
+    "applicability_correct_rate": 0.8333,
+    "validation_usable_rate": 1.0,
+    "units_with_bad_locators": []
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "choose-ray-data-vs-alternatives",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[3]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[4]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "entailed",
+            "note": "\"Estimate the dataset size...\" is a synthesized meta-step framing the decision; package only lists conditions, doesn't instruct estimation."
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "vectorized-map-batches",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "Package never phrases a 'when' condition for map_batches; this is a generic paraphrase of the transformation examples."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "entailed",
+            "note": "\"balancing against per-task memory\" is not stated anywhere for CPU map_batches batch sizing, only inferred."
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Synthesized; iter_batches is a stated consumption API but the specific check isn't stated."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Synthesized generic smoke-check, not stated."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "gpu-accelerated-transforms",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "entailed",
+            "note": "Precondition not stated explicitly, reasonable inference for wanting GPU accel."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized converse of 'use GPUs for heavy compute'; 'wastes accelerators' framing is added."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "No explicit requires prose; GPU need is inferred from .cuda()/num_gpus=1 code."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "entailed",
+            "note": "\"Tune batch_size to fit GPU memory\" is not stated in the package text, only inferred."
+          },
+          {
+            "path": "validation[0]",
+            "label": "unsupported",
+            "note": "Invents specific behavior (errors on missing GPU, or silently falls back to CPU) never discussed in the package."
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "distributed-batch-inference",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "entailed",
+            "note": "\"trained model\"/\"offline\" not literal, but reasonable read of the Batch inference pattern."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "unsupported",
+            "note": "The Common patterns > Batch inference section never mentions multi-modal or tabular inputs; those terms are pulled from unrelated parts of the doc and grafted onto this specific procedure."
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized; reasonable converse of an offline batch pattern."
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU inferred from num_gpus=1 in the example, not a stated requirement."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "\"ml:inference-outputs\" is a synthesized taxonomy tag, not a stated term, but a fair label for the written parquet predictions."
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Synthesized concrete check tied to stated write_parquet call."
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": false,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "ray-train-dataset-streaming",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized converse; reasonable but not stated."
+          },
+          {
+            "path": "requires",
+            "label": "supported",
+            "note": "All shown usage is plain Python; no additional inference needed."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "unsupported",
+            "note": "Invents a specific exception type (KeyError) never mentioned in the package."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Reasonable synthesized check, not stated."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "stream-and-tune-large-datasets",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized converse; \"adds overhead\" is an inferred consequence, not stated."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "entailed",
+            "note": "\"balancing against per-task memory\" not stated for this context, only inferred."
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Synthesized check, reasonable given streaming's stated purpose."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Synthesized concrete check tied to the stated repartition(K) API."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}

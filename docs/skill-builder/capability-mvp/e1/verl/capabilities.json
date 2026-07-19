@@ -1,0 +1,429 @@
+{
+  "capabilities": [
+    {
+      "id": "verl-algorithm-backend-selection",
+      "kind": "reference",
+      "title": "Select the verl RL algorithm and infrastructure backend",
+      "summary": "Decide whether verl fits, then pick the advantage estimator, training backend, and rollout engine for the task and scale.",
+      "applicability": {
+        "when": [
+          "Deciding whether to use verl for LLM RL post-training (RLHF, GRPO, PPO, and related algorithms)",
+          "Choosing an RL algorithm via algorithm.adv_estimator",
+          "Choosing a training backend (FSDP/FSDP2/Megatron) or a rollout engine (vLLM/SGLang/HF)"
+        ],
+        "avoid_when": [
+          "The task only needs simple SFT or DPO (use TRL or Axolotl)",
+          "You need Megatron-native training (use slime or miles)",
+          "You want PyTorch-native abstractions with Monarch (use torchforge)"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Prefer verl for production-scale RL (tested up to 671B params), backend flexibility, multi-algorithm support, multi-turn tool rollout, or vision-language RL.",
+          "Pick algorithm.adv_estimator: grpo (critic-free, math/reasoning), gae (dense rewards, value estimation), reinforce_plus_plus (variance reduction), rloo (leave-one-out baseline), remax (max-reward baseline), or opo (optimal policy optimization).",
+          "Pick the training backend via actor_rollout_ref.model.backend: fsdp or fsdp2 for standard scale, megatron for models >70B or expert parallelism.",
+          "Pick the rollout engine via actor_rollout_ref.rollout.name: vllm, sglang (required for multi-turn tool calling), or hf.",
+          "Note GRPO requires actor_rollout_ref.rollout.n > 1 and actor.use_kl_loss=true; PPO/GAE additionally needs a separate critic model."
+        ],
+        "reference_files": [
+          "SKILL.md",
+          "references/api-reference.md"
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "explore",
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#when-to-use-verl"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#algorithm-selection"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/api-reference.md#configuration-schema"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "grpo-math-reasoning-training",
+      "kind": "workflow",
+      "title": "Train a math-reasoning model with GRPO on a GPU cluster",
+      "summary": "Coordinate dataset prep, reward function, config, launch, and monitoring to GRPO-train a reasoning model on tasks like GSM8K or MATH.",
+      "applicability": {
+        "when": [
+          "Training a reasoning model on math tasks (e.g. GSM8K, MATH) with critic-free GRPO",
+          "A rule-based/verifiable reward (e.g. exact-match answers) is available",
+          "A GPU cluster with 8+ GPUs is available"
+        ],
+        "avoid_when": [
+          "The task benefits from value-based (GAE) advantage estimation with a critic \u2014 use the PPO/GAE workflow instead",
+          "Only simple SFT or DPO is needed"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "multi-gpu"
+        ],
+        "hardware": {
+          "min_gpu_count": 8,
+          "basis": "explicit-section"
+        },
+        "artifacts": [
+          "ml:training-dataset",
+          "ml:model",
+          "ml:reward-function"
+        ]
+      },
+      "produces": [
+        "ml:model-checkpoint",
+        "ml:training-metrics"
+      ],
+      "expected_outcomes": [
+        "Reward increases over training steps as the policy improves on the math task"
+      ],
+      "depends_on": [
+        "custom-reward-function"
+      ],
+      "procedure": {
+        "steps": [
+          "Build train.parquet (and val.parquet) with a `prompt` column (chat messages) and a `reward_model` column carrying `ground_truth`.",
+          "Implement the reward function (see custom-reward-function) and point custom_reward_function.path/name at it.",
+          "Write the GRPO config: algorithm.adv_estimator=grpo, gamma=1.0, lam=1.0; actor_rollout_ref.rollout.name=vllm, n=8 (must be >1), temperature=0.7, top_p=0.95; actor.use_kl_loss=true, kl_loss_coef=0.001; set data batch/length fields and trainer.n_gpus_per_node=8, total_epochs.",
+          "Launch: python3 -m verl.trainer.main_ppo --config-path config --config-name grpo_math (or pass equivalent overrides on the CLI).",
+          "Monitor WandB/TensorBoard loss curves, confirm reward is increasing over steps, and evaluate on a held-out test set."
+        ],
+        "reference_files": [
+          "SKILL.md",
+          "references/api-reference.md"
+        ]
+      },
+      "validation": [
+        "rollout.n > 1 and actor.use_kl_loss=true are set (GRPO requirements)",
+        "Reward increases over steps in WandB/TensorBoard",
+        "Loss curves are visible and stable",
+        "Held-out test-set evaluation is run after training"
+      ],
+      "recovery": [
+        "CUDA OOM during rollout -> reduce rollout.log_prob_micro_batch_size, enable gradient checkpointing, switch actor.strategy=fsdp2 with offload_policy=true, lower rollout.gpu_memory_utilization",
+        "Loss spikes / reward collapse -> lower actor.lr (e.g. 5e-7), raise kl_loss_coef (e.g. 0.01), set max_grad_norm=1.0, reduce clip_ratio to 0.1",
+        "Empty batches -> verify the parquet has prompt and reward_model columns and use an absolute train_files path",
+        "vLLM generation failures -> pin vllm within the supported range and avoid 0.7.x"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#workflow-1-math-reasoning-with-grpo"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#algorithm-selection"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/api-reference.md#configuration-schema"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "depends_on"
+      ]
+    },
+    {
+      "id": "custom-reward-function",
+      "kind": "procedure",
+      "title": "Implement a custom rule-based reward function for verl",
+      "summary": "Write and register a compute_score function that scores a batch of responses against ground truths.",
+      "applicability": {
+        "when": [
+          "The reward is programmatically checkable (e.g. exact-match math answers extracted from generations)",
+          "A custom function-based reward is needed instead of a model-based reward"
+        ],
+        "avoid_when": [
+          "Using a model-based reward via reward_model.path"
+        ]
+      },
+      "produces": [
+        "ml:reward-function"
+      ],
+      "procedure": {
+        "steps": [
+          "Create reward.py defining compute_score(responses: list[str], ground_truths: list[str], **kwargs) -> list[float].",
+          "For each (response, ground_truth): extract the answer (e.g. regex on \\boxed{...}), compare to the ground truth, and append 1.0 for a match else 0.0.",
+          "Return a list of float rewards, one per response, in batch order.",
+          "Register in config: custom_reward_function.path=/path/to/reward.py and custom_reward_function.name=compute_score (name defaults to compute_score)."
+        ],
+        "reference_files": [
+          "references/api-reference.md"
+        ]
+      },
+      "validation": [
+        "The function returns exactly one float per response (len(rewards) == len(responses))",
+        "The function name matches custom_reward_function.name (default compute_score)"
+      ],
+      "recovery": [
+        "Reward not applied / rewards all zero -> confirm custom_reward_function.path is set and the function name matches the configured name",
+        "Answer never matches -> verify the extraction regex and ground-truth normalization/whitespace"
+      ],
+      "delivery": {
+        "stages": [
+          "generate"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#step-2-define-reward-function"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/api-reference.md#reward-functions"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "validation",
+        "recovery"
+      ]
+    },
+    {
+      "id": "stabilize-verl-training",
+      "kind": "procedure",
+      "title": "Diagnose and fix common verl training failures",
+      "summary": "Apply targeted config changes for OOM, instability, policy collapse, and slow weight sync in a verl PPO/GRPO run.",
+      "applicability": {
+        "when": [
+          "A verl run hits CUDA OOM during rollout or the backward pass",
+          "Loss spikes, reward collapses, or training diverges",
+          "Entropy drops to zero and outputs become deterministic",
+          "There are long pauses between rollout and training phases"
+        ],
+        "avoid_when": [
+          "The run is healthy (reward increasing, loss stable, no OOM)"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "gpu"
+        ]
+      },
+      "expected_outcomes": [
+        "Run proceeds without CUDA OOM and reward stabilizes after applying the fixes"
+      ],
+      "procedure": {
+        "steps": [
+          "OOM during rollout: reduce rollout.log_prob_micro_batch_size (e.g. 8->4), enable gradient checkpointing, switch actor.strategy=fsdp2 with fsdp_config.offload_policy=true, and lower rollout.gpu_memory_utilization (0.9->0.7).",
+          "OOM during training (backward): reduce actor.ppo_mini_batch_size (64->32), add gradient_accumulation_steps, and enable fsdp mixed_precision=bf16.",
+          "Instability / loss spikes: reduce actor.lr (1e-6->5e-7), raise kl_loss_coef (0.001->0.01), set max_grad_norm=1.0, and reduce clip_ratio (0.2->0.1).",
+          "Policy collapse (entropy->0): raise rollout.temperature (0.7->0.9), add algorithm.entropy_coef=0.01, and reduce kl_loss_coef.",
+          "Slow weight sync: set actor.strategy=fsdp2 for faster resharding and enable trainer.async_weight_update=true.",
+          "Re-launch and re-check the same symptom."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md",
+          "SKILL.md"
+        ]
+      },
+      "validation": [
+        "No CUDA OOM through rollout and backward",
+        "Loss stabilizes and reward recovers or increases",
+        "Entropy stays above zero (outputs remain non-deterministic)",
+        "No long stalls between rollout and training phases"
+      ],
+      "recovery": [
+        "Fixes insufficient -> combine batch-size reductions with fsdp2 CPU offload and escalate gradient_accumulation_steps",
+        "Weight-sync timeout (Ray actor) -> increase the Ray timeout or set trainer.colocate_actor_ref=true"
+      ],
+      "delivery": {
+        "stages": [
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#common-issues-and-solutions"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#oom-out-of-memory-issues"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#training-stability-issues"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#weight-synchronization-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "applicability.avoid_when",
+        "validation",
+        "recovery"
+      ]
+    },
+    {
+      "id": "large-scale-megatron-training",
+      "kind": "workflow",
+      "title": "Train 70B+ models with the Megatron backend on a multi-node cluster",
+      "summary": "Configure Megatron tensor/pipeline parallelism, convert checkpoints via mbridge, and launch multi-node Ray training for very large models.",
+      "applicability": {
+        "when": [
+          "Training models larger than 70B parameters",
+          "Requiring expert parallelism or tensor + pipeline model parallelism"
+        ],
+        "avoid_when": [
+          "The model fits FSDP/FSDP2 on a single node (Megatron adds checkpoint conversion and multi-node overhead)",
+          "Running on AMD GPUs (Megatron-LM has a current limitation there)"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu",
+          "multi-gpu",
+          "multi-node",
+          "network"
+        ],
+        "artifacts": [
+          "ml:model"
+        ]
+      },
+      "produces": [
+        "ml:model-checkpoint",
+        "ml:training-metrics"
+      ],
+      "expected_outcomes": [
+        "Enables training very large (70B+) models via tensor/pipeline/expert parallelism that would not fit FSDP"
+      ],
+      "procedure": {
+        "steps": [
+          "Install the Megatron-LM bridge: pip install mbridge.",
+          "Convert the HuggingFace model to Megatron format (tools/convert_hf_to_megatron.py) and/or set actor.megatron.use_mbridge=true.",
+          "Configure: actor_rollout_ref.model.backend=megatron; actor.strategy=megatron with tensor_model_parallel_size=8, pipeline_model_parallel_size=2; rollout.name=vllm with tensor_parallel_size=8.",
+          "Start Ray: on the head node `ray start --head --port=6379`, on workers `ray start --address='head_ip:6379'`.",
+          "Launch: python3 -m verl.trainer.main_ppo trainer.nnodes=4 trainer.n_gpus_per_node=8."
+        ],
+        "reference_files": [
+          "SKILL.md",
+          "references/api-reference.md",
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "The Megatron checkpoint loads without error (use_mbridge enabled if needed)",
+        "`ray status` shows all head and worker nodes connected",
+        "Training starts and loss/reward are logged"
+      ],
+      "recovery": [
+        "Megatron checkpoint load fails -> enable megatron.use_mbridge=true and convert HF->Megatron format",
+        "NCCL timeout on multi-node -> set NCCL_SOCKET_IFNAME, NCCL_IB_DISABLE=0, and raise NCCL_TIMEOUT",
+        "Ray cluster connection failures -> check `ray status`, restart the Ray head, verify network connectivity",
+        "DeepSpeed 'GPU index out of range' -> export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#workflow-3-large-scale-training-with-megatron"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/api-reference.md#backend-specific-configuration"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#multi-node-issues"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#megatron-specific-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "applicability.avoid_when",
+        "validation"
+      ]
+    },
+    {
+      "id": "vllm-backend-version-compatibility",
+      "kind": "reference",
+      "title": "Pin a compatible vLLM (and CUDA) version for the verl rollout",
+      "summary": "verl's vLLM rollout requires vllm within a supported range; wrong versions cause import errors and generation failures.",
+      "applicability": {
+        "when": [
+          "Installing verl with the vLLM rollout backend",
+          "Debugging vLLM import errors, generation hangs, or incorrect rollout outputs"
+        ],
+        "avoid_when": [
+          "Using the SGLang or HuggingFace rollout backend instead of vLLM"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Pin vLLM to the supported range: >=0.8.2 and <=0.12.0 (the SKILL.md quick fix cites >=0.8.5).",
+          "Avoid vLLM 0.7.x (known bugs).",
+          "For vLLM 0.8.x generation issues, set actor_rollout_ref.rollout.enforce_eager=true to disable CUDA graphs.",
+          "vLLM 0.11+ requires CUDA 12.1+ \u2014 verify with nvidia-smi."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md",
+          "SKILL.md"
+        ]
+      },
+      "delivery": {
+        "stages": [
+          "generate",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#issue-vllm-version-mismatch"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#vllm-version-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages",
+        "applicability.avoid_when"
+      ]
+    }
+  ],
+  "schema_version": "0.2",
+  "skill_name": "verl-rl-training",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/06-post-training/verl",
+    "content_sha256": "657298b6b145f60a0ddd0d36c107a6b6aaa0d7bc9351c0873b8e3ad3552c85b6",
+    "fetched_at": "2026-07-17T23:17:10Z"
+  }
+}

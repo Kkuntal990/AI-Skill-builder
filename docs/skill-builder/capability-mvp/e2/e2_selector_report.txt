@@ -1,0 +1,23 @@
+
+=== Capability-linker replay (pulled-results/spike-018) ===
+library: peft-tuning(6u), vllm-inference(7u) | total 13 units | budget max_units=3
+deterministic=True llm_calls=True | total nodes 80
+
+| stage | nodes | survivors(mean) | legacy-units(mean) | cap-UPPER-BOUND(mean) | dep+ | dep- | declined |
+|---|---|---|---|---|---|---|---|
+| generate | 8 | 13 | 6.50 | 3 | 0 | 0 | 4 |
+| refine | 21 | 3 | 4.33 | 3 | 0 | 0 | 7 |
+| debug | 45 | 3 | 3.11 | 3 | 0 | 0 | 24 |
+| explore | 6 | 3 | 2 | 3 | 0 | 0 | 4 |
+
+Exposure (all nodes): legacy-all-units  sum=295 mean=3.69 median=6.0
+                      cap-upper-bound   sum=240 mean=3 median=3.0
+                      cap-ACTUAL(LLM)   sum=52 mean=0.65 median=0.0
+  ACTUAL exposure reduction vs legacy: 82.37%  (gate >=30%)
+  UPPER-BOUND caveat: capability_upper_bound is survivors capped by budget.max_units + dependency closure with the LLM selector STUBBED to admit-all — an UPPER BOUND, not the injected set. On nodes where the legacy selector declined (legacy exposure 0), the upper bound is >0 because the semantic selector that would also likely decline is not run. The real relative-reduction number (plan gate >=30%) needs the LLM pass (--with-selector); it is a documented follow-up, not computed here.
+
+Selector health [TRUSTWORTHY]: selected=20 genuine_decline=60 no_candidates=0 | transport_error=0 parse_failure=0
+
+Hard-constraint violation: PASS (0 violations) — 0/80 nodes.
+Recorded legacy selection: 41 nonempty / 39 declined; picks {'peft-tuning': 41, 'vllm-inference': 7}
+Hard-filtered by reason (all stages): stage_excluded=630, dep_incompatible=90

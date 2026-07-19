@@ -1,0 +1,50 @@
+{
+  "experiment": "E1 COVERAGE-RECALL audit — the recall axis missing from the E1 grounding critic",
+  "date": "2026-07-18",
+  "tool": "agents/ai-skill-builder/skills/build-skill-from-docs/scripts/capability_coverage_audit.py (coverage_version 0.1.0)",
+  "motivation": "capability_grounding.py measures PRECISION (is every compiled unit backed by source?). It cannot see the inverse failure the exposure eval surfaced: a solvable issue whose fix IS in the skill source but was never compiled into a *selectable* unit, so a per-node selector correctly declines against an incomplete library and the help never reaches the agent. This audit measures that recall.",
+  "method": {
+    "stage1_extract": "LLM reads SKILL.md + references ALONE (blind to the compiled units) and enumerates every source-anchored solvable issue (diagnostic / pitfall / precondition / decision), each with a VERBATIM source quote + stage(s) + severity.",
+    "stage2_map": "A second LLM pass, seeing the compiled unit catalog, decides for each issue whether a unit would actually be DELIVERED to a node facing it (semantic match AND stage-eligible AND not avoid_when-excluded). Batched (<=12 issues/call) so each claude call is bounded.",
+    "stage3_deterministic": "No-LLM guards: every issue quote must verify against the real source (drops hallucinated issues -> issues_ungrounded); every claimed covering unit-id must exist in the manifest (drops hallucinated coverage). coverage_rate + gaps computed in code.",
+    "transport": "claude-CLI-only, RAISES on failure (no OpenRouter fallback) so a silent drop can't masquerade as full coverage. Extraction cached; mapping batched."
+  },
+  "results": {
+    "peft-tuning": {
+      "units": 6,
+      "issues_extracted": 51,
+      "issues_grounded": 51,
+      "issues_ungrounded_dropped": 0,
+      "hallucinated_unit_ids": 0,
+      "covered": 30,
+      "gaps": 21,
+      "coverage_rate": 0.5882,
+      "gaps_by_severity": {"high": 2, "medium": 10, "low": 9},
+      "gaps_by_stage": {"explore": 11, "generate": 7, "debug": 6, "refine": 4},
+      "high_severity_gap_ids": ["task-type-must-match-head", "adalora-total-step-required"],
+      "report": "docs/skill-builder/capability-mvp/e1/peft-tuning-built/coverage_audit.json"
+    },
+    "vllm-inference": {
+      "units": 7,
+      "issues_extracted": 61,
+      "issues_grounded": 61,
+      "issues_ungrounded_dropped": 0,
+      "hallucinated_unit_ids": 0,
+      "covered": 13,
+      "gaps": 48,
+      "coverage_rate": 0.2131,
+      "gaps_by_severity": {"high": 11, "medium": 25, "low": 12},
+      "gaps_by_stage": {"generate": 28, "debug": 19, "explore": 13, "refine": 9},
+      "high_severity_gap_examples": ["max-model-len-serve-oom", "max-model-len-offline-kv-fit", "chat-template-flag-needed", "trust-remote-code-custom-models", "cuda-visible-devices-ordering", "bnb-needs-both-flags", "gguf-needs-hf-tokenizer", "lora-max-rank-must-cover-adapter"],
+      "report": "docs/skill-builder/capability-mvp/e1/vllm-inference-built/coverage_audit.json"
+    }
+  },
+  "headline": "Both skills UNDER-COMPILE: 6 units captured 30/51 (58.8%) of peft's source-taught solvable issues, 7 units captured only 13/61 (21.3%) of vllm's. Gaps concentrate in explore + debug — the exact stages where the E2 exposure eval showed the selector abstaining.",
+  "interlock_with_exposure_eval": "The E2 --with-selector pass showed the selector injects ~0.65 units/node and abstains on debug/explore (82.37% exposure reduction). This audit shows that abstention is SUBSTANTIALLY a compilation-recall artifact, not purely wise pruning: there was little debug/explore content to select because the compiler under-produced units for those stages. Exposure-reduction and coverage-recall are in TENSION — a high reduction with low recall is a warning sign, not an unqualified win. Report the two numbers together.",
+  "spike018_training_oom_note": "The specific spike-018 case (mid-training backward-pass OOM on a 48GB GPU, fix = gradient checkpointing / grad-accum) is at the extreme end: the source carries the fix only as a side-note inside the QLoRA procedure (references/quantization.md gradient_checkpointing_enable), so buried that the issue extractor surfaced only the LOAD-time '<24GB base does not fit -> QLoRA' case (base-model-oom-single-gpu-qlora, marked COVERED). The training-time-OOM-on-adequate-GPU fix was neither a unit NOR a salient extracted issue.",
+  "caveats": [
+    "coverage_rate is STRICT: not every source sentence warrants a standalone unit, and some 'explore' decision-gaps (e.g. use-trl-for-rl-loop) are partially encoded as avoid_when on OTHER units rather than as positive selectable units — the audit counts them as gaps because a selector cannot surface them as positive guidance. Read severity, not just the raw rate.",
+    "The extractor + mapper are LLM stages and nondeterministic; the deterministic quote/unit-id guards bound fabrication but not extraction recall itself (a missed issue is invisible). Re-runs will vary the exact counts; the LOW-coverage direction and the explore/debug concentration are the robust claims.",
+    "This is 2 builder-made skills on their own source. The remedy is a BUILDER change (compiler chunking/prompt to lift cross-cutting operational knowledge — error traps, decision points, memory hygiene — into units), then a rebuild; NOT hand-authoring units."
+  ]
+}

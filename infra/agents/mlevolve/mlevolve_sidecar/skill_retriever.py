@@ -10,6 +10,11 @@ single-shot codegen agents:
   - Activation/Execution: ``loaded_skills()`` — per-skill ``body`` (SKILL.md,
     frontmatter stripped) and ``references`` ({filename: text}). The injector's
     model selector picks which skill bodies + which references to load per node.
+  - Capability linking (optional; HLD §10): if a ``capabilities.json`` manifest
+    sits beside ``SKILL.md`` and validates, its units attach to the skill dict
+    (``capabilities`` + ``capabilities_valid``). ``loaded_capability_skills()``
+    exposes only the skills with a valid, non-empty manifest for the linker. A
+    skill without a manifest is untouched and stays on the legacy path.
 
 Source of skills (first that resolves wins):
   1. ``MLEVAL_SKILL_LIBRARY`` — a directory; scan ``*/SKILL.md`` (skip dirs
@@ -69,6 +74,57 @@ def _parse_frontmatter(skill_md: str) -> tuple[str, str, str]:
     return name, description, body
 
 
+def _load_capabilities(skill_dir: Path, skill: dict) -> None:
+    """Attach an optional ``capabilities.json`` manifest to ``skill`` in place.
+
+    The capability-linker MVP (HLD §10, §14) ships ``capabilities.json`` BESIDE
+    ``SKILL.md``. When present and valid it powers the capability delivery modes;
+    when absent or invalid the skill stays on the legacy body/reference path. This
+    loader is purely additive:
+
+      - success (manifest validates): skill['capabilities'] = the unit list,
+        skill['capabilities_valid'] = True.
+      - failure (missing/unreadable/invalid): skill['capabilities'] stays [],
+        skill['capabilities_valid'] stays False, skill['capabilities_error'] = the
+        first validation error, and a warning is logged.
+
+    A broken or absent manifest MUST NOT fail skill loading — the legacy body still
+    loads (HLD §10.4 / §14 backward-compat). ``capability_schema`` is imported
+    lazily so this module's import stays side-effect-free w.r.t. import order.
+    """
+    cap_path = skill_dir / "capabilities.json"
+    if not cap_path.is_file():
+        return
+    try:
+        from . import capability_schema  # lazy: keep loader import order clean
+        manifest, errors, warnings = capability_schema.load_and_validate(
+            cap_path, skill_dir=skill_dir
+        )
+    except Exception as e:  # noqa: BLE001 — a manifest error must never break loading
+        skill["capabilities_error"] = f"{type(e).__name__}: {e}"
+        logger.warning(
+            "[skill_retriever] %s: capabilities.json load raised: %s", skill["name"], e
+        )
+        return
+    if manifest is not None:  # load_and_validate returns the manifest only when valid
+        skill["capabilities"] = manifest.get("capabilities") or []
+        skill["capabilities_valid"] = True
+        for w in warnings:
+            logger.info(
+                "[skill_retriever] %s: capabilities warning: %s", skill["name"], w
+            )
+        logger.info(
+            "[skill_retriever] %s: loaded %d capability unit(s)",
+            skill["name"], len(skill["capabilities"]),
+        )
+    else:
+        skill["capabilities_error"] = errors[0] if errors else "invalid manifest"
+        logger.warning(
+            "[skill_retriever] %s: capabilities.json invalid: %s",
+            skill["name"], skill["capabilities_error"],
+        )
+
+
 def _load_skill(skill_dir: Path) -> dict:
     """Load one skill: SKILL.md body (frontmatter stripped) + references map.
 
@@ -77,6 +133,9 @@ def _load_skill(skill_dir: Path) -> dict:
       - body            — SKILL.md body only (NOT references — those load on demand)
       - references      — {filename: text} for each references/*.md
       - reference_files — sorted list of reference filenames (for the catalog)
+      - capabilities        — validated capability units from capabilities.json, or []
+      - capabilities_valid  — True iff a valid manifest loaded (default False)
+      - capabilities_error  — first validation error when a manifest failed (optional)
     """
     skill_md = (skill_dir / "SKILL.md").read_text()
     name, description, body = _parse_frontmatter(skill_md)
@@ -89,14 +148,19 @@ def _load_skill(skill_dir: Path) -> dict:
         for ref_file in sorted(ref_dir.glob("*.md")):
             references[ref_file.name] = ref_file.read_text()
 
-    return {
+    skill = {
         "name": name,
         "description": description,
         "body": body,
         "references": references,
         "reference_files": sorted(references.keys()),
         "source_dir": str(skill_dir),
+        # Capability-linker MVP fields (default: legacy path, no manifest).
+        "capabilities": [],
+        "capabilities_valid": False,
     }
+    _load_capabilities(skill_dir, skill)
+    return skill
 
 
 def _load_library_dir(root: str) -> list[dict]:
@@ -173,6 +237,21 @@ logger.info("[skill_retriever] loaded %d skill(s) into library", len(_SKILLS))
 def loaded_skills() -> list[dict]:
     """Return the current loaded-skill list (post-import; may be empty)."""
     return list(_SKILLS)
+
+
+def loaded_capability_skills() -> list[dict]:
+    """Return only skills carrying a VALID, non-empty capabilities manifest.
+
+    These are the ``cap_skills`` the ``capability_linker`` consumes (HLD §10). A
+    skill without ``capabilities.json``, or with an invalid or empty one, is
+    excluded: capability delivery modes must NOT mix in that skill's legacy body
+    (HLD §10.4 — a capability arm never silently emits legacy content). An empty
+    result is the no-skill baseline for the capability modes.
+    """
+    return [
+        s for s in _SKILLS
+        if s.get("capabilities_valid") and s.get("capabilities")
+    ]
 
 
 def reload() -> int:

@@ -1,0 +1,463 @@
+{
+  "capabilities": [
+    {
+      "id": "select-peft-method",
+      "kind": "reference",
+      "title": "Choose between LoRA, QLoRA, and full fine-tuning",
+      "summary": "Pick the fine-tuning strategy from model size, GPU memory budget, and acceptable quality trade-off.",
+      "applicability": {
+        "when": [
+          "about to fine-tune a 7B-70B LLM",
+          "GPU memory is a limiting factor for training",
+          "deciding whether parameter-efficient fine-tuning is appropriate"
+        ],
+        "avoid_when": [
+          "training a small model (<1B parameters) \u2014 full fine-tuning is preferred",
+          "maximum quality is required and compute budget is available",
+          "significant domain shift requires updating all model weights"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Choose LoRA when fine-tuning 7B-70B models on consumer GPUs (RTX 4090, A100), when you need small swappable adapters (~6MB vs a 14-16GB full model), or when deploying multiple task-specific variants from one base model.",
+          "Choose QLoRA (LoRA + 4-bit quantization) when memory is the primary constraint \u2014 e.g. fitting a 70B model on a single 24GB GPU \u2014 and a ~5% quality trade-off vs full fine-tuning is acceptable.",
+          "Choose full fine-tuning when the model is small (<1B params), when maximum quality is required with compute to spare, or when a large domain shift requires updating all weights.",
+          "Memory reference (Llama 3.1 8B): full FT 60+ GB; LoRA r=16 ~18 GB; QLoRA r=16 ~6 GB; IA3 ~16 GB. Trainable params: LoRA/QLoRA ~0.1-1%, IA3 ~0.01%.",
+          "Quality reference (MMLU): LoRA and QLoRA stay within ~1-2 points of full FT (e.g. Llama 2-7B: full 45.3, LoRA 44.8, QLoRA 44.1)."
+        ]
+      },
+      "expected_outcomes": [
+        "LoRA/QLoRA train <1% of parameters (~0.17% for an 8B model) with minor accuracy loss",
+        "QLoRA lets a 70B model fit on a single 24GB GPU at a ~5% quality trade-off"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "explore"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#when-to-use-peft"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#performance-benchmarks"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#peft-methods-comparison"
+        }
+      ],
+      "synthesized_fields": [
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "select-lora-hyperparameters",
+      "kind": "reference",
+      "title": "Select LoRA rank, alpha, and target modules",
+      "summary": "Choose r, lora_alpha, and target_modules from capacity guidance and the model's architecture.",
+      "applicability": {
+        "when": [
+          "configuring a LoraConfig for a training run",
+          "trading LoRA capacity against memory",
+          "adapting LoRA to a specific model architecture (Llama, GPT-2, Falcon, BLOOM, ...)"
+        ],
+        "avoid_when": [
+          "using a non-LoRA PEFT method (e.g. IA3, prefix tuning) whose config uses different fields"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "Start with r=8-16; increase to r=32-64 for complex tasks, domain adaptation, or 70B models. Rank guide: r=8 (~7M params, good, recommended start), r=16 (~14M, better, general fine-tuning), r=32/64 (higher capacity, more memory).",
+          "Set lora_alpha = 2 * r as the default (e.g. r=16 -> alpha=32). Use alpha=r for a conservative (lower effective LR) effect, or a larger alpha for a more aggressive effect.",
+          "Target attention + MLP layers for best quality/efficiency. Llama/Mistral/Qwen: q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj. GPT-2/GPT-Neo: c_attn, c_proj, c_fc. Falcon/BLOOM: query_key_value, dense, dense_h_to_4h, dense_4h_to_h.",
+          "Use target_modules=\"all-linear\" (PEFT 0.6.0+) to auto-detect and target all linear layers.",
+          "Set lora_dropout ~0.05 and bias=\"none\" as defaults."
+        ],
+        "reference_files": [
+          "references/advanced-usage.md"
+        ]
+      },
+      "expected_outcomes": [
+        "Higher rank yields more capacity/quality at higher memory cost",
+        "Targeting attention + MLP layers gives the best quality/efficiency balance"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#lora-parameter-selection"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#best-practices"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "lora-fine-tune",
+      "kind": "procedure",
+      "title": "Fine-tune an LLM with standard LoRA",
+      "summary": "Attach a LoRA adapter to a base causal LM and train it with the HuggingFace Trainer, saving the adapter only.",
+      "applicability": {
+        "when": [
+          "fine-tuning a 7B-70B model that fits in fp16 on the available GPU",
+          "you want small, swappable adapters instead of a full model copy",
+          "GPU memory allows loading the base model without quantization"
+        ],
+        "avoid_when": [
+          "the base model does not fit in GPU memory without quantization (use QLoRA instead)",
+          "training a <1B model where full fine-tuning is preferable"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:adapter-checkpoint"
+      ],
+      "depends_on": [
+        "select-lora-hyperparameters"
+      ],
+      "procedure": {
+        "steps": [
+          "Load the base model with AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=\"auto\", device_map=\"auto\") and the tokenizer; set tokenizer.pad_token = tokenizer.eos_token.",
+          "Build a LoraConfig (task_type=CAUSAL_LM, r=16, lora_alpha=32, lora_dropout=0.05, target_modules on attention projections, bias=\"none\") and wrap the model with get_peft_model.",
+          "Call model.print_trainable_parameters() and confirm only <1% of params are trainable (e.g. ~13.6M / 8B ~= 0.17%).",
+          "Tokenize the dataset (truncation, max_length, padding) and remove original columns.",
+          "Configure TrainingArguments (num_train_epochs, per_device_train_batch_size, gradient_accumulation_steps, learning_rate=2e-4, fp16=True, save_strategy=\"epoch\") and build a Trainer whose collator sets labels = input_ids.",
+          "Run trainer.train(), then model.save_pretrained(adapter_dir) to persist the adapter only."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "print_trainable_parameters() reports >0 trainable params (~0.17% for an 8B model)",
+        "Training loss decreases over logging steps",
+        "The saved adapter directory contains adapter_config.json and adapter_model.safetensors"
+      ],
+      "recovery": [
+        "CUDA OOM -> enable gradient_checkpointing, reduce per_device_train_batch_size to 1 and raise gradient_accumulation_steps, lower LoRA rank, target fewer modules, or switch to QLoRA",
+        "Loss flat / not decreasing -> lower learning_rate to 1e-4, verify the adapter is active, and check tokenized data formatting",
+        "NaN loss -> use bf16=True instead of fp16, or lower learning_rate to 5e-5",
+        "trainable params: 0 -> confirm target_modules match the architecture and call model.train()"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#lora-fine-tuning-standard"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#common-issues"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#training-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "requires.runtime",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "qlora-fine-tune",
+      "kind": "procedure",
+      "title": "Fine-tune a large LLM with QLoRA (4-bit)",
+      "summary": "Load a 4-bit quantized base model and train a LoRA adapter so large models fit on limited GPU memory.",
+      "applicability": {
+        "when": [
+          "fine-tuning a large model (e.g. 70B) on a single 24GB GPU",
+          "GPU memory is the primary constraint",
+          "a ~5% quality trade-off vs full fine-tuning is acceptable"
+        ],
+        "avoid_when": [
+          "memory is not the constraint and full-precision LoRA already fits (avoid the QLoRA quality and speed cost)",
+          "maximum quality is required"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ]
+      },
+      "produces": [
+        "ml:adapter-checkpoint"
+      ],
+      "depends_on": [
+        "select-lora-hyperparameters",
+        "select-peft-method"
+      ],
+      "procedure": {
+        "steps": [
+          "Build a BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type=\"nf4\", bnb_4bit_compute_dtype=\"bfloat16\", bnb_4bit_use_double_quant=True).",
+          "Load the base model with AutoModelForCausalLM.from_pretrained(..., quantization_config=bnb_config, device_map=\"auto\").",
+          "Call prepare_model_for_kbit_training(model) to enable gradient checkpointing and cast layers for stable k-bit training.",
+          "Build a LoraConfig with a higher rank for large models (r=64, lora_alpha=128, lora_dropout=0.1, target attention + MLP modules, bias=\"none\", task_type=\"CAUSAL_LM\") and wrap with get_peft_model.",
+          "Train with the same Trainer/TrainingArguments flow as standard LoRA; the 4-bit base plus LoRA adapter now fits on a single 24GB GPU."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "The quantized model loads in 4-bit without CUDA OOM",
+        "print_trainable_parameters() shows the expected small trainable percentage",
+        "Training loss decreases over logging steps"
+      ],
+      "recovery": [
+        "OOM even at 4-bit -> prepare_model_for_kbit_training(model, use_gradient_checkpointing=True), reduce batch size and raise gradient accumulation, or lower LoRA rank",
+        "NaN loss -> switch to bf16 and lower the learning rate",
+        "bitsandbytes 'CUDA Setup failed' -> reinstall bitsandbytes matching the installed CUDA version (or compile from source for that CUDA)"
+      ],
+      "expected_outcomes": [
+        "A 70B model fits on a single 24GB GPU (Llama 3.1 8B QLoRA r=16 uses ~6 GB)",
+        "~5% quality trade-off and ~0.84x training speed vs full fine-tuning"
+      ],
+      "delivery": {
+        "stages": [
+          "generate",
+          "refine",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#qlora-fine-tuning-memory-efficient"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#common-issues"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#training-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "requires.runtime",
+        "applicability.avoid_when",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "load-merge-serve-adapter",
+      "kind": "procedure",
+      "title": "Load, merge, and serve LoRA adapters",
+      "summary": "Load a trained adapter onto its base, merge it for deployment, or hot-swap multiple adapters at runtime.",
+      "applicability": {
+        "when": [
+          "deploying a trained LoRA adapter for inference",
+          "you want to remove adapter overhead by merging into the base model",
+          "serving multiple task-specific adapters from one base model"
+        ],
+        "avoid_when": [
+          "you still need to switch adapters at runtime \u2014 do NOT merge, since merge_and_unload bakes a single adapter into the base"
+        ]
+      },
+      "requires": {
+        "runtime": [
+          "python",
+          "gpu"
+        ],
+        "artifacts": [
+          "ml:adapter-checkpoint"
+        ]
+      },
+      "produces": [
+        "ml:model-checkpoint"
+      ],
+      "procedure": {
+        "steps": [
+          "Load the adapter with AutoPeftModelForCausalLM.from_pretrained(adapter_dir, device_map=\"auto\") (recommended), or PeftModel.from_pretrained(base_model, adapter_dir).",
+          "For single-adapter deployment, call merged_model = model.merge_and_unload(), then merged_model.save_pretrained(dir) and tokenizer.save_pretrained(dir); optionally push_to_hub.",
+          "For multi-adapter serving, load each with model.load_adapter(path, adapter_name=...), switch with model.set_adapter(name) before generate, and use `with model.disable_adapter():` to fall back to the base model.",
+          "For faster inference, merge the adapter, or serve the merged model via vLLM / enable flash_attention_2."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "model.active_adapters shows the expected adapter name after loading/switching",
+        "The adapter directory contains adapter_config.json and adapter_model.safetensors",
+        "The merged model generates correctly without loading the adapter separately"
+      ],
+      "recovery": [
+        "'Can't find adapter weights' -> confirm adapter files exist and load the base model from PeftConfig.base_model_name_or_path first",
+        "size mismatch -> ensure the base model matches the adapter's base_model_name_or_path",
+        "'couldn't connect to huggingface.co' -> pass local_files_only=True",
+        "Slow generation -> merge_and_unload, use vLLM, or enable attn_implementation=\"flash_attention_2\""
+      ],
+      "delivery": {
+        "stages": [
+          "refine",
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#loading-and-merging-adapters"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#multi-adapter-serving"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#loading-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "requires.runtime",
+        "applicability.avoid_when",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "diagnose-adapter-not-training",
+      "kind": "diagnostic",
+      "title": "Diagnose an adapter that isn't training or applying",
+      "summary": "Read-only checks that confirm a LoRA adapter is attached, trainable, and active before or during a run.",
+      "applicability": {
+        "when": [
+          "print_trainable_parameters reports 0 or the model is not updating",
+          "training loss stays flat",
+          "verifying an adapter is active before a long training run"
+        ],
+        "avoid_when": []
+      },
+      "produces": [
+        "ml:diagnostic-report"
+      ],
+      "procedure": {
+        "steps": [
+          "Run model.print_trainable_parameters() and expect a non-zero trainable count (~0.17% for an 8B model).",
+          "Print model.active_adapters and confirm it lists the expected adapter name.",
+          "Iterate model.named_parameters() and print entries with requires_grad=True to confirm LoRA params are trainable.",
+          "Iterate model.named_modules() and print names containing 'lora' to confirm LoRA layers were injected.",
+          "Compare target_modules against TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING[model.config.model_type] to confirm they match the architecture.",
+          "Decode a dataset sample with tokenizer.decode(sample['input_ids']) to verify data formatting, and confirm model.train() mode."
+        ],
+        "reference_files": [
+          "references/troubleshooting.md"
+        ]
+      },
+      "validation": [
+        "The report shows >0 trainable params and a non-empty active-adapter list"
+      ],
+      "recovery": [
+        "trainable params: 0 -> fix target_modules to match the architecture and call model.train()",
+        "empty active adapters -> re-apply get_peft_model / reload the adapter",
+        "loss flat despite trainable params -> lower learning rate and verify tokenization"
+      ],
+      "delivery": {
+        "stages": [
+          "debug"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "SKILL.md#adapter-not-applying"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/troubleshooting.md#training-issues"
+        }
+      ],
+      "synthesized_fields": [
+        "produces",
+        "delivery.stages"
+      ]
+    },
+    {
+      "id": "choose-advanced-lora-variant",
+      "kind": "reference",
+      "title": "Choose an advanced LoRA variant (DoRA, AdaLoRA, LoRA+, rsLoRA, LoftQ)",
+      "summary": "When standard LoRA underperforms, select a variant for higher quality, adaptive rank, rank-stability, or quantization-aware init.",
+      "applicability": {
+        "when": [
+          "standard LoRA quality is insufficient",
+          "exploring higher-quality or adaptive PEFT variants",
+          "experimenting with different ranks (r>32) and needing stability",
+          "improving initial quality when doing QLoRA (quantization-aware init)"
+        ],
+        "avoid_when": [
+          "standard LoRA already meets quality targets \u2014 variants add memory and complexity for no benefit"
+        ]
+      },
+      "procedure": {
+        "steps": [
+          "DoRA (LoraConfig(use_dora=True)) decomposes weights into magnitude and direction; ~10% more memory; best for instruction-following and quality-critical fine-tuning.",
+          "AdaLoRA (AdaLoraConfig with init_r, target_r, tinit/tfinal, deltaT) allocates more rank to important layers and can cut total params while maintaining quality.",
+          "LoRA+ uses a higher learning rate for the B matrix (~10x the A matrix) via grouped optimizer param groups.",
+          "rsLoRA (use_rslora=True) applies rank-stabilized scaling to keep behavior consistent across rank values; recommended for r>32.",
+          "LoftQ (init_lora_weights=\"loftq\" + LoftQConfig(loftq_bits, loftq_iter)) initializes LoRA weights to compensate for quantization error, improving on standard QLoRA."
+        ],
+        "reference_files": [
+          "references/advanced-usage.md"
+        ]
+      },
+      "expected_outcomes": [
+        "DoRA consistently outperforms LoRA on instruction-following tasks",
+        "LoftQ gives ~1-2% better final accuracy and faster convergence than standard QLoRA"
+      ],
+      "delivery": {
+        "stages": [
+          "explore",
+          "refine"
+        ]
+      },
+      "sources": [
+        {
+          "kind": "skill-package",
+          "locator": "references/advanced-usage.md#advanced-lora-variants"
+        },
+        {
+          "kind": "skill-package",
+          "locator": "references/advanced-usage.md#loftq-lora-fine-tuning-aware-quantization"
+        }
+      ],
+      "synthesized_fields": [
+        "applicability.avoid_when",
+        "delivery.stages"
+      ]
+    }
+  ],
+  "schema_version": "0.2",
+  "skill_name": "peft-fine-tuning",
+  "source_snapshot": {
+    "kind": "skill-package",
+    "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs/tree/773a52944ba4747a18bd4ae9ade53fff041adcbc/03-fine-tuning/peft",
+    "content_sha256": "a52507ee18d42b6659407462eb710f52a5a7b54c5ca5a90b8420a17a1104a735",
+    "fetched_at": "2026-07-17T22:50:11Z"
+  }
+}

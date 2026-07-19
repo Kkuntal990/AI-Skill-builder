@@ -1,0 +1,586 @@
+{
+  "issues": [
+    {
+      "id": "pick-peft-method-default",
+      "statement": "User wants parameter-efficient fine-tuning but hasn't chosen a method",
+      "source_fix": "Default to LoRA; use DoRA/AdaLoRA for higher quality; IA3 or soft prompts when you need the fewest trainable params",
+      "quote": "LoRA as the default; DoRA/AdaLoRA for higher quality at slightly more cost; IA3 or soft prompts (prefix/P-tuning) when you need the fewest trainable params",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "base-model-oom-single-gpu-qlora",
+      "statement": "The base model does not fit in VRAM on a single GPU (<24GB)",
+      "source_fix": "Use QLoRA \u2014 load the base in 4-bit and train a LoRA adapter on top",
+      "quote": "QLoRA \u2014 load the base in 4-bit and train a LoRA adapter on top",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "too-large-even-quantized-multigpu",
+      "statement": "Model is too large for one GPU even quantized, but multiple GPUs are available",
+      "source_fix": "Use DeepSpeed ZeRO-3 for the largest models, FSDP for medium models",
+      "quote": "DeepSpeed ZeRO-3 for the largest models; FSDP for medium models",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "deploy-merge-vs-swap-adapters",
+      "statement": "Deciding how to deploy the tuned model \u2014 single merged model vs serving multiple tasks from one base",
+      "source_fix": "merge_and_unload for zero-overhead single-model inference; keep adapter separate and swap with set_adapter for multi-task serving",
+      "quote": "`merge_and_unload` into one model for zero-overhead inference (LoRA-family only, not on a quantized base); keep the adapter separate and swap with `set_adapter`",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "qlora-only-when-memory-constrained",
+      "statement": "Reaching for QLoRA/4-bit even when the bf16 base already fits in memory",
+      "source_fix": "Use plain LoRA when memory isn't the constraint \u2014 4-bit only adds overhead and a fragile grad path",
+      "quote": "4-bit adds dequantization overhead and a more fragile k-bit grad path, for no benefit when memory isn't the constraint.",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "qlora-prepare-kbit-step",
+      "statement": "Setting up a QLoRA run on a 4-bit-loaded base",
+      "source_fix": "Call prepare_model_for_kbit_training on the loaded model before attaching LoRA",
+      "quote": "Step 3: Call `prepare_model_for_kbit_training` on the loaded model",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "merge-not-on-quantized-base",
+      "statement": "Wanting to merge the adapter for zero-overhead inference",
+      "source_fix": "merge_and_unload works for LoRA-family adapters only, and not on a quantized base",
+      "quote": "Optionally call `merge_and_unload()` to fold weights in for zero inference overhead (LoRA-family only, not on a quantized base)",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate",
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "load-trained-adapter-for-inference",
+      "statement": "Attaching a saved adapter to its base model to generate",
+      "source_fix": "Use PeftModel.from_pretrained(base, adapter_path), or AutoPeftModelForCausalLM.from_pretrained for one-call loading",
+      "quote": "Attach the adapter with `PeftModel.from_pretrained(base, adapter_path)`",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "use-trl-for-rl-loop",
+      "statement": "Task needs an RL/preference-optimization loop (PPO, DPO, reward models)",
+      "source_fix": "Use trl for the RL loop; PEFT only supplies the adapter that trl trains",
+      "quote": "For the RL/preference-optimization loop itself (PPO, DPO, reward models) \u2014 use `trl` instead; PEFT supplies the adapter that trl trains.",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "use-vllm-for-serving",
+      "statement": "Task needs high-throughput production serving of the merged model",
+      "source_fix": "Use a dedicated inference engine (e.g. vLLM), not PEFT",
+      "quote": "For high-throughput production serving of the merged model \u2014 use a dedicated inference engine (e.g. vLLM) instead.",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "deprecated-prepare-int8",
+      "statement": "Code uses deprecated prepare_model_for_int8_training",
+      "source_fix": "Replace with prepare_model_for_kbit_training",
+      "quote": "**`prepare_model_for_int8_training`** (deprecated in 0.4.0) \u2014 use `prepare_model_for_kbit_training` instead.",
+      "source_file": "SKILL.md",
+      "stages": [
+        "debug",
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "deprecated-loadin-kwargs",
+      "statement": "Passing load_in_8bit/load_in_4bit directly to from_pretrained (deprecated)",
+      "source_fix": "Pass a BitsAndBytesConfig via quantization_config instead",
+      "quote": "use `BitsAndBytesConfig` passed via `quantization_config` instead.",
+      "source_file": "SKILL.md",
+      "stages": [
+        "debug",
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "vram-sizing-references",
+      "statement": "Estimating whether a given model+method fits on a specific GPU",
+      "source_fix": "Use the referenced fits \u2014 Llama-2-7B QLoRA+TRL on 16GB, 20B RLHF+PEFT+TRL on 24GB",
+      "quote": "Llama-2-7B with QLoRA + TRL fits on a 16GB GPU; 20B-parameter RLHF with PEFT + TRL fits on a 24GB consumer GPU",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "lora-core-workflow",
+      "statement": "Writing a fresh LoRA fine-tuning script",
+      "source_fix": "Build a LoraConfig (task_type, r, lora_alpha, target_modules), wrap with get_peft_model, train, save adapter",
+      "quote": "build a `LoraConfig` (`task_type`, `r`, `lora_alpha`, `target_modules`), wrap it with `get_peft_model`",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "task-type-must-match-head",
+      "statement": "Choosing the wrong task_type for the model head",
+      "source_fix": "Set task_type to match the head (CAUSAL_LM, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS, QUESTION_ANS, FEATURE_EXTRACTION)",
+      "quote": "`task_type` must match the head: `TaskType.CAUSAL_LM`, `TaskType.SEQ_2_SEQ_LM`, `TaskType.SEQ_CLS`, `TaskType.TOKEN_CLS`",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "lora-rank-selection",
+      "statement": "Picking the LoRA rank r",
+      "source_fix": "Start low and raise r only if the adapter underfits",
+      "quote": "Higher `r` adds capacity at the cost of more parameters; start low and raise only if the adapter underfits.",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "refine",
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "lora-alpha-heuristic",
+      "statement": "Choosing lora_alpha relative to r",
+      "source_fix": "Use the lora_alpha = 2*r heuristic to keep the effective scale at 2",
+      "quote": "A common heuristic is `lora_alpha = 2 * r`",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "target-modules-omitted-default",
+      "statement": "Not specifying target_modules in LoraConfig",
+      "source_fix": "PEFT applies a model-type default (often attention query/value projections) when omitted",
+      "quote": "If omitted, PEFT applies a model-type default (often the attention query/value projections).",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "init-lora-weights-faster-convergence",
+      "statement": "Training converges slowly from zero-init adapters",
+      "source_fix": "Use PiSSA/OLoRA/LoftQ init strings to initialize from a decomposition of the base weights for faster convergence",
+      "quote": "PiSSA/OLoRA/LoftQ-style strings to initialize from a decomposition of the base weights for faster convergence.",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "use-rslora-high-rank",
+      "statement": "Training is unstable at higher LoRA ranks",
+      "source_fix": "Enable use_rslora for rank-stabilized scaling (lora_alpha/sqrt(r))",
+      "quote": "use rank-stabilized scaling (`lora_alpha / sqrt(r)` instead of `lora_alpha / r`), which stabilizes training at higher ranks.",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "modules-to-save-new-head",
+      "statement": "A freshly-initialized head (e.g. classifier) also needs training, not just the adapter",
+      "source_fix": "Add it to modules_to_save so it trains fully and is saved alongside the adapter",
+      "quote": "extra modules (e.g. a freshly-initialized classifier head) to train fully and save alongside the adapter.",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "dora-low-rank-quality",
+      "statement": "Want better-than-LoRA quality at low rank",
+      "source_fix": "Enable DoRA via use_dora=True flag on LoraConfig (not a separate config class)",
+      "quote": "It typically improves over plain LoRA at low ranks. It is not a separate config class \u2014 it is a flag on `LoraConfig`",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "dora-memory-speed-cost",
+      "statement": "Considering DoRA when memory/speed is tight",
+      "source_fix": "Account for DoRA's added magnitude params \u2014 slower and more memory than plain LoRA at the same r",
+      "quote": "DoRA adds the magnitude parameters, so it is somewhat slower and uses more memory than plain LoRA at the same `r`.",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "adalora-total-step-required",
+      "statement": "AdaLoRA rank schedule desyncs from the actual run length",
+      "source_fix": "Set total_step to the actual number of optimizer steps; a wrong value desynchronizes the schedule",
+      "quote": "Set `total_step` to the actual number of optimizer steps in your run; an incorrect value desynchronizes the rank schedule.",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "adalora-when-to-use",
+      "statement": "Deciding whether AdaLoRA fits the goal",
+      "source_fix": "Use AdaLoRA for LoRA-level quality under a tight parameter budget, letting it allocate per-layer rank",
+      "quote": "AdaLoRA is most useful when you want LoRA-level quality under a tight parameter budget",
+      "source_file": "references/lora-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "soft-prompt-fewest-params",
+      "statement": "Need the fewest trainable params / fastest to train",
+      "source_fix": "Use prompt tuning",
+      "quote": "Fewest parameters, fastest to train \u2192 **prompt tuning**.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "prefix-tuning-more-capacity",
+      "statement": "Need soft prompts that touch every layer for more capacity",
+      "source_fix": "Use prefix tuning",
+      "quote": "Soft prompts that touch every layer (more capacity) \u2192 **prefix tuning**.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "ia3-lora-like-no-merge",
+      "statement": "Want LoRA-like quality with even fewer params and no merge into weights",
+      "source_fix": "Use IA3",
+      "quote": "LoRA-like quality with even fewer params, no merge into weights \u2192 **IA3**.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "oft-boft-preserve-base",
+      "statement": "Need to preserve the base model's behavior (e.g. subject-driven image gen, ControlNet/DreamBooth)",
+      "source_fix": "Use OFT / BOFT orthogonal fine-tuning",
+      "quote": "Preserving the base model's behavior (e.g. subject-driven image generation, ControlNet/DreamBooth) \u2192 **OFT / BOFT**.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "prompt-tuning-text-init",
+      "statement": "Prompt tuning converges slowly from random init",
+      "source_fix": "Initialize from real task text with PromptTuningInit.TEXT for faster convergence",
+      "quote": "Initializing the prompt from real task text (`PromptTuningInit.TEXT`) usually converges faster than random init.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "prompt-init-text-fit-tokens",
+      "statement": "Prompt-tuning TEXT init text doesn't fit the configured virtual-token count",
+      "source_fix": "Ensure prompt_tuning_init_text fits within num_virtual_tokens (and set tokenizer_name_or_path)",
+      "quote": "`prompt_tuning_init_text` is tokenized and must fit within `num_virtual_tokens`",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "prefix-projection-stabilize",
+      "statement": "Prefix tuning is unstable to train",
+      "source_fix": "Add the optional MLP reparameterization via prefix_projection to stabilize training",
+      "quote": "An optional MLP reparameterization (`prefix_projection`) stabilizes training.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "prefix-over-prompt-underfit",
+      "statement": "Plain prompt tuning underfits",
+      "source_fix": "Switch to prefix tuning when prompt tuning underfits",
+      "quote": "prefer prefix tuning over plain prompt tuning when prompt tuning underfits.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "refine",
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "ptuning-nlu-tasks",
+      "statement": "Deciding when P-tuning is the right soft-prompt method",
+      "source_fix": "Reach for P-tuning on natural-language understanding (classification) tasks",
+      "quote": "P-tuning was designed for natural-language understanding (classification) tasks; reach for it there.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "multitask-prompt-transfer",
+      "statement": "Have multiple related tasks and want cross-task transfer",
+      "source_fix": "Use multitask prompt tuning to share a prompt across source tasks then specialize",
+      "quote": "Use it when you have multiple related tasks and want transfer between them.",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "print-trainable-params-sanity",
+      "statement": "Verifying the adapter actually wrapped the model",
+      "source_fix": "Call print_trainable_parameters() \u2014 trainable % should be small (often <1%)",
+      "quote": "`print_trainable_parameters()` is the fastest sanity check that the adapter wrapped correctly \u2014 the trainable % should be small (often <1%).",
+      "source_file": "references/prompt-and-other-methods.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "canonical-qlora-bnb-settings",
+      "statement": "Configuring 4-bit quantization for QLoRA",
+      "source_fix": "Use the canonical settings \u2014 NF4 datatype, nested/double quantization, bf16/fp16 compute dtype",
+      "quote": "The canonical QLoRA settings use the NF4 datatype, nested (double) quantization, and a bf16/fp16 compute dtype.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "nf4-vs-fp4",
+      "statement": "Choosing the 4-bit quant type",
+      "source_fix": "Use nf4 (QLoRA recommendation) over fp4",
+      "quote": "`bnb_4bit_quant_type` accepts `\"nf4\"` (normal-float, the QLoRA recommendation) or `\"fp4\"`.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "compute-dtype-hardware-float32-slow",
+      "statement": "Wrong bnb_4bit_compute_dtype (e.g. float32) silently slows training",
+      "source_fix": "Use torch.bfloat16 on Ampere+ (A6000/A100), torch.float16 on older HW; never leave it at float32",
+      "quote": "should be `torch.bfloat16` on Ampere+ GPUs (A6000, A100), or `torch.float16` on older hardware. Keeping this at float32 silently slows training.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "eight-bit-base-loading",
+      "statement": "Want a quantized base closer to full precision than 4-bit",
+      "source_fix": "Set load_in_8bit instead \u2014 heavier than 4-bit but closer to full precision; rest of recipe identical",
+      "quote": "For an 8-bit base, set `load_in_8bit` instead. This is heavier than 4-bit but closer to full precision.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "prepare-kbit-mandatory-flat-loss",
+      "statement": "QLoRA 'trains' but loss is flat \u2014 no gradient reaches the adapters",
+      "source_fix": "Call prepare_model_for_kbit_training (mandatory) after loading the quantized base; skipping it is the most common QLoRA failure",
+      "quote": "Skipping it is the single most common QLoRA failure: the model \"trains\" but the loss is flat because no gradient reaches the adapters.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "gradient-checkpointing-before-prepare",
+      "statement": "Ordering of gradient_checkpointing_enable relative to prepare_model_for_kbit_training",
+      "source_fix": "Call model.gradient_checkpointing_enable() BEFORE prepare_model_for_kbit_training",
+      "quote": "if you also call `model.gradient_checkpointing_enable()` yourself, do it **before** `prepare_model_for_kbit_training`.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "prepare-before-get-peft-model",
+      "statement": "Ordering of prepare_model_for_kbit_training relative to get_peft_model",
+      "source_fix": "Call prepare once, immediately after loading the quantized base and before get_peft_model",
+      "quote": "Call it once, immediately after loading the quantized base and before `get_peft_model`.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "trainable-params-zero-or-large-debug",
+      "statement": "print_trainable_parameters reports 0 or an unexpectedly large trainable count",
+      "source_fix": "The config or preparation step is wrong \u2014 fix the LoraConfig or prepare step",
+      "quote": "If it reports 0 trainable params or an unexpectedly large count, the config or preparation step is wrong.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "deepspeed-zero3-via-accelerate",
+      "statement": "Setting up multi-GPU LoRA training with DeepSpeed ZeRO-3",
+      "source_fix": "ZeRO-1/2/3 are all compatible with PEFT LoRA + bitsandbytes; drive it through Accelerate with a config file and accelerate launch",
+      "quote": "All three stages are compatible with PEFT LoRA + `bitsandbytes`. It is driven through Accelerate",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "zero3-save-16bit-reloadable",
+      "statement": "Saved ZeRO-3 adapter isn't reloadable with from_pretrained",
+      "source_fix": "Set zero3_save_16bit_model: true so saved adapter weights are 16-bit and reloadable",
+      "quote": "confirm `zero3_save_16bit_model: true` so the saved adapter weights are 16-bit and reloadable with `from_pretrained`.",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "zero3-qlora-version-requirements",
+      "statement": "Combining ZeRO-3 + QLoRA to fit a 70B model on 2\u00d740GB GPUs",
+      "source_fix": "Meet the version floor: bitsandbytes>=0.43.3, accelerate>=1.0.1, transformers>4.44.2, trl>0.11.4, peft>0.13.0, zero3_init_flag true",
+      "quote": "Requires `bitsandbytes>=0.43.3`, `accelerate>=1.0.1`, `transformers>4.44.2`, `trl>0.11.4`, `peft>0.13.0`",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "zero3-qlora-storage-dtype-match",
+      "statement": "ZeRO-3 + QLoRA: 4-bit storage dtype must match the model load dtype",
+      "source_fix": "Set bnb_4bit_quant_storage and the model dtype to the same value (e.g. bfloat16)",
+      "quote": "The training-code change is the 4-bit storage dtype, which must match the model load dtype",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "zero3-cpu-offload-single-gpu",
+      "statement": "Need to train a large model on a single GPU",
+      "source_fix": "Use ZeRO-3 with offload_optimizer_device: cpu and offload_param_device: cpu to offload state to CPU",
+      "quote": "To train a large model on one GPU, offload optimizer and parameter state to CPU.",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "zero3-gate-generate-custom-loop",
+      "statement": "Running generate() during inference inside a custom (non-Trainer) ZeRO-3 loop",
+      "source_fix": "Detect ZeRO-3 to gate generate() and use Accelerate's backward",
+      "quote": "In a custom (non-Trainer) loop, detect ZeRO-3 to gate `generate()` during inference, and use Accelerate's `backward`",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "fsdp-multi-gpu-sharding",
+      "statement": "Setting up multi-GPU LoRA training with FSDP",
+      "source_fix": "FSDP shards params/gradients/optimizer states across processes and can offload sharded params to CPU; configure via accelerate config",
+      "quote": "Fully Sharded Data Parallel shards parameters, gradients, and optimizer states across data-parallel processes and can offload sharded params to CPU.",
+      "source_file": "references/integrations-and-scaling.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    }
+  ]
+}

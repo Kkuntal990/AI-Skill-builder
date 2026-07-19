@@ -168,6 +168,8 @@ The MLEvolve plugin applies monkey-patches at import time via `run_mlevolve.py` 
 
 Order matters: `prompt_logger` must wrap the LLM call site before agent modules cache a reference to it, and `skill_injector`'s import hook must register before `draft_agent.py` et al. load — hence it imports last, after the library is populated. `run_mlevolve.py` imports the sidecar package before `from run import run`.
 
+**Capability-linker runtime (sidecar 1.1.0, experimental, additive).** `MLEVAL_SKILL_DELIVERY_MODE` ∈ `legacy` (default, byte-identical to 1.0.0) / `capability_task` / `capability_node` selects the delivery path. The `capability_*` modes route through `capability_linker.py` (agent-generic: hard compatibility filter → temp-0 selection → dependency closure → budgeted rendering) over per-skill `capabilities.json` (schema `capability_schema.py`), never silently falling back to legacy. Compiled at build time by the builder (`--emit-capabilities`), consumed here. Design + status: `docs/skill-builder/capability-linker-mvp-{hld,plan}.md`.
+
 ## Per-task / per-skill Python dependencies
 
 **As of 2026-05-25: per-task and per-skill `requirements.txt` are deprecated.** All ML/agent deps are baked into the base image's curated `infra/agents/mlevolve/requirements.txt` (resolved once at image-build time inside the same `vllm/vllm-openai:v0.9.2` base — MLE-Bench's atomic-install pattern). The earlier "per-task pip install at trajectory startup" architecture caused a cascade where `vllm==0.6.6` in a task's reqs forced torch 2.7→2.5 downgrade, broke torchaudio + transformers ABI, and crashed the agent; see the git log around commit 72cb6bd / 5d1c5d6 for the post-mortem.

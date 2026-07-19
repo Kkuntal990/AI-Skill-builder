@@ -1,6 +1,6 @@
 # HLD: AI-Skill Builder — OpenClaw Agent
 
-**Status:** 2.1.0 — Skills-3.0 intent capture + contract-threaded references + P3 conditional-gating critic (2026-06-28). Builds on 2.0.0's closed critic→repair loop + Claude-subscription transport.
+**Status:** 2.3.0 — Skills-3.0 intent capture + contract-threaded references + P3 conditional-gating critic (2026-06-28). Builds on 2.0.0's closed critic→repair loop + Claude-subscription transport. `2.2.0` added library-docs version provenance; `2.3.0` added an experimental, flag-gated capability compiler (`--emit-capabilities` / `compile-existing`) that is purely additive — the core pipeline below is unchanged.
 **Index:** [README.md](README.md) — the skill-builder system map (start there to navigate all design + eval docs).
 **Companion to:** [plan.md](plan.md) (phase progression + open items) · [skill-shape-principles.md](skill-shape-principles.md) (content-shape authoring) · [skill-reliability-checklist.md](skill-reliability-checklist.md) (the P0–P4 reliability bar) · [../eval/stage1.md](../eval/stage1.md) + [../eval/stage2.md](../eval/stage2.md) + [../eval/skill-retrieval-design.md](../eval/skill-retrieval-design.md) (evaluation) · [../skill-scout/hld.md](../skill-scout/hld.md) (Skill Scout — finds existing skills)
 
@@ -58,7 +58,7 @@ RESOLVE -> FETCH (doc, README, examples, [issues], [changelog], [SE Q&As])
        -> REFERENCE-SCAN CRITIC (flag any reference w/ a resource-heavy action missing its precondition) [3.0-1]
        -> EVAL TRIGGERING (LLM judge vs real siblings [--siblings] or canned decoys; bidirectional)
           |- if win_rate < 1.0: IMPROVE DESCRIPTION (LLM) -> RE-JUDGE -> accept if better
-       -> ASSEMBLE frontmatter (deterministic): name + install + mcps + provenance (builder_version 2.1.0)
+       -> ASSEMBLE frontmatter (deterministic): name + install + mcps + provenance (builder_version 2.3.0)
        -> VALIDATE (P0 hard gates + dead-pointer + scan + line cap + fabrication + openclaw check)
        -> WRITE to workspace
        -> LOG
@@ -150,7 +150,7 @@ metadata:
       repo: huggingface/peft
       fetched_at: 2026-05-07T18:30:00Z
       content_sha256: <hex>
-      builder_version: 2.1.0
+      builder_version: 2.3.0
     coverage: [html, gh-readme, gh-issues-open, stackexchange, gh-issues-question-closed]
 ```
 

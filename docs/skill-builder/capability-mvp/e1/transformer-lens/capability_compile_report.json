@@ -1,0 +1,50 @@
+{
+  "skill_name": "transformer-lens-interpretability",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 30997,
+      "response_chars": 10626,
+      "units": 6,
+      "validator_errors": [
+        "capabilities[0] (select-transformerlens-vs-alternatives): needs inline 'procedure.steps' or a 'procedure.reference_files' pointer"
+      ],
+      "validator_warning_count": 0
+    },
+    {
+      "attempt": 2,
+      "prompt_chars": 45862,
+      "response_chars": 15428,
+      "units": 6,
+      "validator_errors": [],
+      "validator_warning_count": 0
+    }
+  ],
+  "validator_warnings": [],
+  "stats": {
+    "units": 6,
+    "kinds": {
+      "reference": 1,
+      "procedure": 1,
+      "diagnostic": 2,
+      "workflow": 2
+    },
+    "units_with_avoid_when": 3,
+    "units_with_depends_on": 4,
+    "synthesized_field_instances": {
+      "delivery.stages": 6,
+      "applicability.avoid_when": 2,
+      "requires.runtime": 1,
+      "produces": 5,
+      "requires.artifacts": 4,
+      "depends_on": 4,
+      "validation": 4,
+      "recovery": 1
+    }
+  }
+}

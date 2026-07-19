@@ -1,0 +1,236 @@
+{
+  "experiment": "E2 — offline capability-linker replay + deterministic perturbation (HLD §12-E2, plan §5 E2′ / W6) + LLM-selection pass (W6+)",
+  "date": "2026-07-18",
+  "status": "DETERMINISTIC GATES PASS + LLM-SELECTION EXPOSURE GATE PASS (precision/recall vs gold still deferred)",
+  "one_line": "Reconstructed 80 real spike-018 select_skills nodes and ran the deterministic capability linker over the two E1-built manifests; the state-aware hard filter is 0-violation, changes candidates by stage exactly as designed, and the paired perturbation suite hits 100% expected-response / 100% invariance / 0 violations. The subsequent LLM-selection pass (--with-selector, 80/80 nodes, 0 masked failures) measured an ACTUAL 82.37% exposure reduction vs legacy (gate >=30% PASS), with the selector abstaining on debug (3.11->0 units) and explore (2.0->0.17) while injecting on generate (6.5->2.0) and refine (4.33->1.67). Precision/recall/abstention-accuracy vs node-level gold is still deferred (needs hand-labeled gold). Machine record: e2_selector_report.json (+ per-node e2_selector_nodes.jsonl).",
+
+  "setup": {
+    "harness": "scripts/replay_capability_linker.py",
+    "deterministic": true,
+    "llm_calls_in_default_path": false,
+    "capability_schema_version": "0.2",
+    "linker_module": "infra/agents/mlevolve/mlevolve_sidecar/capability_linker.py (W5; reused via public + documented internal helpers, filter/closure NOT reimplemented)",
+    "replay_command": ".venv/bin/python3 scripts/replay_capability_linker.py pulled-results/spike-018 --library built --json",
+    "tests_command": ".venv/bin/python3 -m pytest tests/test_capability_perturbation.py tests/test_capability_linker.py tests/test_capability_injector.py -q",
+    "primary_library": {
+      "kind": "built",
+      "skills": [
+        {"name": "peft-tuning", "units": 6, "manifest": "docs/skill-builder/capability-mvp/e1/peft-tuning-built/capabilities.json", "body_and_references_from": "infra/skills/peft-tuning"},
+        {"name": "vllm-inference", "units": 7, "manifest": "docs/skill-builder/capability-mvp/e1/vllm-inference-built/capabilities.json", "body_and_references_from": "infra/skills/vllm-inference"}
+      ],
+      "total_units": 13,
+      "why_these": "spike-018 loaded exactly the legacy peft-tuning + vllm-inference skills; the E1 built manifests carry the same skill_names, so recorded legacy selections map cleanly to unit counts for the exposure comparison."
+    },
+    "budget": {"max_units": 3, "max_reference_files": 1, "max_chars": null},
+    "replay_source": "pulled-results/spike-018 (samsum A/B; the two with-skill trajectories carry recorded select_skills contexts, the two without-skill trajectories carry 0 — expected)"
+  },
+
+  "spike018_reconstruction": {
+    "trajectories": [
+      {"dir": "spike-018-samsum-with-skill-s0", "nodes": 60},
+      {"dir": "spike-018-samsum-with-skill-s1", "nodes": 20},
+      {"dir": "spike-018-samsum-without-skill-s0", "nodes": 0},
+      {"dir": "spike-018-samsum-without-skill-s1", "nodes": 0}
+    ],
+    "total_nodes_reconstructed": 80,
+    "hardware_note": "spike-018 emitted NO Compute line in any select_skills context, so every reconstructed NodeProfile has UNKNOWN hardware (gpu_count/vram/gpu_name all None) — which is correct. runtime_capabilities is therefore {python} on all 80 nodes; gpu/multi-gpu are never claimed. Consequence: the only hard-filter reasons that can fire are stage_excluded and dependency propagation (dep_incompatible) — no hardware/cpu-only/vram rejections are observable in this replay (they are exercised by the perturbation suite instead).",
+
+    "per_stage_node_counts": {
+      "generate": 8,
+      "refine": 21,
+      "debug": 45,
+      "explore": 6,
+      "_stage_map": "draft->generate, improve->refine, debug->debug, evolution->explore (STAGE_MAP)"
+    },
+
+    "candidate_counts_after_hard_filter": {
+      "note": "candidates = survivors of the deterministic hard filter over the 13-unit library. The filter is genuinely state-aware: the candidate set differs by stage (13 at generate vs 3 at every other stage), which is the H4 per-node-linking signal.",
+      "generate": {"survivors_per_node": 13, "constant": true, "reason": "all 13 units admit the generate stage"},
+      "refine": {"survivors_per_node": 3, "constant": true, "reason": "only 3 peft units allow refine; the other 10 are stage_excluded"},
+      "debug": {"survivors_per_node": 3, "constant": true, "reason": "5 units intrinsically admit debug, but 2 (qlora-small-gpu, quantize-to-fit-vram) are dropped dep_incompatible because their deps are not debug-stage units -> 3 survivors"},
+      "explore": {"survivors_per_node": 3, "constant": true, "reason": "3 units allow explore; the other 10 are stage_excluded"}
+    },
+
+    "hard_filtered_distribution_by_reason": {
+      "generate": {},
+      "refine": {"stage_excluded": 210},
+      "debug": {"stage_excluded": 360, "dep_incompatible": 90},
+      "explore": {"stage_excluded": 60},
+      "total": {"stage_excluded": 630, "dep_incompatible": 90},
+      "interpretation": "Per node: refine excludes 10 units (10x21=210); debug excludes 8 by stage + 2 by dep_incompatible (8x45=360, 2x45=90); explore excludes 10 (10x6=60); generate excludes 0. dep_incompatible at debug = qlora-small-gpu (dep loraconfig-core-parameters is generate/refine-only) and quantize-to-fit-vram (dep quantization-method-selection is explore/generate-only) — correct transitive propagation."
+    },
+
+    "exposure": {
+      "framing": "DETERMINISTIC ROOT-CAP, NOT A STRICT UPPER BOUND ON INJECTED UNITS. The deterministic path SKIPS the LLM semantic selector (Stage B) and instead admits the first budget.max_units survivors in registry order (+ dependency closure). budget.max_units caps the number of ROOTS (before closure), not the total injected count — a different LLM-chosen root subset could pull in more dependencies and exceed this. On spike-018 the deterministic admitted count is a flat 3 (the 3 first-survivor roots added no net-new deps beyond themselves), but the live --with-selector path's injected count can be higher for the same node. This number therefore CANNOT be used to claim an exposure reduction: on the 39 nodes where the legacy selector declined (legacy exposure 0), the deterministic count is still 3 precisely because the semantic selector — which would also likely decline — is not run. Both numbers are reported raw; the real reduction (and the >=30% gate) needs --with-selector.",
+      "legacy_all_units": {
+        "definition": "a legacy-selected package exposes ALL its capability units; a declined/empty legacy selection exposes 0 (plan §12-E2)",
+        "n_nodes": 80,
+        "sum": 295,
+        "mean": 3.6875,
+        "median": 6.0,
+        "min": 0,
+        "max": 13
+      },
+      "legacy_selected_nodes_only": {
+        "note": "restricted to the 41 nodes where the legacy selector actually picked >=1 skill (the honest place to compare against the capability arm, which also injects nothing when it declines)",
+        "n_nodes": 41,
+        "sum": 295,
+        "mean": 7.195,
+        "median": 6,
+        "min": 6,
+        "max": 13,
+        "distribution": {"6": 34, "13": 7}
+      },
+      "capability_upper_bound_units": {
+        "n_nodes": 80,
+        "sum": 240,
+        "mean": 3.0,
+        "median": 3.0,
+        "min": 3,
+        "max": 3,
+        "note": "flat 3 on every node — budget.max_units=3 caps the roots and no dependency closure fires (the first-3 registry-order survivors already contain their own deps), so the upper bound is exactly the budget on all 80 nodes"
+      },
+      "legacy_selection_accounting": {
+        "nonempty_selection_nodes": 41,
+        "declined_or_empty_nodes": 39,
+        "selector_transport_error_nodes_within_declined": 3,
+        "selector_transport_error_note": "3 of the 39 'declined' nodes (in with-skill-s1: one improve, one evolution, one debug) recorded a BadRequestError transport failure rather than a clean decline; the reconstruction correctly still builds their NodeProfile from the (present) user_message, and they are conservatively counted as 0 legacy exposure.",
+        "picks_by_skill": {"peft-tuning": 41, "vllm-inference": 7}
+      },
+      "distractor_widened_complement_library_all": {
+        "note": "NOT the primary result; run with --library all (the two built skills + the 5 corpus E1 manifests peft/vllm/transformer-lens/ray-data/verl, empty references) to show budget-boundedness under a realistic distractor pool.",
+        "total_units": 45,
+        "survivors_per_node_by_stage": {"generate": 35, "refine": 12, "debug": 12, "explore": 10},
+        "capability_upper_bound_mean": 3.0,
+        "legacy_all_units_mean": 3.6875,
+        "hard_constraint_violations": 0,
+        "takeaway": "Growing the library 3.5x (13 -> 45 units) grows the survivor pool (13 -> 35 at generate) but leaves the capability rendered UPPER BOUND flat at 3, while a legacy-selected package would expose all of its (now larger) unit set. This is the budget-invariance / exposure-containment mechanism the capability arm is designed to provide; the precise post-selection reduction still needs the LLM pass."
+      }
+    },
+
+    "hard_constraint_violation_check": {
+      "definition": "assertion-style: for every ADMITTED (rendered) unit on every node, re-run _intrinsic_reason against that node's profile; a non-None reason would mean the filter admitted a KNOWN-incompatible unit (a filter defect).",
+      "nodes": 80,
+      "nodes_with_violation": 0,
+      "total_violating_units": 0,
+      "rate": 0.0,
+      "verdict": "CLEAN — validates the three-valued hard filter over 80 real reconstructed nodes."
+    }
+  },
+
+  "perturbation_suite": {
+    "description": "Paired synthetic NodeProfiles (base + perturbed) covering the HLD §12-E2 list, each carrying its EXPECTED linker response. Built from minimal inline capability units (no real manifests needed). RELEVANT pairs must FLIP the hard filter's admit/reject decision; INVARIANT pairs must NOT change it (and, for the wording/semantic/scope pairs, the whole survivor set is additionally required identical). Fully deterministic — no LLM, no link() selector.",
+    "pairs": [
+      {"id": 1, "name": "one-GPU vs multiple-GPUs", "class": "relevant", "unit": "min_gpu_count=2", "expected": "reject(gpu_count) @1-GPU, admit @4-GPU", "observed": "reject(gpu_count) @1-GPU, admit @4-GPU", "ok": true},
+      {"id": 2, "name": "insufficient vs sufficient VRAM", "class": "relevant+invariant", "unit_relevant": "vram_gb=80 basis=explicit-section", "unit_invariant": "vram_gb=80 basis=inferred", "expected": "explicit-section: reject(vram_gb)@48GB, admit@80GB; inferred: admit both (advisory, never hard-filters)", "observed": "as expected", "ok": true},
+      {"id": 3, "name": "generate vs debug stage", "class": "relevant+invariant", "unit_relevant": "delivery.stages=[debug]", "unit_invariant": "no delivery.stages (agnostic)", "expected": "debug-only: reject(stage_excluded)@generate, admit@debug; agnostic: admit both", "observed": "as expected", "ok": true},
+      {"id": 4, "name": "training-error vs serving-error wording", "class": "invariant", "unit": "python+gpu proc", "expected": "hard-filter survivor set + reject reasons IDENTICAL (filter is text-blind)", "observed": "identical", "ok": true},
+      {"id": 5, "name": "checkpoint absent/present · tokenizer-mismatch/unrelated-error", "class": "invariant", "unit": "mixed lib", "expected": "DETERMINISTIC filter INVARIANT across all 4 semantic variants (semantic discrimination is the LLM-pass follow-up)", "observed": "invariant across all 4", "ok": true},
+      {"id": 6, "name": "network / persistent-service available vs unavailable", "class": "invariant", "unit": "python+network / python+persistent-service+gpu", "expected": "three-valued UNKNOWN by design -> never hard-filters; admit in both KNOWN-present and UNKNOWN variants", "observed": "admit in both; survivor set identical", "ok": true},
+      {"id": 7, "name": "credentials-required unit", "class": "invariant", "unit": "python+credentials", "expected": "EXCLUDED (security_unknown) regardless of irrelevant (hardware/stage) perturbation, as long as credentials stay UNKNOWN", "observed": "reject(security_unknown) in every variant; admitted only when credentials KNOWN-present", "ok": true}
+    ],
+    "metrics": {
+      "relevant_assertions_total": 3,
+      "expected_response_ok": 3,
+      "expected_response_rate": 1.0,
+      "invariant_assertions_total": 6,
+      "invariance_ok": 6,
+      "invariance_rate": 1.0,
+      "admitted_unit_checks": 18,
+      "hard_constraint_violations": 0,
+      "violation_rate": 0.0,
+      "counting_note": "3 RELEVANT deterministic assertions = the min_gpu-count flip, the explicit-section-VRAM flip, and the debug-only-stage flip (pairs 1, 2a, 3a). 6 INVARIANT assertions = inferred-VRAM (2b), stage-agnostic (3b), error-wording (4), semantic-content (5), network/persistent-service (6), credentials-excluded (7). Violations counted over the 18 admitted-unit checks in test_no_hard_constraint_violations_across_all_perturbations (6 profiles x deterministic_link admitted sets)."
+    }
+  },
+
+  "llm_selection_pass": {
+    "description": "W6+ follow-up: the REAL temperature-0 select_capabilities selector (Stage B) run per node over the same 80 reconstructed spike-018 nodes, replacing the deterministic admit-all upper bound with the actual injected set. Sequential foreground claude-CLI (subscription transport), one claude -p call per node (~22s/node, ~30 min total). This is the number the deterministic report deferred.",
+    "command": ".venv/bin/python3 scripts/replay_capability_linker.py pulled-results/spike-018 --library built --with-selector --json",
+    "machine_record": "docs/skill-builder/capability-mvp/e2/e2_selector_report.json",
+    "per_node_record": "docs/skill-builder/capability-mvp/e2/e2_selector_nodes.jsonl (80 rows: stage, survivors, legacy_exposure, selector_selected_ids, cap_actual_exposure, decline_reason, selector_error)",
+    "nodes": 80,
+    "selector_health": {
+      "selected": 20,
+      "genuine_decline": 60,
+      "no_candidates": 0,
+      "transport_error": 0,
+      "parse_failure": 0,
+      "masked_failure": 0,
+      "trustworthy": true,
+      "validity_guard_note": "A silent claude-CLI failure yields 0 injected units and is indistinguishable from a real abstention at the exposure level, which would spuriously INFLATE the reduction. selector_health buckets every node into selected / genuine_decline / no_candidates / masked_failure (transport_error + parse_failure); the reduction number is only reported because masked_failure == 0. The first full run surfaced masked_failure==1 (one explore node, s1 idx=18, whose selector returned prose with no JSON -> spurious 82.71%); that node was evicted from the resumable cache and re-run, selecting 1 unit -> masked_failure==0 and the corrected 82.37%. Guard implemented in scripts/replay_capability_linker.py:_selector_health, unit-tested."
+    },
+    "exposure": {
+      "legacy_all_units": {"n_nodes": 80, "sum": 295, "mean": 3.6875, "median": 6.0},
+      "capability_actual_llm": {"n_nodes": 80, "sum": 52, "mean": 0.65, "median": 0.0},
+      "actual_reduction_vs_legacy_pct": 82.37,
+      "framing": "Legacy loads WHOLE packages (all 6 peft-tuning or 7 vllm-inference units); the capability path injects individual units the temp-0 selector chose (capped by budget.max_units=3 roots + closure). The 82.37% is the aggregate over all 80 nodes; it is a genuine package-granularity-vs-unit-granularity exposure reduction, the direct consequence of doc-compilation into per-unit capabilities. This is NOT a claim that the selections are CORRECT (that is precision/recall vs gold, still deferred) — only that far fewer units are exposed per node."
+    },
+    "per_stage_actual_exposure_mean": {
+      "generate": {"nodes": 8, "legacy_mean": 6.5, "actual_mean": 2.0},
+      "refine": {"nodes": 21, "legacy_mean": 4.33, "actual_mean": 1.67},
+      "debug": {"nodes": 45, "legacy_mean": 3.11, "actual_mean": 0.0},
+      "explore": {"nodes": 6, "legacy_mean": 2.0, "actual_mean": 0.17},
+      "interpretation": "The contraindication-compliance / per-node-re-selection signal made concrete: the selector injects capability procedures where fresh training/serving code is written (generate, refine) and ABSTAINS almost entirely where the node is debugging or exploring an existing solution (debug 0.0, explore 0.17) — injecting skill how-to text there is noise. This is exactly the per-node behavior a task-once delivery (capability_task) cannot produce."
+    },
+    "caveat": "Nondeterministic: temp-0 still varies run-to-run and the transport can drop a node (see validity guard). Re-running will not reproduce 82.37% exactly, but the >=30% gate and the debug/explore abstention pattern are robust (the 20-node s1 dry-run independently showed 77.2% + full debug/explore abstention)."
+  },
+
+  "tests": {
+    "command": ".venv/bin/python3 -m pytest tests/test_capability_perturbation.py tests/test_capability_linker.py tests/test_capability_injector.py -q",
+    "result": "71 passed, 0 failed",
+    "per_file": {
+      "tests/test_capability_perturbation.py": {"passed": 14, "failed": 0, "covers": "the 7 perturbation pairs + aggregate 0-violation gate + 5 replay NodeProfile reconstruction tests (draft/debug/improve/jsonl/compute-line) + shared-linker-object sanity"},
+      "tests/test_capability_linker.py": {"passed": 42, "failed": 0, "covers": "W5 linker unit tests (parse_hardware, three-valued filter, closure, budgeted render, link() paths, E1-manifest smoke)"},
+      "tests/test_capability_injector.py": {"passed": 15, "failed": 0, "covers": "MLEvolve capability delivery-mode dispatch (capability_task/capability_node), _build_node_profile adapter, no-legacy-fallback invariants"}
+    }
+  },
+
+  "gate_status": {
+    "deterministic_E2_bars": {
+      "expected_response_on_100pct_of_deterministic_relevant_perturbations": {"target": 1.0, "observed": 1.0, "detail": "3/3", "pass": true},
+      "invariance_on_100pct_of_irrelevant_perturbations": {"target": 1.0, "observed": 1.0, "detail": "6/6", "pass": true},
+      "zero_hard_constraint_violations": {"target": 0, "observed": 0, "detail": "0 across 80 spike-018 nodes AND 18 perturbation admitted-unit checks", "pass": true},
+      "overall_deterministic": "PASS"
+    },
+    "gates_via_the_LLM_selection_pass": {
+      ">=30pct_relative_reduction_in_irrelevant_or_contraindicated_exposed_units": {"target": 0.30, "observed": 0.8237, "detail": "actual 82.37% reduction (legacy 295 -> capability-actual 52 units over 80 nodes), masked_failure==0; see llm_selection_pass block", "pass": true},
+      "median_injected_context_no_larger_than_legacy": {"target": "<= legacy", "observed": "capability-actual median 0 units vs legacy median 6 (selected-nodes median 6); capability mean 0.65 vs legacy mean 3.69", "pass": true}
+    },
+    "gates_still_requiring_node_level_gold_NOT_evaluated_here": {
+      "selected_unit_precision_recall_and_abstention_accuracy": "DEFERRED — the --with-selector pass produces the selections (e2_selector_nodes.jsonl), but scoring whether they are CORRECT needs a hand-labeled gold capability set for a stratified ~30-50 node sample. This is the remaining follow-on.",
+      "no_increase_in_missed_critical_procedures_vs_legacy": "DEFERRED — a recall/gold-label claim; needs the per-node gold above. Exposure reduction is established; 'no critical procedure dropped' is not."
+    }
+  },
+
+  "headline_numbers": {
+    "spike018_nodes_reconstructed": 80,
+    "per_stage_nodes": {"generate": 8, "refine": 21, "debug": 45, "explore": 6},
+    "candidates_survivors_per_node": {"generate": 13, "refine": 3, "debug": 3, "explore": 3},
+    "hard_filtered_reason_totals": {"stage_excluded": 630, "dep_incompatible": 90},
+    "legacy_exposure_mean_all_nodes": 3.6875,
+    "legacy_exposure_mean_selected_nodes_only": 7.195,
+    "capability_exposure_upper_bound_mean": 3.0,
+    "capability_exposure_upper_bound_flat_value": 3,
+    "capability_exposure_ACTUAL_llm_mean": 0.65,
+    "capability_exposure_ACTUAL_llm_sum": 52,
+    "actual_exposure_reduction_vs_legacy_pct": 82.37,
+    "actual_reduction_gate_>=30pct": "PASS",
+    "selector_health_masked_failure": 0,
+    "per_stage_actual_exposure_mean": {"generate": 2.0, "refine": 1.67, "debug": 0.0, "explore": 0.17},
+    "hard_constraint_violations": 0,
+    "perturbation_expected_response_rate": "3/3 = 100%",
+    "perturbation_invariance_rate": "6/6 = 100%",
+    "perturbation_violation_rate": "0/18 = 0%",
+    "tests": "71 passed / 0 failed (14 perturbation + 42 linker + 15 injector)"
+  },
+
+  "pending": [
+    "DONE (2026-07-18) — LLM-selection pass (--with-selector, sequential foreground claude-CLI): ran the real temperature-0 select_capabilities over all 80 nodes; ACTUAL exposure reduction 82.37% (>=30% gate PASS), masked_failure==0. See the llm_selection_pass block + e2_selector_report.json. Ran via a resumable per-node cache driver (fsync + streaming progress) after the first background attempt was reaped for silence.",
+    "REMAINING FOLLOW-ON — Node-level semantic gold: hand-label the gold capability set for ~30-50 stratified spike-018 nodes (the plan's stratified draft/improve/debug/evolution sample) to score selected-unit precision/recall and abstention accuracy against a reference, not just against legacy exposure. The selections to grade are now persisted in e2_selector_nodes.jsonl. NOTE: with no human in the loop, 'gold' must come from an INDEPENDENT higher-quality labeling process (e.g. a stronger model or multi-vote adjudication with full context), not the same selector — else precision/recall is circular.",
+    "capability_task vs capability_node comparison on real nodes (H4): the deterministic candidate set already differs by stage (13 @generate vs 3 elsewhere), which is necessary-but-not-sufficient; the per-node-vs-task-once selection-change count needs the LLM pass.",
+    "Selector-error handling nuance: 3 of the 39 'declined' spike-018 nodes were actually BadRequestError transport failures, not clean declines; a future revision could bucket them separately in the legacy baseline (currently conservatively counted as 0 exposure).",
+    "Widen the replay corpus beyond spike-018 samsum (optional mvp-032 gsm8k/boolq selection contexts via a 1-CPU/2-Gi reader pod) once the LLM-selection pass is in place, for cross-task perturbation coverage."
+  ],
+
+  "diagnosis_note": "Replay found 80 usable nodes (not 0). The deterministic linker behaves exactly as designed: state-aware candidate sets that vary by stage, correct transitive dependency rejection (dep_incompatible at debug), 0 hard-constraint violations over real recorded contexts, and 100%/100%/0 on the perturbation suite. The LLM-selection pass (W6+, added 2026-07-18) closed the one deferred deterministic gap: the ACTUAL post-selection exposure is 82.37% below legacy (>=30% gate PASS, masked_failure==0), with a clean stage gradient (inject on generate/refine, abstain on debug/explore). The remaining honest limitation is that exposure REDUCTION is established but selection CORRECTNESS (precision/recall/abstention vs a reference) is not — that needs node-level gold labels, deferred. No fabricated numbers: every figure is computed from pulled-results/spike-018 + the E1 built manifests (deterministic) and the persisted --with-selector run (e2_selector_report.json / e2_selector_nodes.jsonl)."
+}

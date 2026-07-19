@@ -1,0 +1,703 @@
+{
+  "issues": [
+    {
+      "id": "quantize-only-when-oom",
+      "statement": "Deciding whether to quantize when the model already fits in VRAM at full precision",
+      "source_fix": "Only quantize when it genuinely doesn't fit; otherwise load full precision \u2014 quantization adds overhead and can cost quality for nothing",
+      "quote": "quantization adds dequantization overhead and can cost quality for no benefit when memory isn't the constraint",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "parallelism-only-when-too-large",
+      "statement": "Deciding whether to shard across GPUs when the model fits on one GPU",
+      "source_fix": "Keep the single-GPU path unless the model is too large for one GPU; parallelism only adds comms overhead when it already fits",
+      "quote": "parallelism adds cross-GPU communication overhead that buys nothing when the model already fits",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "choose-quant-method-by-gpu",
+      "statement": "Which quantization method to pick given the GPU generation and checkpoint availability",
+      "source_fix": "FP8 on Hopper+/Ada; pre-quantized AWQ/GPTQ INT4 for broad GPUs; BitsAndBytes for on-the-fly; GGUF for CPU/edge",
+      "quote": "FP8 on Hopper+/Ada (fastest, minimal quality loss); pre-quantized AWQ/GPTQ (INT4) for broad GPU support",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "online-vs-offline",
+      "statement": "Whether to run a persistent server or a one-shot in-process batch job",
+      "source_fix": "Use vllm serve for a persistent API from app code/multiple clients; the offline LLM class for a single-script batch job",
+      "quote": "Online serving (`vllm serve`) for a persistent API; the offline `LLM` class for a one-shot batch job in a single script",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "tensor-vs-pipeline-parallel",
+      "statement": "When to use tensor parallelism vs pipeline parallelism",
+      "source_fix": "Use tensor parallelism within a single node; add pipeline parallelism only to span multiple nodes",
+      "quote": "Tensor parallelism within a single node (fast NVLink/PCIe); add pipeline parallelism only to span multiple nodes",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "speculative-decoding-for-latency",
+      "statement": "How to cut single-stream decode latency",
+      "source_fix": "Enable speculative decoding (draft model / n-gram / EAGLE); otherwise keep default scheduling",
+      "quote": "Enable speculative decoding (draft model / n-gram / EAGLE) to cut per-step latency; otherwise keep default scheduling",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore",
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "still-ooms-after-quant",
+      "statement": "Model still OOMs even after enabling quantization",
+      "source_fix": "Lower --gpu-memory-utilization / --max-model-len",
+      "quote": "Lower `--gpu-memory-utilization` / `--max-model-len` if it still OOMs",
+      "source_file": "SKILL.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "check-vram-before-launch",
+      "statement": "Catching an OOM before the engine/server even starts loading weights",
+      "source_fix": "Probe free VRAM before launching vllm serve or instantiating LLM (scripts/check_vram.sh)",
+      "quote": "before launching `vllm serve` or instantiating `LLM`, to catch OOM early",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "v0-engine-deprecated",
+      "statement": "Old V0 engine path / V0-only flags no longer work as expected",
+      "source_fix": "Use the V1 engine (now default, VLLM_USE_V1=1); V0-specific flags are no-ops",
+      "quote": "use the V1 engine, now the default (`VLLM_USE_V1=1`). V0-specific flags are no-ops.",
+      "source_file": "SKILL.md",
+      "stages": [
+        "debug",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "wrong-tool-for-finetuning",
+      "statement": "Trying to compute gradient updates / train LoRA adapters with vLLM",
+      "source_fix": "Use a trainer (transformers Trainer, peft, trl) to train, then load the result into vLLM to serve/evaluate",
+      "quote": "For computing gradient updates / fine-tuning the weights themselves (including training LoRA adapters), use a trainer",
+      "source_file": "SKILL.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "quantized-kv-cache-frees-vram",
+      "statement": "Needing to free more VRAM beyond weight quantization",
+      "source_fix": "Optionally enable a quantized KV cache to free more VRAM",
+      "quote": "Optionally enable a quantized KV cache to free more VRAM",
+      "source_file": "SKILL.md",
+      "stages": [
+        "refine",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "server-healthy-before-request",
+      "statement": "Sending requests before the server has finished loading the model",
+      "source_fix": "Wait for /health to report healthy (and confirm GET /v1/models) before the first request",
+      "quote": "Wait for the server to report healthy on `/health`",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "multinode-launch-ray-first",
+      "statement": "Serving across multiple nodes",
+      "source_fix": "Launch a Ray cluster first, then serve across it",
+      "quote": "For multi-node, launch a Ray cluster first, then serve across it",
+      "source_file": "SKILL.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "lora-max-rank-must-cover-adapter",
+      "statement": "Loading a LoRA adapter whose rank exceeds the engine's configured max",
+      "source_fix": "Set max_lora_rank >= the rank of any adapter you load",
+      "quote": "must be >= the rank of any adapter you load",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "lora-int-id-unique-stable",
+      "statement": "LoRA adapter cache keyed on the request's int_id",
+      "source_fix": "Give each LoRARequest a unique, stable int_id per adapter",
+      "quote": "`int_id` must be unique and stable per adapter; vLLM keys its adapter cache on it.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "lora-online-select-by-name",
+      "statement": "Selecting a registered LoRA adapter on the online server",
+      "source_fix": "Put the adapter's name in the request's model field",
+      "quote": "select one by using its **name as the model field** in the request.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "dynamic-lora-requires-env",
+      "statement": "Loading/unloading LoRA adapters at runtime without restart",
+      "source_fix": "Start the server with VLLM_ALLOW_RUNTIME_LORA_UPDATING=True, then call load/unload endpoints",
+      "quote": "VLLM_ALLOW_RUNTIME_LORA_UPDATING=True vllm serve meta-llama/Llama-2-7b-hf --enable-lora",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "spec-draft-shares-tokenizer",
+      "statement": "Choosing a draft model for speculative decoding",
+      "source_fix": "The draft model must share a tokenizer/vocabulary with the target model",
+      "quote": "The draft model must share a tokenizer/vocabulary with the target model.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "spec-output-is-identical",
+      "statement": "Worry that speculative decoding changes generation quality",
+      "source_fix": "Output is identical to non-speculative greedy decoding \u2014 it's a latency optimization only",
+      "quote": "Output text is **identical** to non-speculative greedy decoding \u2014 this is a latency optimization, not a quality change.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "explore",
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "spec-tokens-tuning",
+      "statement": "Speculative decoding gives little/no speedup",
+      "source_fix": "Sweep num_speculative_tokens (3\u20137); gains fall off when draft proposals are frequently rejected",
+      "quote": "sweep `num_speculative_tokens` (3\u20137) and measure tokens/sec; gains fall off when the draft's proposals are frequently rejected.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "ngram-for-input-heavy",
+      "statement": "Picking a speculative method for summarization/RAG where output echoes input",
+      "source_fix": "Try ngram speculation first \u2014 no draft weights needed and often the biggest win for input-heavy tasks",
+      "quote": "for input-heavy tasks (long-doc summarization), try `ngram` first \u2014 it's free to enable and often the biggest win.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "structured-output-offline-spec",
+      "statement": "Producing JSON/regex/choice/grammar-constrained output offline",
+      "source_fix": "Attach a GuidedDecodingParams spec to SamplingParams",
+      "quote": "attach a guided-decoding spec to `SamplingParams`.",
+      "source_file": "references/advanced-features.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "reuse-llm-instance",
+      "statement": "Re-instantiating LLM per batch reloads weights and reallocates KV cache",
+      "source_fix": "Construct LLM once and reuse it for every batch",
+      "quote": "Construct it a single time and reuse it for every batch \u2014 re-instantiating reloads weights and re-allocates the KV cache.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "refine",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "trust-remote-code-custom-models",
+      "statement": "Model ships custom modeling code and fails to load",
+      "source_fix": "Pass trust_remote_code for models that ship custom modeling code",
+      "quote": "`trust_remote_code` \u2014 required for models that ship custom modeling code.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "max-model-len-offline-kv-fit",
+      "statement": "KV cache too large to fit at the model's full context length (offline LLM)",
+      "source_fix": "Cap max_model_len to fit a smaller KV cache",
+      "quote": "`max_model_len` \u2014 cap the context length to fit a smaller KV cache.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "greedy-temperature-zero",
+      "statement": "Getting deterministic/greedy decoding",
+      "source_fix": "Set temperature=0",
+      "quote": "For greedy decoding, set `temperature=0`.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "enable-prompt-embeds",
+      "statement": "Passing precomputed prompt_embeds fails unless enabled at construction",
+      "source_fix": "Create the engine with enable_prompt_embeds=True",
+      "quote": "The engine must be created with `enable_prompt_embeds=True`",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "batch-not-loop",
+      "statement": "Slow generation from looping over prompts one at a time",
+      "source_fix": "Submit all prompts at once so vLLM batches them with continuous batching",
+      "quote": "submitting many prompts at once is far faster than looping one at a time.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "refine",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "use-tqdm-false-scripts",
+      "statement": "Progress bar noise in scripted/automated runs",
+      "source_fix": "Pass use_tqdm=False to silence the progress bar",
+      "quote": "Use `use_tqdm=False` to silence the progress bar in scripted runs.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "use-chat-for-instruct-models",
+      "statement": "Hand-formatting prompts for instruction-tuned/chat models",
+      "source_fix": "Use chat() so the model's chat template is applied instead of hand-formatting",
+      "quote": "use it for instruction-tuned / chat models instead of hand-formatting the prompt string.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "multimodal-placeholder-count",
+      "statement": "Mismatch between image placeholder tokens and number of media items",
+      "source_fix": "The placeholder token in prompt must match the number of media items provided",
+      "quote": "The placeholder token in `prompt` must match the number of media items provided.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "n-read-all-outputs",
+      "statement": "Sampling multiple candidates per prompt",
+      "source_fix": "Set n>1 and read all of output.outputs",
+      "quote": "For sampling several candidates, set `n>1` and read all of `output.outputs`.",
+      "source_file": "references/offline-inference.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "max-model-len-serve-oom",
+      "statement": "KV-cache allocation OOMs at server startup",
+      "source_fix": "Lower --max-model-len to shrink the KV cache",
+      "quote": "`--max-model-len` caps the context window (lower it if KV-cache allocation OOMs)",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "served-model-name-alias",
+      "statement": "Clients must repeat the full HF id in every request",
+      "source_fix": "Set --served-model-name to a short alias",
+      "quote": "Set it to a short alias so requests don't have to repeat the full HF id.",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "chat-template-flag-needed",
+      "statement": "Serving a model whose tokenizer has no chat template",
+      "source_fix": "Provide --chat-template (path or inline Jinja) when the tokenizer has none",
+      "quote": "`--chat-template` \u2014 path to (or inline) a Jinja chat template, needed when a model's tokenizer has none.",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "debug",
+        "generate"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "embeddings-need-embed-mode",
+      "statement": "/v1/embeddings not available",
+      "source_fix": "Start the server as a pooling/embedding model with --task embed",
+      "quote": "`/v1/embeddings` is only served when the loaded model is run as a pooling/embedding model.",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "completions-endpoint-base-models",
+      "statement": "Choosing between /v1/completions and /v1/chat/completions",
+      "source_fix": "Use /v1/completions for base (non-chat) models or to control the exact prompt string",
+      "quote": "Use this endpoint for base (non-chat) models or when you want to control the exact prompt string yourself.",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "openai-client-api-key-placeholder",
+      "statement": "OpenAI client requires an api_key against a keyless local server",
+      "source_fix": "Pass any placeholder (e.g. \"EMPTY\") when no --api-key is set; it is ignored",
+      "quote": "When no `--api-key` is set, pass any placeholder (e.g. `\"EMPTY\"`) for `api_key` \u2014 it is ignored.",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "max-num-seqs-throughput-lever",
+      "statement": "Trading throughput against per-request latency",
+      "source_fix": "Tune --max-num-seqs (max concurrent sequences in a batch)",
+      "quote": "`--max-num-seqs` \u2014 max concurrent sequences in a batch (throughput vs. per-request latency lever).",
+      "source_file": "references/online-serving.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "parallel-sizes-rule-of-thumb",
+      "statement": "Sizing TP and PP for a distributed deployment",
+      "source_fix": "Set tensor_parallel_size = GPUs per node, pipeline_parallel_size = number of nodes",
+      "quote": "set `tensor_parallel_size` to the number of GPUs **per node**, and `pipeline_parallel_size` to the number of **nodes**.",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "four-axes-choice",
+      "statement": "Which parallelism axis to use for a given goal (fit vs throughput vs MoE)",
+      "source_fix": "TP shards within a layer to fit / free KV cache; PP splits layers for very large models; DP replicates for throughput; EP for MoE experts",
+      "quote": "TP shards parameters *within* a layer to fit a model / free KV-cache room; PP splits *layers* across GPUs for very large models",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "cuda-visible-devices-ordering",
+      "statement": "Selecting physical GPUs; setting device index before vLLM init corrupts setup",
+      "source_fix": "Use CUDA_VISIBLE_DEVICES; do NOT call torch.accelerator.set_device_index() before vLLM initializes",
+      "quote": "set `CUDA_VISIBLE_DEVICES` \u2014 do **not** call `torch.accelerator.set_device_index()` before vLLM initializes.",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "max-num-seqs-per-dp-rank",
+      "statement": "Misreading --max-num-seqs as a global cap under data parallelism",
+      "source_fix": "Note --max-num-seqs applies per DP rank, so total throughput scales with deployment size",
+      "quote": "`--max-num-seqs` applies **per DP rank**, so total throughput scales with deployment size.",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "dp-ray-span-multinode",
+      "statement": "Data-parallel multi-node deployment with the Ray backend",
+      "source_fix": "Set VLLM_RAY_DP_PACK_STRATEGY=\"span\" for multi-node Ray-backend DP",
+      "quote": "set `VLLM_RAY_DP_PACK_STRATEGY=\"span\"` for multi-node",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "dp-api-server-bottleneck",
+      "statement": "Single API server becomes a bottleneck at large DP sizes",
+      "source_fix": "Scale with --api-server-count or switch to hybrid load balancing",
+      "quote": "At larger DP sizes the single API server becomes a bottleneck \u2014 scale it with `--api-server-count`",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "ep-for-moe-layers",
+      "statement": "Serving a MoE model efficiently",
+      "source_fix": "Enable expert parallelism (enable_expert_parallel / --enable-expert-parallel) to use EP instead of TP for MoE layers",
+      "quote": "Enable with `enable_expert_parallel=True` (Python) or `--enable-expert-parallel` (CLI) \u2014 this uses EP instead of TP for MoE layers.",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "explore",
+        "generate"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "all2all-deepep-precondition",
+      "statement": "Selecting a DeepEP all-to-all backend",
+      "source_fix": "Install DeepEP/DeepGEMM first before using those backends",
+      "quote": "DeepEP/DeepGEMM must be installed first.",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "eplb-rebalance-experts",
+      "statement": "Uneven token distribution across MoE experts",
+      "source_fix": "Enable the Expert Parallel Load Balancer with --enable-eplb",
+      "quote": "Rebalances token distribution across experts. Enable with `--enable-eplb`",
+      "source_file": "references/parallelism-scaling.md",
+      "stages": [
+        "refine"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "quant-vram-vs-throughput-bound",
+      "statement": "Choosing weight-only 4-bit vs weight+activation 8-bit quantization",
+      "source_fix": "Use 4-bit (AWQ/GPTQ/W4A16) when VRAM-bound; 8-bit (FP8/INT8 W8A8) when throughput-bound with tensor-core support",
+      "quote": "the best fit when you are **VRAM-bound** and want to fit a larger model on one card",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "quant-only-after-fp-fails",
+      "statement": "Reaching for quantization before confirming full precision doesn't fit",
+      "source_fix": "Only quantize after full precision doesn't fit \u2014 quantization always costs some accuracy",
+      "quote": "Reach for these only after the model in full precision does not fit \u2014 quantization always costs some accuracy.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "prequant-auto-detected",
+      "statement": "Whether to pass quantization= for a pre-quantized Hub checkpoint",
+      "source_fix": "vLLM auto-detects the format from the checkpoint config; you don't need to pass quantization at all",
+      "quote": "vLLM auto-detects the format from the checkpoint config and you do not need to pass `quantization` at all",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "verify-quant-kernel-log",
+      "statement": "Confirming which quantization kernel actually got selected",
+      "source_fix": "Read the startup log line that reports the quantization method",
+      "quote": "confirm the kernel actually selected by reading the startup log line that reports the quantization method.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "debug"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "awq-under-optimized-throughput",
+      "statement": "Expecting peak throughput from AWQ",
+      "source_fix": "AWQ is under-optimized vs FP8/INT8 \u2014 prefer it for VRAM savings, not peak throughput",
+      "quote": "AWQ in vLLM is described as under-optimized vs FP8/INT8 \u2014 prefer it for VRAM savings, not peak throughput.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "fp8-requires-tensor-cores",
+      "statement": "Using FP8 on a GPU without FP8 tensor cores",
+      "source_fix": "FP8 requires a GPU with FP8 tensor cores (compute capability 8.9+/Hopper)",
+      "quote": "FP8 requires a GPU with FP8 tensor cores (compute capability 8.9+/Hopper).",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "dynamic-vs-offline-fp8",
+      "statement": "Dynamic (load-time) FP8 vs offline-calibrated FP8 checkpoint",
+      "source_fix": "Dynamic FP8 has a small accuracy cost; for production prefer an offline FP8 checkpoint from LLM Compressor",
+      "quote": "dynamic FP8 may have a small accuracy cost vs an offline-calibrated checkpoint, so for production prefer an offline FP8 checkpoint",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore",
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "bnb-needs-both-flags",
+      "statement": "Loading a BitsAndBytes model requires both quantization and load_format flags",
+      "source_fix": "Pass --quantization bitsandbytes AND --load-format bitsandbytes",
+      "quote": "vllm serve huggyllama/llama-7b --quantization bitsandbytes --load-format bitsandbytes",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "bnb-slow-serve-time",
+      "statement": "BitsAndBytes is slower at serve time despite quick fit",
+      "source_fix": "Use bnb for a quick fit when serve speed is secondary; re-quantize to AWQ/GPTQ/FP8 if throughput matters",
+      "quote": "Use this when you need a quick fit on a small card and serve-time speed is secondary.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore",
+        "refine"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "gguf-needs-hf-tokenizer",
+      "statement": "GGUF file loads without a usable tokenizer",
+      "source_fix": "Supply the matching HF tokenizer \u2014 GGUF files don't carry a vLLM-compatible tokenizer",
+      "quote": "supply the matching HF tokenizer (GGUF files do not carry a vLLM-compatible tokenizer)",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "gguf-merge-shards-first",
+      "statement": "Model split into multiple GGUF shards",
+      "source_fix": "Merge shards with gguf-split --merge first, then pass the single merged file",
+      "quote": "merge them with `gguf-split --merge` first, then pass the single merged file.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate",
+        "debug"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "gguf-experimental",
+      "statement": "Relying on GGUF for a production path",
+      "source_fix": "Treat GGUF support as experimental and verify generations look sane",
+      "quote": "GGUF support is experimental.",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "explore"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "gptq-needs-calibration",
+      "statement": "Self-quantizing a model with GPTQ",
+      "source_fix": "Use GPTQModel, which needs calibration data",
+      "quote": "Quantize with GPTQModel, which needs calibration data",
+      "source_file": "references/quantization.md",
+      "stages": [
+        "generate"
+      ],
+      "severity": "medium"
+    }
+  ]
+}

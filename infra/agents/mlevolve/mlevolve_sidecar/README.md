@@ -12,9 +12,10 @@ before any agent module captures the unpatched reference.
 | `openai_apikey_env.py` | `openai.OpenAI(api_key=...)` | Backfill from `$OPENAI_API_KEY` when config has `api_key: ""` |
 | `prompt_logger.py` | `llm.openai.{query, generate}` | Capture per-call `{system, user, prompt, output, tokens, t_sec}` to `$MLEVAL_PROMPTS_LOG`. Captures BOTH the kwargs (`query`) and positional/kwarg `prompt` (used by `generate` — stepwise/diff/planner) — see spike-011 root-cause notes in source. |
 | `token_budget.py` | `llm.openai.{query, generate}` (default `max_tokens`) | Raise the output-token cap 16384→32768 when a caller passes none. Stops mid-output truncation (the spike-012 `=======` / SyntaxError corruption); wraps outermost (after `prompt_logger`). |
-| `skill_retriever.py` | *(loader — no patch)* | Loads a skill **library** from `$MLEVAL_SKILL_LIBRARY` (a dir; scans `*/SKILL.md`, skips `_`-prefixed) or `$MLEVAL_SKILL_PATHS`/`$MLEVAL_SKILL_PATH` (back-compat). Exposes `loaded_skills()` (per-skill `body` + `references` map) and `catalog_text()`. |
+| `skill_retriever.py` | *(loader — no patch)* | Loads a skill **library** from `$MLEVAL_SKILL_LIBRARY` (a dir; scans `*/SKILL.md`, skips `_`-prefixed) or `$MLEVAL_SKILL_PATHS`/`$MLEVAL_SKILL_PATH` (back-compat). Exposes `loaded_skills()` (per-skill `body` + `references` map) and `catalog_text()`. **1.1.0:** also loads a `capabilities.json` sitting beside `SKILL.md` (validated via `capability_schema`) and exposes the manifest-carrying skills through `loaded_capability_skills()` (capability runtime, below). |
 | `eval_harness.py` | *(rules only — no patch)* | Task-agnostic benchmark rules (`EVAL_HARNESS_RULES`) + `num_workers=0` rewrite. **Not skill content.** Appended to impl_guideline by `skill_injector`'s wrapper on every codegen node (both cells). Mirror: `infra/tasks/_harness_rules.md`. |
-| `skill_injector.py` | `agents.{draft,improve,debug,evolution}_agent.{run, get_impl_guideline_from_agent}` (via a `sys.meta_path` import hook) | **The A/B treatment (skills only).** Calls `eval_harness.apply_impl_guideline_harness` first, then progressive disclosure: Tier-0 catalog into EVERY node; per-node temp-0 selector loads relevant skill(s)+references. |
+| `capability_linker.py` | *(agent-generic library — no patch; no `mlevolve`/`agents`/`llm` module-scope imports)* | **The capability-linker runtime (sidecar 1.1.0, experimental).** Given a `NodeProfile` + skills carrying a validated `capabilities.json`, runs the 4-stage link (hard compatibility filter → temp-0 selection → dependency closure → budgeted render) and returns a `## Linked ML Capabilities` brief. `link()` never raises. Reached only when `MLEVAL_SKILL_DELIVERY_MODE` ∈ {`capability_task`, `capability_node`}; `legacy` is the default. See the capability-runtime section below. |
+| `skill_injector.py` | `agents.{draft,improve,debug,evolution}_agent.{run, get_impl_guideline_from_agent}` (via a `sys.meta_path` import hook) | **The A/B treatment (skills only).** Calls `eval_harness.apply_impl_guideline_harness` first, then dispatches on `$MLEVAL_SKILL_DELIVERY_MODE` (read at call time): `legacy` (default) = progressive disclosure — Tier-0 catalog into EVERY node + per-node temp-0 selector loading relevant skill(s)+references; `capability_task`/`capability_node` route through `capability_linker` instead. |
 
 > **Build-time patch (not a sidecar):** the Kaggle *persona* and *./input*
 > framing are neutralized at image-build time by
@@ -84,6 +85,83 @@ Selector returns `[]` → catalog only (the model declined).
    for back-compat (sets `MLEVAL_SKILL_PATH`).
 3. `without_skill` cells get an empty library → `loaded_skills()==[]` → the
    guideline passes through unchanged (no catalog, no selector call).
+
+## Capability-linker runtime (experimental, sidecar 1.1.0)
+
+A second, **experimental** skill-delivery path that sits alongside the legacy
+progressive-disclosure injector above. It is **purely additive**: legacy mode is
+byte-identical to sidecar 1.0.0, stays the default, and remains the A/B control
+(`version.py`) — so a legacy 1.1.0 run and a 1.0.0 run are directly comparable,
+and the capability modes are a new regime distinguished by `delivery_mode`.
+
+**Delivery-mode switch — `MLEVAL_SKILL_DELIVERY_MODE`** (read at call time, never
+cached at import, so a cell flips it via env without a rebuild):
+
+- `legacy` *(default)* — the unchanged catalog + per-node `SKILL.md` selector
+  described above. Any unrecognised value (a typo) also runs legacy, with a loud
+  one-time warning, so a mis-set cell never silently ships an untested treatment.
+- `capability_task` — link **once** at the first (draft/generate) node, cache the
+  `LinkResult` on the shared search agent, and reuse the rendered brief verbatim
+  at every later node.
+- `capability_node` — **re-link fresh** at every codegen node from that node's
+  current search state.
+
+**What it delivers.** Instead of splicing whole `SKILL.md` bodies, the linker
+renders a compact `## Linked ML Capabilities` brief from *capability units* — the
+structured procedures a skill declares in a `capabilities.json` manifest beside
+its `SKILL.md`. The manifest is produced at **build time** by the skill builder
+(`--emit-capabilities`); the sidecar only **consumes** it. `skill_retriever.py`
+now loads and validates that manifest (via `capability_schema.py` — schema 0.2, a
+deterministic validator) and exposes the manifest-carrying skills through
+`loaded_capability_skills()`. A skill without a valid, non-empty manifest is
+excluded from the capability path entirely — a capability arm **never** mixes in
+that skill's legacy body.
+
+**The linker — `capability_linker.py`** is **agent-generic by construction**: it
+imports nothing from `mlevolve` / `agents` / `llm` at module scope
+(`capability_schema` and `llm.FunctionSpec` are imported lazily inside
+functions), so any host that can build a `NodeProfile` and supply an `llm_query`
+callable can link. The MLEvolve-specific glue — the `NodeProfile` adapter and the
+`llm.query` closure — lives in `skill_injector.py`, never in the linker. Public
+API: `NodeProfile`, `LinkBudget`, `LinkResult`, `STAGE_MAP`
+(draft→generate · improve→refine · debug→debug · evolution→explore),
+`parse_hardware(free-text → {gpu_count, vram_gb, gpu_name})`, and
+`link(profile, cap_skills, llm_query, budget) → LinkResult`.
+
+**`link()` runs four stages (HLD §10) and MUST NOT raise** — any internal error
+returns an empty `LinkResult` with an `error` telemetry field, so a broken
+manifest or a selector transport failure can never break codegen:
+
+- **(A) Deterministic hard compatibility filter — three-valued.** Each unit is
+  *known-incompatible* (reject, reason-coded), *known-compatible* (keep), or
+  *unknown* (pass through to the selector — never auto-pruned). VRAM only
+  hard-filters when the unit's requirement `basis == "explicit-section"`.
+  Security reject-on-unknown is scoped to `credentials` **only** (per HLD §10.3);
+  `network` / `persistent-service` / `multi-node` stay ordinary three-valued
+  unknowns, because rejecting them would wrongly prune legit units (e.g. an HF
+  hub fetch, or a `vllm serve` root that legitimately needs network).
+- **(B) Temp-0 semantic selection** over the survivors — retry-once-then-decline;
+  it never injects-all as a fallback.
+- **(C) Dependency closure** — topological order, drop-on-missing.
+- **(D) Budgeted rendering** — `LinkBudget` caps `max_units` **roots before
+  closure** (default 3) and full reference bodies (default 1).
+
+**Clean-experiment invariant.** The whole capability path in `skill_injector.py`
+is wrapped so it can never break codegen and **never silently falls back to
+legacy content** (`legacy_fallback` stays False). An empty capability library is
+the *no-skill baseline* for these modes — the linker injects nothing rather than
+borrowing the legacy selector — and that empty treatment is still logged, so it
+reads as evidence rather than an absence.
+
+**Telemetry.** `selection_logger.py` gained `log_capability_node()`, emitting one
+`capability_node` record per node (delivery mode, stage, loaded/candidate/
+selected ids, hard-filter reasons, dependency add/drop, rendered order, injected
+chars, `legacy_fallback`) into the same append-only `selection_events.jsonl`,
+stamped with `sidecar_version` for cross-run aggregation (HLD §11).
+
+Design reference: `docs/skill-builder/capability-linker-mvp-hld.md` (§9
+NodeProfile, §10 linker, §11 telemetry) and
+`docs/skill-builder/capability-linker-mvp-plan.md`.
 
 ## Persona sites — now patched by `de_kaggle.py`
 

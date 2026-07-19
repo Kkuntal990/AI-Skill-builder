@@ -1,0 +1,38 @@
+{
+  "skill_name": "serving-llms-vllm",
+  "compiler_version": "0.1.0",
+  "schema_version": "0.2",
+  "transport": "claude",
+  "model_override": "",
+  "status": "ok",
+  "attempts": [
+    {
+      "attempt": 1,
+      "prompt_chars": 37418,
+      "response_chars": 16359,
+      "units": 7,
+      "validator_errors": [],
+      "validator_warning_count": 1
+    }
+  ],
+  "validator_warnings": [
+    "capabilities[2] (offline-batch-inference): no recovery guidance"
+  ],
+  "stats": {
+    "units": 7,
+    "kinds": {
+      "reference": 2,
+      "procedure": 5
+    },
+    "units_with_avoid_when": 7,
+    "units_with_depends_on": 1,
+    "synthesized_field_instances": {
+      "delivery.stages": 7,
+      "applicability.avoid_when": 5,
+      "produces": 2,
+      "requires.runtime": 3,
+      "validation": 1,
+      "depends_on": 1
+    }
+  }
+}

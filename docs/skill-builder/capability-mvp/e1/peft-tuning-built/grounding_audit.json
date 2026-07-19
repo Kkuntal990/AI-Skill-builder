@@ -1,0 +1,450 @@
+{
+  "grounding_version": "0.1.0",
+  "skill_name": "peft-tuning",
+  "scores": {
+    "claims_audited": 89,
+    "label_histogram": {
+      "supported": 73,
+      "entailed": 15,
+      "unsupported": 1
+    },
+    "support_rate_all": 0.9888,
+    "support_rate_strict": 0.9877,
+    "strict_claims": 81,
+    "fabrications": [
+      {
+        "unit": "loraconfig-core-parameters",
+        "path": "applicability.when[0]",
+        "note": "AdaLoRA is configured via a separate AdaloraConfig class (\"Use AdaLoraConfig\"), not LoraConfig; claiming this unit applies to \"building a LoraConfig\" for AdaLoRA contradicts the package."
+      }
+    ],
+    "flagged_but_unsupported": [],
+    "applicability_correct_rate": 0.8333,
+    "validation_usable_rate": 1.0,
+    "units_with_bad_locators": []
+  },
+  "audit": {
+    "units": [
+      {
+        "id": "lora-fine-tune",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[2]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "\"ml:adapter-checkpoint\" is a taxonomy label, not literal package text, but maps directly to the stated adapter-weights-only save."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "expected_outcomes[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "\"not 0\" diagnostic is stated only in the quantization.md QLoRA context; applied here to plain LoRA by inference (field is flagged synthesized)."
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "\"target_modules or task_type is wrong\" is inferred from the analogous QLoRA \"0 trainable params -> config wrong\" diagnostic; not stated verbatim for plain LoRA."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "loraconfig-core-parameters",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "unsupported",
+            "note": "AdaLoRA is configured via a separate AdaloraConfig class (\"Use AdaLoraConfig\"), not LoraConfig; claiming this unit applies to \"building a LoraConfig\" for AdaLoRA contradicts the package."
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": false,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "qlora-small-gpu",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "Taxonomy label mapping to the stated \"save the adapter\" step."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[5]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "\"called after get_peft_model\" as an explicit cause of flat loss is inferred from the stated ordering requirement, not stated verbatim."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Same inference as validation[1] \u2014 ordering violation as cause is a direct inference from the stated \"call before get_peft_model\" rule."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[2]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[3]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "choose-peft-method",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "entailed",
+            "note": "\"no merge into weights\" for IA3 is not present in the provided (truncated) excerpt of prompt-and-other-methods.md; the rest of the step is directly supported."
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": null,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "load-inference-adapter",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "requires",
+            "label": "entailed",
+            "note": "GPU/model+adapter artifact requirements are implied by the workflow and Hardware Requirements section, not stated as an explicit requires list."
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "Taxonomy label mapping to the stated \"Run generate()\" step."
+          },
+          {
+            "path": "expected_outcomes[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "entailed",
+            "note": "Not stated as a validation check; direct inference from \"Run generate()\"."
+          },
+          {
+            "path": "validation[1]",
+            "label": "entailed",
+            "note": "Functional equivalence pre/post merge is implied by the \"zero inference overhead\" framing, not stated as an explicit equality check."
+          },
+          {
+            "path": "recovery[0]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      },
+      {
+        "id": "multi-gpu-peft-scaling",
+        "claims": [
+          {
+            "path": "applicability.when[0]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.when[1]",
+            "label": "supported"
+          },
+          {
+            "path": "applicability.avoid_when[0]",
+            "label": "entailed",
+            "note": "Synthesized field; reasonable direct inverse of the stated \"when\" condition."
+          },
+          {
+            "path": "requires",
+            "label": "supported"
+          },
+          {
+            "path": "produces",
+            "label": "entailed",
+            "note": "Taxonomy label mapping to \"Save the final model with trainer.save_model()\"."
+          },
+          {
+            "path": "procedure.steps[0]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[1]",
+            "label": "entailed",
+            "note": "Package explicitly states Accelerate wraps the model into a \"DeepSpeed engine\" for this launch pattern; FSDP-engine wrapping via the same call is generalized by analogy, not separately stated."
+          },
+          {
+            "path": "procedure.steps[2]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[3]",
+            "label": "supported"
+          },
+          {
+            "path": "procedure.steps[4]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[0]",
+            "label": "supported"
+          },
+          {
+            "path": "validation[1]",
+            "label": "supported"
+          },
+          {
+            "path": "recovery[0]",
+            "label": "entailed",
+            "note": "Restates the stated \"confirm zero3_save_16bit_model: true\" tip as a negative-diagnosis recovery; directly traceable."
+          },
+          {
+            "path": "recovery[1]",
+            "label": "supported"
+          },
+          {
+            "path": "summary",
+            "label": "supported"
+          }
+        ],
+        "applicability_correct": true,
+        "validation_usable": true,
+        "source_locators_resolve": true
+      }
+    ]
+  }
+}
