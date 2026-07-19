@@ -558,6 +558,13 @@ numbers to advisory permanently (never hard-gate on them).
    change (compiler chunking/prompt to lift cross-cutting operational knowledge — error traps,
    decision points, memory hygiene — into units) + rebuild; NOT hand-authoring units. Feeds the
    W6++ gold step (grade recall against full source, not just compiled units).
+   **→ Design directions + verified literature: [capability-packaging-directions.md](capability-packaging-directions.md)**
+   (2026-07-19): *guarantee recall structurally, buy precision semantically* — two-layer index
+   (deterministic AST enumeration + LLM annotation, totality as an O(|T|) lint), aspect sweeps
+   for cross-cutting concerns, typed-graph lints (the stage-consistency check explains all 90
+   E2 `dep_incompatible` rejections), two-tier runtime fallback (ToC ≈ 900 tok/skill), needle
+   regression suite; migration M1–M4. Verified novelty: no published system audits a compiled
+   skill library against its source corpus.
 3. **Vendored-MLEvolve memory audit** (§4.5) — grep `infra/agents/mlevolve/upstream/` for
    `coldstart` / memory-enhanced planning; check our `config.yaml`. Blocks E3/W7 only.
 3. **Corpus snapshot pinning** — vendor the eval-library-source skills at a recorded SHA (only if
