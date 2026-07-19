@@ -132,6 +132,10 @@ spec:
               value: "${MLEVAL_SKILL_PATH}"
             - name: MLEVAL_SKILL_LIBRARY
               value: "${MLEVAL_SKILL_LIBRARY}"
+            # Delivery path (sidecar >= 1.1.0): legacy | capability_task |
+            # capability_node. Empty/legacy = byte-identical to mvp-032.
+            - name: MLEVAL_SKILL_DELIVERY_MODE
+              value: "${MLEVAL_SKILL_DELIVERY_MODE}"
             - name: MLEVAL_LLM_TIMEOUT_SEC
               value: "${MLEVAL_LLM_TIMEOUT_SEC}"
             # Empty string lets entrypoint.sh default to TIME_LIMIT_SECONDS / 2.

@@ -89,11 +89,25 @@ def render(template: str, env: dict[str, str]) -> str:
 
 # ---- trajectory plan -----------------------------------------------------
 
+# Cell → skill delivery mode (MLEVAL_SKILL_DELIVERY_MODE, sidecar >= 1.1.0).
+#   without_skill  → no library loaded (mode inert)
+#   with_skill     → legacy injector (byte-identical to mvp-032 behavior)
+#   capability_*   → sidecar 1.1.0 capability linker (needs capabilities.json
+#                    beside each SKILL.md in the library)
+CELL_DELIVERY_MODE = {
+    "without_skill": "legacy",
+    "with_skill": "legacy",
+    "capability_task": "capability_task",
+    "capability_node": "capability_node",
+}
+# Cells that load the skill library (everything except the no-skill baseline).
+SKILL_LOADING_CELLS = {"with_skill", "capability_task", "capability_node"}
+
 
 @dataclass
 class Trajectory:
     task: str
-    cell: str  # "with_skill" | "without_skill"
+    cell: str  # "without_skill" | "with_skill" | "capability_task" | "capability_node"
     seed: int
     skill_path: str
     skill_library: str
@@ -115,6 +129,14 @@ class Trajectory:
     skill_max_refs_per_node: int = -1
 
     @property
+    def loads_skills(self) -> bool:
+        return self.cell in SKILL_LOADING_CELLS
+
+    @property
+    def delivery_mode(self) -> str:
+        return CELL_DELIVERY_MODE.get(self.cell, "legacy")
+
+    @property
     def trajectory_id(self) -> str:
         # k8s Job names must be DNS-1123 labels: lowercase alphanumeric + '-'
         # only (no '_'), <= 63 chars.
@@ -129,8 +151,8 @@ class Trajectory:
 
     @property
     def skill_reqs_path(self) -> str:
-        # Sibling of SKILL.md. Empty if without_skill or no skill_path declared.
-        if self.cell != "with_skill" or not self.skill_path:
+        # Sibling of SKILL.md. Empty if no library loaded or no skill_path declared.
+        if not self.loads_skills or not self.skill_path:
             return ""
         skill_dir = self.skill_path.rsplit("/", 1)[0]
         return f"{skill_dir}/requirements.txt"
@@ -160,10 +182,13 @@ class Trajectory:
                 # The deadline is only a safety ceiling; the watchdog remains
                 # the real per-agent cap, so being generous here is free.
                 "ACTIVE_DEADLINE_SECONDS": str(self.time_limit_sec + 3600),
-                "MLEVAL_SKILL_PATH": self.skill_path if self.cell == "with_skill" else "",
+                "MLEVAL_SKILL_PATH": self.skill_path if self.loads_skills else "",
                 # Library dir (preferred): all skills available, model selector
                 # routes. Empty for without_skill → zero skills → baseline.
-                "MLEVAL_SKILL_LIBRARY": self.skill_library if self.cell == "with_skill" else "",
+                "MLEVAL_SKILL_LIBRARY": self.skill_library if self.loads_skills else "",
+                # Delivery mode (sidecar >= 1.1.0): legacy | capability_task |
+                # capability_node. Derived from the cell; without_skill is inert.
+                "MLEVAL_SKILL_DELIVERY_MODE": self.delivery_mode,
                 "MLEVAL_TASK_REQS_PATH": self.task_reqs_path,
                 "MLEVAL_SKILL_REQS_PATH": self.skill_reqs_path,
                 # Per-node injection caps — apply to BOTH cells identically (a
@@ -277,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         "--cells",
         nargs="+",
         default=["with_skill", "without_skill"],
-        choices=["with_skill", "without_skill"],
+        choices=["with_skill", "without_skill", "capability_task", "capability_node"],
     )
     p.add_argument("--skill-path", default="", help="In-pod path to a single SKILL.md (back-compat; only used when cell=with_skill)")
     p.add_argument("--skill-library", default="", help="In-pod path to a skill LIBRARY dir (e.g. /results/skills); all skills available, model selector routes (only used when cell=with_skill)")
@@ -333,8 +358,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  run_id={run_id}  namespace={namespace}  llm={llm_model}  profile={args.profile}")
     print(f"  template={template_path.relative_to(REPO_ROOT)}")
     for t in plan.trajectories:
-        skill = (t.skill_library or t.skill_path or "(none)") if t.cell == "with_skill" else "(none)"
-        print(f"  - {t.trajectory_id}   cell={t.cell:14s}  seed={t.seed}  skill={skill}")
+        skill = (t.skill_library or t.skill_path or "(none)") if t.loads_skills else "(none)"
+        print(f"  - {t.trajectory_id}   cell={t.cell:16s}  seed={t.seed}  "
+              f"mode={t.delivery_mode:15s}  skill={skill}")
 
     if not args.apply:
         print("\n[plan-only mode] not applying. Re-run with --apply to live-deploy.")
